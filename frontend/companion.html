@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>TLI Companion</title>
+  <style>
+    :root {
+      --bg:          #0b0f14;
+      --bg-card:     #111820;
+      --bg-input:    #192130;
+      --bg-lift:     #192030;
+      --bg-float:    #141c28;
+      --border:      rgba(255,255,255,0.07);
+      --border-hi:   rgba(56,232,178,0.28);
+      --accent:      #38e8b2;
+      --accent-dim:  rgba(56,232,178,0.12);
+      --accent-glow: rgba(56,232,178,0.06);
+      --text:        #e6e9ef;
+      --muted:       #6b7a8d;
+      --soft:        #9aa5b4;
+      --danger:      #f87171;
+      --warn:        #f59e0b;
+      --blue:        #60a5fa;
+      --radius:      14px;
+      --radius-sm:   9px;
+      --tab-h:       64px;
+      --hdr-h:       54px;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box; margin: 0; padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      height: 100%; width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+
+    /* ── Shell ──────────────────────────────────────────────────── */
+    #shell {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    #comp-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      padding-top: env(safe-area-inset-top, 0px);
+      height: calc(var(--hdr-h) + env(safe-area-inset-top, 0px));
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+    .hdr-left { display: flex; flex-direction: column; gap: 1px; }
+    .comp-logo { font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: .14em; text-transform: uppercase; }
+    .comp-panel-label { font-size: 15px; font-weight: 700; color: var(--text); transition: opacity .2s; }
+    .hdr-right { display: flex; align-items: center; gap: 10px; }
+    .hdr-bat { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .comp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background .4s, box-shadow .4s; }
+    .comp-dot.online { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
+    .comp-dot.warn   { background: var(--warn); }
+
+    /* ── Panels ─────────────────────────────────────────────────── */
+    #panels {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .comp-panel {
+      position: absolute; inset: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(30px);
+      transition: opacity .22s ease, transform .22s ease;
+      will-change: transform, opacity;
+    }
+    .comp-panel.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0);
+    }
+    .comp-panel.slide-left  { transform: translateX(-30px); }
+
+    /* ── Tab bar ────────────────────────────────────────────────── */
+    #tab-bar {
+      display: flex;
+      height: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px));
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+    .comp-tab {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      position: relative;
+      transition: color .15s;
+      padding: 0;
+    }
+    .comp-tab::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 50%;
+      width: 0; height: 2px;
+      background: var(--accent);
+      border-radius: 0 0 2px 2px;
+      transform: translateX(-50%);
+      transition: width .2s cubic-bezier(.34,1.56,.64,1);
+    }
+    .comp-tab.active { color: var(--accent); }
+    .comp-tab.active::after { width: 28px; }
+    .comp-tab-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px; height: 24px;
+      transition: transform .15s;
+    }
+    .comp-tab.active .comp-tab-icon { transform: translateY(-1px); }
+    .tab-badge {
+      position: absolute;
+      top: 6px; right: calc(50% - 16px);
+      background: var(--danger);
+      color: #fff;
+      font-size: 9px; font-weight: 800;
+      min-width: 15px; height: 15px;
+      border-radius: 99px;
+      display: none; align-items: center; justify-content: center;
+      padding: 0 3px;
+      border: 1.5px solid var(--bg-card);
+    }
+    .tab-badge.show { display: flex; }
+
+    /* ── Cards ──────────────────────────────────────────────────── */
+    .c-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .c-card-title {
+      font-size: 10px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: .1em; color: var(--muted); margin-bottom: 14px;
+    }
+    .c-card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .c-card-header .c-card-title { margin-bottom: 0; }
+
+    /* ── Chat panel ─────────────────────────────────────────────── */
+    #panel-chat { padding: 0; gap: 0; }
+
+    #chat-chips {
+      display: flex;
+      gap: 7px;
+      padding: 12px 16px 6px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      flex-shrink: 0;
+    }
+    #chat-chips::-webkit-scrollbar { display: none; }
+    .chat-chip {
+      flex-shrink: 0;
+      background: var(--bg-lift);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      color: var(--soft);
+      font-size: 13px;
+      padding: 6px 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-family: inherit;
+      transition: border-color .15s, color .15s, background .15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chat-chip:active { border-color: var(--border-hi); color: var(--accent); background: var(--accent-dim); }
+
+    #chat-output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+    }
+    .chat-bubble {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      font-size: 14.5px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #041a10;
+      font-weight: 500;
+      border-bottom-right-radius: 5px;
+    }
+    .chat-bubble.ai {
+      align-self: flex-start;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-bottom-left-radius: 5px;
+    }
+    .chat-bubble.ai.thinking {
+      color: var(--muted);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .thinking-dots { display: flex; gap: 4px; }
+    .thinking-dots span {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: tdot 1.2s ease-in-out infinite;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: .2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: .4s; }
+    @keyframes tdot { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+
+    #chat-compose {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      align-items: flex-end;
+    }
+    #chat-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      color: var(--text);
+      padding: 10px 16px;
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      max-height: 110px;
+      line-height: 1.45;
+      -webkit-appearance: none;
+      transition: border-color .15s;
+    }
+    #chat-input:focus { border-color: var(--border-hi); }
+    #chat-input::placeholder { color: var(--muted); }
+    #chat-send {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #041a10;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: opacity .15s, transform .1s, background .15s;
+      align-self: flex-end;
+    }
+    #chat-send:active { transform: scale(.90); }
+    #chat-send:disabled { opacity: .4; }
+
+    /* ── Devices panel ──────────────────────────────────────────── */
+    .device-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 13px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .device-row:last-child { border-bottom: none; }
+    .device-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+    .device-vendor-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .device-info { flex: 1; min-width: 0; }
+    .device-name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .device-meta { font-size: 12px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
+
+    /* Toggle */
+    .toggle { position: relative; width: 50px; height: 28px; flex-shrink: 0; cursor: pointer; }
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+    .toggle-track {
+      position: absolute; inset: 0;
+      background: rgba(255,255,255,.07);
+      border-radius: 28px;
+      border: 1px solid var(--border);
+      transition: background .2s, border-color .2s;
+    }
+    .toggle-track::before {
+      content: "";
+      position: absolute;
+      width: 22px; height: 22px;
+      left: 2px; top: 2px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: transform .2s cubic-bezier(.34,1.56,.64,1), background .2s;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    }
+    .toggle input:checked ~ .toggle-track { background: var(--accent-dim); border-color: rgba(56,232,178,.4); }
+    .toggle input:checked ~ .toggle-track::before { transform: translateX(22px); background: var(--accent); }
+
+    /* ── Scenes panel ───────────────────────────────────────────── */
+    #scenes-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .scene-card {
+      background: var(--bg-lift);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 14px;
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      transition: background .15s, border-color .15s, transform .1s;
+      -webkit-tap-highlight-color: transparent;
+      position: relative;
+      overflow: hidden;
+    }
+    .scene-card:active { transform: scale(.96); background: var(--bg-card); }
+    .scene-card.running { border-color: var(--border-hi); }
+    .scene-card-name { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.3; }
+    .scene-card-desc { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .scene-card-icon { font-size: 22px; margin-bottom: 8px; display: block; }
+    .scene-run-pulse {
+      position: absolute; inset: 0;
+      background: var(--accent-dim);
+      opacity: 0;
+      transition: opacity .15s;
+    }
+    .scene-card.running .scene-run-pulse { opacity: 1; }
+
+    /* ── Vault panel ────────────────────────────────────────────── */
+    .vault-badge {
+      display: flex; align-items: center; gap: 9px;
+      padding: 13px 16px;
+      border-radius: var(--radius);
+      font-size: 14px; font-weight: 600;
+    }
+    .vault-badge.locked   { background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.2); color: var(--danger); }
+    .vault-badge.unlocked { background: var(--accent-dim); border: 1px solid var(--border-hi); color: var(--accent); }
+    .vault-unlock-form    { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    .vault-pw-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 11px 14px;
+      font-size: 15px; font-family: inherit;
+      outline: none; -webkit-appearance: none;
+      transition: border-color .15s;
+    }
+    .vault-pw-input:focus { border-color: var(--border-hi); }
+    .secret-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .secret-row:last-child { border-bottom: none; }
+    .secret-name { font-size: 14px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .secret-val  { font-size: 12px; font-family: monospace; color: var(--muted); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .copy-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 12px;
+      padding: 5px 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: color .15s, border-color .15s;
+      font-family: inherit;
+    }
+    .copy-btn:active, .copy-btn.copied { color: var(--accent); border-color: var(--border-hi); }
+
+    /* ── Status panel ───────────────────────────────────────────── */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { color: var(--muted); font-size: 12.5px; }
+    .stat-val   { font-weight: 600; font-size: 13px; }
+    .stat-val.good { color: var(--accent); }
+    .stat-val.warn { color: var(--warn); }
+    .stat-val.bad  { color: var(--danger); }
+    .battery-wrap { margin-top: 4px; }
+    .battery-bar  { width: 100%; height: 4px; background: rgba(255,255,255,.06); border-radius: 99px; overflow: hidden; }
+    .battery-fill { height: 100%; border-radius: 99px; background: var(--accent); transition: width .6s ease; }
+    .battery-fill.warn { background: var(--warn); }
+    .battery-fill.crit { background: var(--danger); }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    .comp-btn {
+      display: block; width: 100%;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: none;
+      background: var(--accent);
+      color: #041a10;
+      font-size: 15px; font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    .comp-btn:active { opacity: .82; transform: scale(.99); }
+    .comp-btn.ghost  { background: transparent; border: 1px solid var(--border); color: var(--soft); }
+    .comp-btn.danger { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.22); color: var(--danger); }
+    .comp-btn.sm     { padding: 8px 14px; font-size: 13px; }
+    .comp-btn.icon-btn { width: auto; display: inline-flex; align-items: center; gap: 5px; }
+
+    /* ── Send to desktop ────────────────────────────────────────── */
+    .push-area textarea {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 11px 14px;
+      font-size: 14px; font-family: inherit;
+      outline: none; resize: none;
+      -webkit-appearance: none;
+      margin-bottom: 10px;
+      transition: border-color .15s;
+    }
+    .push-area textarea:focus { border-color: var(--border-hi); }
+
+    /* ── Empty states ───────────────────────────────────────────── */
+    .empty {
+      text-align: center; padding: 32px 20px;
+      color: var(--muted); font-size: 14px; line-height: 1.6;
+    }
+    .empty-icon { font-size: 32px; margin-bottom: 10px; opacity: .7; }
+
+    /* ── Loading ────────────────────────────────────────────────── */
+    .spinner {
+      width: 22px; height: 22px;
+      border: 2px solid rgba(255,255,255,.08);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 24px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ──────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 14px);
+      left: 50%; transform: translateX(-50%) translateY(8px);
+      background: var(--bg-float);
+      border: 1px solid var(--border-hi);
+      color: var(--accent);
+      font-size: 13px; font-weight: 600;
+      padding: 9px 20px;
+      border-radius: 99px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s, transform .2s;
+      white-space: nowrap;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Pull-to-refresh indicator ──────────────────────────────── */
+    .ptr-hint {
+      text-align: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      padding: 8px 0 2px;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .ptr-hint.visible { opacity: 1; }
+
+    /* ── Vendor color dots ──────────────────────────────────────── */
+    .vc-shelly       { background: #34d399; }
+    .vc-hue          { background: #60a5fa; }
+    .vc-govee        { background: #c084fc; }
+    .vc-wled         { background: #fb923c; }
+    .vc-yeelight     { background: #fbbf24; }
+    .vc-sonoff       { background: #f87171; }
+    .vc-kasa         { background: #22d3ee; }
+    .vc-tuya         { background: #38bdf8; }
+    .vc-generic_http { background: #94a3b8; }
+    .vc-default      { background: var(--muted); }
+  </style>
+</head>
+<body>
+<div id="shell">
+
+  <!-- Header -->
+  <div id="comp-header">
+    <div class="hdr-left">
+      <div class="comp-logo">TLI</div>
+      <div class="comp-panel-label" id="panel-label">AI Chat</div>
+    </div>
+    <div class="hdr-right">
+      <div class="hdr-bat" id="hdr-bat"></div>
+      <div class="comp-dot" id="comp-dot"></div>
+    </div>
+  </div>
+
+  <!-- Panels -->
+  <div id="panels">
+
+    <!-- ── Chat ─────────────────────────────────────────────────── -->
+    <div class="comp-panel active" id="panel-chat">
+      <div id="chat-chips">
+        <button class="chat-chip" data-prompt="What's the status of my home?">Home status</button>
+        <button class="chat-chip" data-prompt="Are any lights left on?">Lights on?</button>
+        <button class="chat-chip" data-prompt="What's using the most power right now?">Power use</button>
+        <button class="chat-chip" data-prompt="Summarize what happened today">Daily recap</button>
+        <button class="chat-chip" data-prompt="Set a reminder for tomorrow morning">Reminder</button>
+      </div>
+      <div id="chat-output"></div>
+      <div id="chat-compose">
+        <textarea id="chat-input" placeholder="Ask your home AI…" rows="1" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
+        <button id="chat-send" title="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Devices ──────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-devices">
+      <div class="c-card">
+        <div class="c-card-header">
+          <div class="c-card-title">Smart Devices</div>
+          <button class="comp-btn ghost sm icon-btn" id="devices-refresh-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <div id="devices-list"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- ── Scenes ───────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-scenes">
+      <div class="c-card">
+        <div class="c-card-header">
+          <div class="c-card-title">Scenes</div>
+          <button class="comp-btn ghost sm icon-btn" id="scenes-refresh-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <div id="scenes-list"><div class="spinner"></div></div>
+      </div>
+      <div class="c-card">
+        <div class="c-card-title">Send to Desktop</div>
+        <div class="push-area">
+          <textarea id="push-msg-input" rows="3" placeholder="Type a note or message to push to the desktop…"></textarea>
+          <button class="comp-btn" id="push-msg-btn">Send to Desktop</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Vault ─────────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-vault">
+      <div id="vault-status-wrap"></div>
+      <div class="c-card" id="vault-secrets-card" hidden>
+        <div class="c-card-title">Secrets</div>
+        <div id="vault-secrets-list"></div>
+      </div>
+      <div class="c-card" id="vault-logins-card" hidden>
+        <div class="c-card-title">Logins</div>
+        <div id="vault-logins-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Status ───────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-status">
+      <div class="c-card">
+        <div class="c-card-title">This Device</div>
+        <div class="stat-row">
+          <span class="stat-label">Name</span>
+          <span class="stat-val" id="st-name">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Battery</span>
+          <span class="stat-val" id="st-bat">—</span>
+        </div>
+        <div class="battery-wrap">
+          <div class="battery-bar"><div class="battery-fill" id="st-bat-bar" style="width:0%"></div></div>
+        </div>
+        <div class="stat-row" style="margin-top:8px">
+          <span class="stat-label">Connection</span>
+          <span class="stat-val" id="st-conn">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Platform</span>
+          <span class="stat-val" id="st-platform">—</span>
+        </div>
+      </div>
+      <div class="c-card">
+        <div class="c-card-title">TLI Host</div>
+        <div class="stat-row">
+          <span class="stat-label">AI Status</span>
+          <span class="stat-val" id="st-ai">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Smart Devices</span>
+          <span class="stat-val" id="st-devcount">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Node</span>
+          <span class="stat-val" id="st-node">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Mesh Node ID</span>
+          <span class="stat-val" id="st-satid" style="font-family:monospace;font-size:11px;text-align:right;max-width:180px;overflow:hidden;text-overflow:ellipsis">—</span>
+        </div>
+      </div>
+      <button class="comp-btn danger" id="leave-btn">Leave Mesh</button>
+    </div>
+
+  </div><!-- /panels -->
+
+  <!-- Tab bar -->
+  <div id="tab-bar">
+    <button class="comp-tab active" data-panel="panel-chat" data-label="AI Chat">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </span>
+      Chat
+    </button>
+    <button class="comp-tab" data-panel="panel-devices" data-label="Devices">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </span>
+      Devices
+    </button>
+    <button class="comp-tab" data-panel="panel-scenes" data-label="Scenes">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </span>
+      Scenes
+    </button>
+    <button class="comp-tab" data-panel="panel-vault" data-label="Vault">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </span>
+      Vault
+    </button>
+    <button class="comp-tab" data-panel="panel-status" data-label="Status">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
+      </span>
+      Status
+      <span class="tab-badge" id="badge-status"></span>
+    </button>
+  </div>
+
+</div><!-- /shell -->
+<div id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ── Guard ─────────────────────────────────────────────────────
+  const SAT_ID     = localStorage.getItem("sat_node_id");
+  const SAT_SECRET = localStorage.getItem("sat_secret");
+  const SAT_NAME   = localStorage.getItem("sat_name") || "Phone";
+  if (!SAT_ID || !SAT_SECRET) { window.location.href = "/"; return; }
+
+  // ── DOM refs ──────────────────────────────────────────────────
+  const dot        = document.getElementById("comp-dot");
+  const hdrBat     = document.getElementById("hdr-bat");
+  const panelLabel = document.getElementById("panel-label");
+  const chatOut    = document.getElementById("chat-output");
+  const chatInput  = document.getElementById("chat-input");
+  const chatSend   = document.getElementById("chat-send");
+  const devList    = document.getElementById("devices-list");
+  const leaveBtn   = document.getElementById("leave-btn");
+  const toastEl    = document.getElementById("toast");
+
+  // ── Toast ─────────────────────────────────────────────────────
+  let _toastTimer;
+  function toast(msg, ms = 2000) {
+    toastEl.textContent = msg;
+    toastEl.classList.add("show");
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => toastEl.classList.remove("show"), ms);
+  }
+
+  // ── Panel order for swipe ─────────────────────────────────────
+  const PANELS = ["panel-chat", "panel-devices", "panel-scenes", "panel-vault", "panel-status"];
+  let _activeIdx = 0;
+  let _activePanel = PANELS[0];
+
+  function _switchTab(targetId, direction) {
+    if (targetId === _activePanel) return;
+    const newIdx = PANELS.indexOf(targetId);
+    const goingRight = direction === "right" || (direction === undefined && newIdx > _activeIdx);
+
+    const prev = document.getElementById(_activePanel);
+    const next = document.getElementById(targetId);
+    if (!prev || !next) return;
+
+    // Outgoing slide
+    prev.classList.remove("active");
+    prev.classList.add(goingRight ? "slide-left" : "");
+    prev.style.transform = goingRight ? "translateX(-30px)" : "translateX(30px)";
+    prev.style.opacity = "0";
+    prev.style.pointerEvents = "none";
+    setTimeout(() => {
+      prev.classList.remove("slide-left");
+      prev.style.transform = "";
+      prev.style.opacity = "";
+      prev.style.pointerEvents = "";
+    }, 240);
+
+    // Incoming: start offset
+    next.style.transform = goingRight ? "translateX(30px)" : "translateX(-30px)";
+    next.style.opacity = "0";
+    next.style.pointerEvents = "none";
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        next.classList.add("active");
+        next.style.transform = "";
+        next.style.opacity = "";
+        next.style.pointerEvents = "";
+      });
+    });
+
+    _activePanel = targetId;
+    _activeIdx = newIdx;
+
+    // Update tab bar
+    document.querySelectorAll(".comp-tab").forEach(b => b.classList.remove("active"));
+    const activeBtn = document.querySelector(`[data-panel="${targetId}"]`);
+    if (activeBtn) {
+      activeBtn.classList.add("active");
+      panelLabel.textContent = activeBtn.dataset.label || "";
+    }
+
+    // Panel-specific loads
+    if (targetId === "panel-devices") _loadDevices();
+    if (targetId === "panel-scenes")  _loadScenes();
+    if (targetId === "panel-vault")   _loadVault();
+    if (targetId === "panel-status")  _loadStatus();
+    try { navigator.vibrate?.(8); } catch(_) {}
+  }
+
+  document.querySelectorAll(".comp-tab").forEach(btn => {
+    btn.addEventListener("click", () => _switchTab(btn.dataset.panel));
+  });
+
+  // ── Swipe gesture ─────────────────────────────────────────────
+  let _swX = null, _swY = null, _swLocked = false;
+  const panelsEl = document.getElementById("panels");
+
+  panelsEl.addEventListener("touchstart", e => {
+    _swX = e.touches[0].clientX;
+    _swY = e.touches[0].clientY;
+    _swLocked = false;
+  }, { passive: true });
+
+  panelsEl.addEventListener("touchmove", e => {
+    if (_swX === null) return;
+    const dx = e.touches[0].clientX - _swX;
+    const dy = e.touches[0].clientY - _swY;
+    if (!_swLocked && Math.abs(dy) > Math.abs(dx)) { _swX = null; return; } // vertical scroll
+    _swLocked = true;
+  }, { passive: true });
+
+  panelsEl.addEventListener("touchend", e => {
+    if (_swX === null) return;
+    const dx = e.changedTouches[0].clientX - _swX;
+    _swX = null; _swLocked = false;
+    if (Math.abs(dx) < 55) return;
+    if (dx < 0 && _activeIdx < PANELS.length - 1) {
+      _switchTab(PANELS[_activeIdx + 1], "right");
+    } else if (dx > 0 && _activeIdx > 0) {
+      _switchTab(PANELS[_activeIdx - 1], "left");
+    }
+  }, { passive: true });
+
+  // ── Keyboard viewport (iOS/Android) ──────────────────────────
+  // Shrink shell when software keyboard opens so compose stays visible
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {
+      const vvH = window.visualViewport.height;
+      document.getElementById("shell").style.height = vvH + "px";
+    });
+  }
+
+  // ── Battery tracking ──────────────────────────────────────────
+  let _bat = null;
+
+  async function _initBattery() {
+    try {
+      if (!navigator.getBattery) return;
+      const b = await navigator.getBattery();
+      const _upd = () => {
+        _bat = { level: Math.round(b.level * 100), charging: b.charging };
+        hdrBat.textContent = `${_bat.level}%${_bat.charging ? "⚡" : ""}`;
+      };
+      _upd();
+      b.addEventListener("levelchange",   _upd);
+      b.addEventListener("chargingchange", _upd);
+    } catch (_) {}
+  }
+  _initBattery();
+
+  // ── Heartbeat ─────────────────────────────────────────────────
+  async function _beat() {
+    const payload = {
+      node_id:  SAT_ID,
+      secret:   SAT_SECRET,
+      platform: /iphone|ipad|ipod/i.test(navigator.userAgent) ? "ios"
+               : /android/i.test(navigator.userAgent) ? "android" : "unknown",
+    };
+    if (_bat) { payload.battery_level = _bat.level; payload.battery_charging = _bat.charging; }
+    try {
+      const conn = navigator.connection || navigator.mozConnection;
+      if (conn) payload.connection_type = conn.type || conn.effectiveType;
+    } catch (_) {}
+    try {
+      const r = await fetch("/mesh/satellite/heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (r.status === 403) { _leave(false); return; }
+      dot.className = "comp-dot online";
+    } catch (_) {
+      dot.className = "comp-dot warn";
+    }
+  }
+  _beat();
+  setInterval(_beat, 30_000);
+
+  // ── Chat — history in localStorage ───────────────────────────
+  const HIST_KEY = `tli_chat_hist_${SAT_ID}`;
+  let _history = [];
+
+  function _saveHistory() {
+    try { localStorage.setItem(HIST_KEY, JSON.stringify(_history.slice(-40))); } catch (_) {}
+  }
+
+  function _loadHistory() {
+    try {
+      const raw = localStorage.getItem(HIST_KEY);
+      if (!raw) return;
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || !arr.length) return;
+      _history = arr;
+      arr.slice(-12).forEach(m => {
+        const el = document.createElement("div");
+        el.className = "chat-bubble " + (m.role === "user" ? "user" : "ai");
+        el.textContent = m.content;
+        chatOut.appendChild(el);
+      });
+      chatOut.scrollTop = chatOut.scrollHeight;
+    } catch (_) {}
+  }
+  _loadHistory();
+
+  if (!_history.length) {
+    chatOut.innerHTML = `<div class="empty"><div class="empty-icon">✦</div>Ask your home AI anything —<br>devices, schedules, quick questions.</div>`;
+  }
+
+  function _bubble(role, text) {
+    const empty = chatOut.querySelector(".empty");
+    if (empty) empty.remove();
+    const el = document.createElement("div");
+    el.className = "chat-bubble " + role;
+    if (role === "ai thinking") {
+      el.innerHTML = `<div class="thinking-dots"><span></span><span></span><span></span></div>`;
+    } else {
+      el.textContent = text;
+    }
+    chatOut.appendChild(el);
+    chatOut.scrollTop = chatOut.scrollHeight;
+    return el;
+  }
+
+  async function _sendChat(text) {
+    if (!text) return;
+    chatInput.value = "";
+    chatInput.style.height = "";
+    chatSend.disabled = true;
+
+    _bubble("user", text);
+    _history.push({ role: "user", content: text });
+
+    const thinking = _bubble("ai thinking", "");
+    let acc = "";
+
+    try {
+      const r = await fetch("/api/ai/chat/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, max_tokens: 512, temperature: 0.7 }),
+      });
+      if (!r.ok || !r.body) throw new Error("stream unavailable");
+
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      thinking.className = "chat-bubble ai";
+      thinking.textContent = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = dec.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const ev = JSON.parse(line.slice(6));
+            if (ev.type === "delta" && ev.text) {
+              acc += ev.text;
+              thinking.textContent = acc;
+              chatOut.scrollTop = chatOut.scrollHeight;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      try {
+        const r2 = await fetch("/api/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, max_tokens: 512 }),
+        });
+        const d = await r2.json();
+        acc = d.response || d.reply || d.message || "(no response)";
+        thinking.className = "chat-bubble ai";
+        thinking.textContent = acc;
+      } catch {
+        thinking.className = "chat-bubble ai";
+        thinking.textContent = "Error reaching TLI. Make sure you're on the same network.";
+      }
+    }
+
+    if (acc) {
+      _history.push({ role: "assistant", content: acc });
+      if (_history.length > 60) _history = _history.slice(-50);
+      _saveHistory();
+    }
+    chatSend.disabled = false;
+    chatOut.scrollTop = chatOut.scrollHeight;
+  }
+
+  chatSend.addEventListener("click", () => _sendChat(chatInput.value.trim()));
+  chatInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); _sendChat(chatInput.value.trim()); }
+  });
+  chatInput.addEventListener("input", () => {
+    chatInput.style.height = "auto";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 110) + "px";
+  });
+  document.querySelectorAll(".chat-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const prompt = chip.dataset.prompt;
+      chatInput.value = prompt;
+      chatInput.dispatchEvent(new Event("input"));
+      _sendChat(prompt);
+    });
+  });
+
+  // ── Vendor dot color ──────────────────────────────────────────
+  function _vendorClass(vendor) {
+    const v = (vendor || "").toLowerCase().replace(/[^a-z_]/g, "");
+    const known = ["shelly","hue","govee","wled","yeelight","sonoff","kasa","tuya","generic_http"];
+    return "device-vendor-dot vc-" + (known.includes(v) ? v : "default");
+  }
+
+  // ── Devices ───────────────────────────────────────────────────
+  async function _loadDevices() {
+    devList.innerHTML = "<div class='spinner'></div>";
+    try {
+      const r = await fetch("/homepower/devices");
+      const data = await r.json();
+      const devs = data.devices || [];
+      if (!devs.length) {
+        devList.innerHTML = "<div class='empty'><div class='empty-icon'>🏠</div>No devices yet.<br>Add devices in the Home Automation panel on desktop.</div>";
+        return;
+      }
+      devList.innerHTML = "";
+      devs.forEach(dev => {
+        const caps = dev.capabilities || [];
+        const canSwitch = caps.includes("switch.on") || caps.includes("switch.toggle");
+        const row = document.createElement("div");
+        row.className = "device-row";
+        row.innerHTML = `
+          <div class="device-left">
+            <div class="${_vendorClass(dev.vendor)}"></div>
+            <div class="device-info">
+              <div class="device-name">${dev.name || dev.device_id}</div>
+              <div class="device-meta">${dev.vendor || "device"}</div>
+            </div>
+          </div>
+          ${canSwitch ? `<label class="toggle"><input type="checkbox" /><span class="toggle-track"></span></label>`
+                      : `<span style="font-size:12px;color:var(--muted)">${caps[0] || ""}</span>`}`;
+
+        if (canSwitch) {
+          fetch(`/homepower/devices/${encodeURIComponent(dev.device_id)}/status`)
+            .then(r => r.json())
+            .then(st => { const cb = row.querySelector("input"); if (cb && st.on !== undefined) cb.checked = !!st.on; })
+            .catch(() => {});
+          const cb = row.querySelector("input");
+          cb?.addEventListener("change", async () => {
+            const cap = cb.checked ? "switch.on" : "switch.off";
+            try {
+              await fetch(`/homepower/devices/${encodeURIComponent(dev.device_id)}/execute`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ capability: cap }),
+              });
+              toast(`${dev.name || "Device"} ${cb.checked ? "on" : "off"}`);
+              try { navigator.vibrate?.(25); } catch(_) {}
+            } catch (_) { cb.checked = !cb.checked; toast("Toggle failed"); }
+          });
+        }
+        devList.appendChild(row);
+      });
+    } catch {
+      devList.innerHTML = "<div class='empty'><div class='empty-icon'>⚠️</div>Could not load devices.</div>";
+    }
+  }
+
+  document.getElementById("devices-refresh-btn").addEventListener("click", _loadDevices);
+
+  // ── Scenes ────────────────────────────────────────────────────
+  const SCENE_ICONS = ["⚡","🌙","🎮","☀️","🎬","🏠","🔆","🌅","🎵","✦"];
+  let _scenesLoaded = false;
+
+  async function _loadScenes() {
+    if (_scenesLoaded) return;
+    const list = document.getElementById("scenes-list");
+    if (!list) return;
+    list.innerHTML = "<div class='spinner'></div>";
+    try {
+      const r = await fetch("/homepower/scenes");
+      const data = await r.json();
+      const scenes = data.scenes || [];
+      if (!scenes.length) {
+        list.innerHTML = "<div class='empty'><div class='empty-icon'>✦</div>No scenes yet.<br>Create scenes in the Automations panel on desktop.</div>";
+        _scenesLoaded = true;
+        return;
+      }
+      const grid = document.createElement("div");
+      grid.id = "scenes-grid";
+      scenes.forEach((scene, i) => {
+        const card = document.createElement("button");
+        card.className = "scene-card";
+        const icon = SCENE_ICONS[i % SCENE_ICONS.length];
+        card.innerHTML = `
+          <div class="scene-run-pulse"></div>
+          <span class="scene-card-icon">${icon}</span>
+          <div class="scene-card-name">${scene.name || scene.scene_id}</div>
+          ${scene.description ? `<div class="scene-card-desc">${scene.description}</div>` : ""}`;
+        card.addEventListener("click", async () => {
+          if (card.disabled) return;
+          card.disabled = true;
+          card.classList.add("running");
+          try {
+            const resp = await fetch("/homepower/scenes/run", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ scene_id: scene.scene_id, dry_run: false }),
+            });
+            const d = await resp.json();
+            const ok = d.ok !== false;
+            toast(ok ? `${scene.name} ✓` : "Scene failed", ok ? 1800 : 3000);
+            try { navigator.vibrate?.(ok ? [20, 40, 20] : 200); } catch(_) {}
+          } catch (_) { toast("Could not run scene"); }
+          finally { card.disabled = false; card.classList.remove("running"); }
+        });
+        grid.appendChild(card);
+      });
+      list.innerHTML = "";
+      list.appendChild(grid);
+      _scenesLoaded = true;
+    } catch {
+      list.innerHTML = "<div class='empty'><div class='empty-icon'>⚠️</div>Could not load scenes.</div>";
+    }
+  }
+
+  document.getElementById("scenes-refresh-btn")?.addEventListener("click", () => {
+    _scenesLoaded = false; _loadScenes();
+  });
+
+  // ── Send to desktop ───────────────────────────────────────────
+  document.getElementById("push-msg-btn")?.addEventListener("click", async () => {
+    const msg = document.getElementById("push-msg-input")?.value?.trim();
+    if (!msg) { toast("Type a message first"); return; }
+    try {
+      const r = await fetch("/chat/message", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ from_id: SAT_ID, from_name: SAT_NAME + " (phone)", text: msg, to: "broadcast" }),
+      });
+      if (r.ok) {
+        toast("Sent to desktop ✓");
+        const inp = document.getElementById("push-msg-input");
+        if (inp) inp.value = "";
+        try { navigator.vibrate?.(40); } catch(_) {}
+      } else { toast("Send failed"); }
+    } catch (_) { toast("Could not reach desktop"); }
+  });
+
+  // ── Vault ─────────────────────────────────────────────────────
+  let _vaultUnlocked = false;
+
+  async function _loadVault() {
+    const wrap      = document.getElementById("vault-status-wrap");
+    const secCard   = document.getElementById("vault-secrets-card");
+    const loginCard = document.getElementById("vault-logins-card");
+    const secList   = document.getElementById("vault-secrets-list");
+    const loginList = document.getElementById("vault-logins-list");
+
+    wrap.innerHTML = "<div class='spinner'></div>";
+    secCard.hidden = true; loginCard.hidden = true;
+
+    let status;
+    try {
+      const r = await fetch("/vault/status");
+      if (r.status === 401) {
+        wrap.innerHTML = `<div class="vault-badge locked">🔒 Session required — open TLI in a browser first</div>`;
+        return;
+      }
+      status = await r.json();
+    } catch {
+      wrap.innerHTML = `<div class="empty"><div class="empty-icon">⚠️</div>Could not reach vault.</div>`;
+      return;
+    }
+
+    _vaultUnlocked = status.unlocked === true;
+    if (!status.initialized) {
+      wrap.innerHTML = `<div class="vault-badge locked">🔒 Vault not set up yet</div>`;
+      return;
+    }
+
+    if (_vaultUnlocked) {
+      wrap.innerHTML = `<div class="vault-badge unlocked">🔓 Vault Unlocked</div>`;
+      await _loadVaultContents(secCard, secList, loginCard, loginList);
+    } else {
+      wrap.innerHTML = `
+        <div class="c-card">
+          <div class="vault-badge locked" style="margin-bottom:12px">🔒 Vault Locked</div>
+          <div class="vault-unlock-form">
+            <input type="password" class="vault-pw-input" id="vault-pw" placeholder="Vault password…" autocomplete="current-password" />
+            <button class="comp-btn sm" id="vault-unlock-btn" style="width:auto;padding:11px 18px">Unlock</button>
+          </div>
+          <div id="vault-unlock-err" style="font-size:12px;color:var(--danger);margin-top:8px;min-height:16px"></div>
+        </div>`;
+      document.getElementById("vault-unlock-btn").addEventListener("click", _tryUnlock);
+      document.getElementById("vault-pw").addEventListener("keydown", e => { if (e.key === "Enter") _tryUnlock(); });
+    }
+  }
+
+  async function _tryUnlock() {
+    const pw  = document.getElementById("vault-pw")?.value;
+    const err = document.getElementById("vault-unlock-err");
+    const btn = document.getElementById("vault-unlock-btn");
+    if (!pw) return;
+    btn.disabled = true; btn.textContent = "…";
+    try {
+      const r = await fetch("/vault/unlock", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: pw }),
+      });
+      const d = await r.json();
+      if (d.success) { _vaultUnlocked = true; toast("Vault unlocked ✓"); _loadVault(); }
+      else {
+        if (err) err.textContent = d.detail?.reason === "locked_out" ? "Too many attempts — try again later." : "Wrong password.";
+        btn.disabled = false; btn.textContent = "Unlock";
+      }
+    } catch {
+      if (err) err.textContent = "Network error.";
+      btn.disabled = false; btn.textContent = "Unlock";
+    }
+  }
+
+  async function _loadVaultContents(secCard, secList, loginCard, loginList) {
+    try {
+      const r = await fetch("/vault/secrets");
+      const d = await r.json();
+      const keys = d.keys || [];
+      if (keys.length) {
+        secCard.hidden = false;
+        secList.innerHTML = keys.map(k => `
+          <div class="secret-row" data-secret-key="${encodeURIComponent(k)}">
+            <div class="secret-name">${k}</div>
+            <div class="secret-val">••••••</div>
+            <button class="copy-btn" data-key="${encodeURIComponent(k)}">Copy</button>
+          </div>`).join("");
+        secList.querySelectorAll(".copy-btn").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const key = decodeURIComponent(btn.dataset.key);
+            try {
+              const r2 = await fetch(`/vault/secret/${encodeURIComponent(key)}`);
+              const d2 = await r2.json();
+              await navigator.clipboard.writeText(d2.value || "");
+              btn.textContent = "✓"; btn.classList.add("copied");
+              toast("Copied to clipboard");
+              setTimeout(() => { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2000);
+            } catch { toast("Copy failed"); }
+          });
+        });
+      }
+    } catch (_) {}
+    try {
+      const r = await fetch("/vault/logins");
+      const d = await r.json();
+      const logins = d.logins || [];
+      if (logins.length) {
+        loginCard.hidden = false;
+        loginList.innerHTML = logins.map(l => `
+          <div class="secret-row">
+            <div style="flex:1;min-width:0">
+              <div class="secret-name">${l.name || l.domain}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:1px">${l.username}</div>
+            </div>
+            <button class="copy-btn" data-login-id="${l.id}">Copy pw</button>
+          </div>`).join("");
+        loginList.querySelectorAll(".copy-btn").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const id = btn.dataset.loginId;
+            try {
+              const r2 = await fetch(`/vault/logins/${encodeURIComponent(id)}`);
+              const d2 = await r2.json();
+              await navigator.clipboard.writeText(d2.password || "");
+              btn.textContent = "✓"; btn.classList.add("copied");
+              toast("Password copied");
+              setTimeout(() => { btn.textContent = "Copy pw"; btn.classList.remove("copied"); }, 2000);
+            } catch { toast("Copy failed"); }
+          });
+        });
+      }
+    } catch (_) {}
+  }
+
+  // ── Status ────────────────────────────────────────────────────
+  async function _loadStatus() {
+    document.getElementById("st-name").textContent = SAT_NAME;
+    document.getElementById("st-satid").textContent = SAT_ID;
+    if (_bat) {
+      const pct = _bat.level;
+      document.getElementById("st-bat").textContent = `${pct}%${_bat.charging ? " ⚡" : ""}`;
+      const bar = document.getElementById("st-bat-bar");
+      bar.style.width = pct + "%";
+      bar.className = "battery-fill" + (pct < 20 ? " crit" : pct < 40 ? " warn" : "");
+    } else {
+      document.getElementById("st-bat").textContent = "Not available";
+    }
+    const ua = navigator.userAgent;
+    const plat = /iphone|ipad|ipod/i.test(ua) ? "iOS" : /android/i.test(ua) ? "Android" : "Desktop";
+    document.getElementById("st-platform").textContent = plat;
+    try {
+      const conn = navigator.connection || navigator.mozConnection;
+      if (conn) document.getElementById("st-conn").textContent =
+        (conn.type && conn.type !== "unknown" ? conn.type : conn.effectiveType) || "Unknown";
+    } catch (_) {}
+    try {
+      const r = await fetch("/system/summary");
+      const d = await r.json();
+      const aiEl = document.getElementById("st-ai");
+      if (aiEl) {
+        const aiStatus = d.ai?.status || "unknown";
+        aiEl.textContent = aiStatus;
+        aiEl.className = "stat-val " + (aiStatus === "running" ? "good" : "warn");
+      }
+      const devEl = document.getElementById("st-devcount");
+      if (devEl) devEl.textContent = d.devices?.count ?? "—";
+      const nodeEl = document.getElementById("st-node");
+      if (nodeEl) nodeEl.textContent = d.node?.name || d.name || "TLI Node";
+    } catch (_) {}
+  }
+
+  // ── Leave mesh ────────────────────────────────────────────────
+  function _leave(callApi = true) {
+    if (callApi) fetch(`/mesh/satellite/${SAT_ID}`, { method: "DELETE" }).catch(() => {});
+    localStorage.removeItem("sat_node_id");
+    localStorage.removeItem("sat_secret");
+    localStorage.removeItem("sat_name");
+    localStorage.removeItem(HIST_KEY);
+    window.location.href = "/";
+  }
+  leaveBtn?.addEventListener("click", () => {
+    if (confirm("Leave the TLI mesh?\n\nYou can rejoin by scanning a new QR code from the TLI Mesh panel.")) _leave();
+  });
+
+})();
+</script>
+</body>
+</html>

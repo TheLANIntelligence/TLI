@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TLI User Manual · v0.9.0</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --surface-2: #253347;
+      --border: #2d3f55;
+      --accent: #10b981;
+      --accent-dim: #0d9268;
+      --text: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --danger: #ef4444;
+      --warn: #f59e0b;
+      --radius: 8px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Layout */
+    .layout { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 0;
+    }
+    .sidebar-logo {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .sidebar-logo-mark { font-size: 22px; font-weight: 800; color: var(--accent); }
+    .sidebar-logo-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .sidebar-section { padding: 0 8px; margin-bottom: 8px; }
+    .sidebar-section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 4px 12px 6px;
+    }
+    .sidebar-link {
+      display: block;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background .12s, color .12s;
+    }
+    .sidebar-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+    .content { flex: 1; max-width: 860px; padding: 48px 56px; }
+
+    /* Typography */
+    h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+    h2 {
+      font-size: 20px; font-weight: 700; margin: 48px 0 16px;
+      padding-bottom: 10px; border-bottom: 1px solid var(--border);
+      scroll-margin-top: 24px;
+    }
+    h3 { font-size: 15px; font-weight: 600; margin: 24px 0 8px; color: var(--accent); }
+    p { margin-bottom: 12px; color: var(--text-secondary); }
+    ul, ol { padding-left: 20px; margin-bottom: 12px; color: var(--text-secondary); }
+    li { margin-bottom: 4px; }
+    strong { color: var(--text); font-weight: 600; }
+    code {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "Cascadia Code", "Fira Code", monospace;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    /* Components */
+    .lead { font-size: 15px; color: var(--text-secondary); margin-bottom: 32px; line-height: 1.7; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .03em;
+    }
+    .badge-green { background: rgba(16,185,129,.15); color: #10b981; border: 1px solid rgba(16,185,129,.3); }
+    .badge-yellow { background: rgba(245,158,11,.12); color: #f59e0b; border: 1px solid rgba(245,158,11,.25); }
+    .badge-red { background: rgba(239,68,68,.12); color: #ef4444; border: 1px solid rgba(239,68,68,.25); }
+    .badge-blue { background: rgba(59,130,246,.12); color: #60a5fa; border: 1px solid rgba(59,130,246,.25); }
+
+    .info-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .warn-box {
+      background: rgba(245,158,11,.06);
+      border: 1px solid rgba(245,158,11,.25);
+      border-left: 3px solid var(--warn);
+      border-radius: var(--radius);
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .info-box p, .warn-box p { margin: 0; }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin: 16px 0 24px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px;
+    }
+    .feature-card-icon { font-size: 20px; margin-bottom: 6px; }
+    .feature-card-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+    .feature-card-desc { font-size: 12px; color: var(--text-muted); }
+
+    .step-list { list-style: none; padding: 0; counter-reset: steps; }
+    .step-list li {
+      counter-increment: steps;
+      padding: 10px 0 10px 40px;
+      position: relative;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .step-list li:last-child { border-bottom: none; }
+    .step-list li::before {
+      content: counter(steps);
+      position: absolute;
+      left: 0;
+      top: 10px;
+      width: 24px;
+      height: 24px;
+      background: var(--accent);
+      color: #000;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .shortcut-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    .shortcut-table th {
+      text-align: left; padding: 8px 12px; font-size: 11px;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-muted); border-bottom: 1px solid var(--border);
+    }
+    .shortcut-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); }
+    .shortcut-table tr:last-child td { border-bottom: none; }
+
+    .back-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--text-muted); font-size: 13px; margin-bottom: 32px;
+    }
+    .back-link:hover { color: var(--accent); }
+
+    @media (max-width: 700px) {
+      .sidebar { display: none; }
+      .content { padding: 24px 20px; }
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-mark">TLI</div>
+      <div class="sidebar-logo-sub">User Manual · v0.9.0</div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Overview</div>
+      <a class="sidebar-link" href="#overview">What is TLI?</a>
+      <a class="sidebar-link" href="#setup">First-Run Setup</a>
+      <a class="sidebar-link" href="#navigation">Navigation</a>
+      <a class="sidebar-link" href="#shortcuts">Keyboard Shortcuts</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Panels</div>
+      <a class="sidebar-link" href="#main">Main — AI Chat</a>
+      <a class="sidebar-link" href="#dashboard">Dashboard</a>
+      <a class="sidebar-link" href="#vault">Vault</a>
+      <a class="sidebar-link" href="#homeauto">Home Automation</a>
+      <a class="sidebar-link" href="#files">File Storage</a>
+      <a class="sidebar-link" href="#games">Game Optimizer</a>
+      <a class="sidebar-link" href="#devices">Devices</a>
+      <a class="sidebar-link" href="#mesh">Mesh Network</a>
+      <a class="sidebar-link" href="#tli-chat">TLI Chat</a>
+      <a class="sidebar-link" href="#tools">Tools &amp; Scripts</a>
+      <a class="sidebar-link" href="#settings">Settings</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Reference</div>
+      <a class="sidebar-link" href="#ai-providers">AI Providers</a>
+      <a class="sidebar-link" href="#security">Security &amp; PIN</a>
+      <a class="sidebar-link" href="#troubleshoot">Troubleshooting</a>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <main class="content">
+    <a class="back-link" href="/">← Back to TLI</a>
+
+    <h1>TheLegatoIntelligence</h1>
+    <p class="lead">
+      TLI is a local, offline-first LAN console — an AI-powered home OS dashboard
+      that runs entirely on your hardware. No cloud, no subscriptions, no data leaving
+      your network.
+    </p>
+
+    <!-- ── OVERVIEW ───────────────────────────────────────────── -->
+    <h2 id="overview">What is TLI?</h2>
+    <p>TLI gives you a unified control panel for your local environment: AI chat, encrypted
+    storage, smart home control, file management, network topology, and system diagnostics —
+    all from a single browser tab.</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-card-icon">💬</div>
+        <div class="feature-card-title">Local AI Assistant</div>
+        <div class="feature-card-desc">Chat with local LLMs via LM Studio or the bundled Qwen2.5 model (Lite, Standard, or Power).</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🔐</div>
+        <div class="feature-card-title">Encrypted Vault</div>
+        <div class="feature-card-desc">AES-256-GCM encrypted files, secrets, and notes. Only unlocked with your master password.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🏠</div>
+        <div class="feature-card-title">Home Automation</div>
+        <div class="feature-card-desc">Control Shelly smart devices, build automations, and ask AI to control your home.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🌐</div>
+        <div class="feature-card-title">Mesh Network</div>
+        <div class="feature-card-desc">Connect multiple TLI nodes on your LAN, share AI capacity, and monitor peers.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">📁</div>
+        <div class="feature-card-title">File Manager</div>
+        <div class="feature-card-desc">Scan, organize, and visualize disk usage. Treemap for storage, rule-based sorting.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🎮</div>
+        <div class="feature-card-title">Game Optimizer</div>
+        <div class="feature-card-desc">Auto-detect running games and get AI-generated performance presets.</div>
+      </div>
+    </div>
+
+    <!-- ── FIRST-RUN SETUP ────────────────────────────────────── -->
+    <h2 id="setup">First-Run Setup</h2>
+    <p>On first launch, TLI walks you through a 4-step wizard:</p>
+    <ol class="step-list">
+      <li><strong>Node Name</strong> — Give this TLI instance a name (e.g. "Gaming PC", "Home Server"). Used to identify this node on your mesh.</li>
+      <li><strong>Access PIN</strong> — Optionally set a 4–32 character PIN to lock TLI. Recommended if other people share your LAN. Can be skipped and set later.</li>
+      <li><strong>LM Studio</strong> — Enter the URL of your LM Studio server (default: <code>http://localhost:1234</code>). TLI tests the connection and lists available models. Can be skipped if using the bundled AI.</li>
+      <li><strong>Done</strong> — The wizard marks onboarding complete and launches the main interface.</li>
+    </ol>
+
+    <div class="info-box">
+      <p><strong>Re-run wizard:</strong> Settings → scroll to bottom → "Reset onboarding".</p>
+    </div>
+
+    <!-- ── NAVIGATION ────────────────────────────────────────── -->
+    <h2 id="navigation">Navigation</h2>
+    <p>The left sidebar contains icon buttons for each panel. Click any icon to switch panels. The active panel is highlighted. Panel names appear as tooltips on hover.</p>
+    <p>The header shows the node name, AI status pill, and quick-access buttons (lock, manage AI source).</p>
+
+    <!-- ── SHORTCUTS ─────────────────────────────────────────── -->
+    <h2 id="shortcuts">Keyboard Shortcuts</h2>
+    <table class="shortcut-table">
+      <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>Ctrl + K</code></td><td>Open Command Palette — fuzzy search for any panel, action, tool, or mesh node</td></tr>
+        <tr><td><code>Enter</code></td><td>Submit chat message (when input is focused)</td></tr>
+        <tr><td><code>Esc</code></td><td>Close Command Palette / close modals</td></tr>
+        <tr><td><code>↑ / ↓</code></td><td>Navigate Command Palette results</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ── MAIN CHAT ─────────────────────────────────────────── -->
+    <h2 id="main">Main — AI Chat</h2>
+    <p>The core panel. Type a message and press <strong>Send</strong> or <strong>Enter</strong> to chat with the local AI.</p>
+
+    <h3>Chat Controls</h3>
+    <ul>
+      <li><strong>Brain selector</strong> — Choose which model handles your request. "Auto" picks the best model based on your message content (code → Qwen, reasoning → DeepSeek, general → default).</li>
+      <li><strong>Teaching Mode</strong> — Toggle in the chat toolbar. When on, the AI explains step-by-step. When off, it gives concise answers.</li>
+      <li><strong>History button</strong> — Opens the conversation drawer (right side). Lists past conversations. Click a conversation to resume it. Delete with the trash icon.</li>
+      <li><strong>Script Request</strong> — Checkbox in Advanced Controls. Tells the AI the output should be valid script code.</li>
+      <li><strong>Temperature / Max Tokens</strong> — Advanced sliders. Temperature controls creativity (0 = deterministic, 1 = creative). Max tokens limits response length.</li>
+    </ul>
+
+    <h3>Vault Secrets Injection</h3>
+    <p>If the vault is unlocked, you can inject specific secrets into the chat context. The AI will only reveal them when explicitly asked. Enable via <strong>Include Vault Secrets</strong> in Advanced Controls.</p>
+
+    <h3>Conversation Persistence</h3>
+    <p>Every chat exchange is automatically saved. Conversations are titled from your first message. Access previous conversations via the <strong>History</strong> button. Conversations are scoped to your session user — other users cannot see yours.</p>
+
+    <h3>AI Status Badge</h3>
+    <p>Below the input, the badge shows which AI source is active:
+    <span class="badge badge-green">Bundled AI</span> — local Qwen2.5 model &nbsp;
+    <span class="badge badge-blue">LM Studio</span> — your LM Studio server &nbsp;
+    <span class="badge badge-red">Offline</span> — no AI available.</p>
+
+    <div class="warn-box">
+      <p>If you see <strong>"No available AI provider"</strong>: start LM Studio and load a model, or wait for the bundled AI to initialize (first run may take a minute).</p>
+    </div>
+
+    <!-- ── DASHBOARD ─────────────────────────────────────────── -->
+    <h2 id="dashboard">Dashboard</h2>
+    <p>System overview with live status cards, quick-action buttons, and recent activity.</p>
+    <ul>
+      <li><strong>Status cards</strong> — AI status, mesh node count, vault status, device count. Click cards to jump to the relevant panel.</li>
+      <li><strong>Quick Actions</strong> — Buttons for common tasks: "New Chat", "Open Vault", "Scan Files", "Check Devices".</li>
+      <li><strong>Recent Activity</strong> — Local activity log stored in <code>localStorage</code>. Records panel opens, AI interactions, vault operations. Cleared on "Clear History" in Settings.</li>
+    </ul>
+
+    <!-- ── VAULT ─────────────────────────────────────────────── -->
+    <h2 id="vault">Vault</h2>
+    <p>An encrypted storage system protected with AES-256-GCM. Your master password never leaves your device.</p>
+
+    <h3>Initial Setup</h3>
+    <ol class="step-list">
+      <li>Click <strong>Set up Vault</strong> and enter a strong master password.</li>
+      <li>The vault is initialized with a unique key derived from your password (PBKDF2-SHA256, 260,000 iterations).</li>
+      <li>Enter your password to unlock. The vault stays unlocked for 30 minutes of inactivity.</li>
+    </ol>
+
+    <h3>Files</h3>
+    <p>Upload any file (drag-and-drop or the Upload button). Files are encrypted at rest. Download decrypts on the fly to your browser. Delete is permanent.</p>
+
+    <h3>Secrets</h3>
+    <p>Key-value pairs for passwords, API keys, and credentials. Add via <strong>+ Add Secret</strong>. Each secret has a name (key) and value. Secrets can be injected into AI chat context.</p>
+
+    <h3>Notes</h3>
+    <p>Encrypted markdown notes. Create, edit, and delete notes from the Notes tab. Useful for sensitive documentation.</p>
+
+    <h3>Backup &amp; Reset</h3>
+    <ul>
+      <li><strong>Export Backup</strong> — Downloads an encrypted archive of all vault contents. Keep this safe.</li>
+      <li><strong>Reset Vault</strong> — Permanently destroys all vault data. Requires current password + typing "RESET VAULT". Irreversible.</li>
+    </ul>
+
+    <div class="warn-box">
+      <p>If you forget your vault master password, the data cannot be recovered. The password is never stored — only a PBKDF2 hash is kept.</p>
+    </div>
+
+    <!-- ── HOME AUTOMATION ────────────────────────────────────── -->
+    <h2 id="homeauto">Home Automation</h2>
+    <p>Control Shelly smart devices on your LAN and build automation rules.</p>
+
+    <h3>Device Setup</h3>
+    <ol class="step-list">
+      <li>Go to <strong>Settings → Shelly Devices</strong> and add a device by IP address.</li>
+      <li>Assign a friendly name (e.g. "Living Room Lamp").</li>
+      <li>The device appears in the Home Automation panel.</li>
+    </ol>
+
+    <h3>Manual Control</h3>
+    <p>Each device card shows current state (on/off, power consumption). Use the toggle to switch relays. The AI can control devices via chat: <em>"Turn off the living room lamp."</em></p>
+
+    <h3>Automations</h3>
+    <p>Create scheduled or condition-based automations in the <strong>Automations</strong> sub-panel. Define triggers (time, device state) and actions (relay on/off, group scenes).</p>
+
+    <h3>Scenes</h3>
+    <p>Group multiple device actions into a named scene (e.g. "Movie Mode" = dim lights, activate specific relays). Trigger scenes from the panel or via AI chat.</p>
+
+    <!-- ── FILE STORAGE ───────────────────────────────────────── -->
+    <h2 id="files">File Storage</h2>
+    <p>Scan directories, organize files by rules, and visualize disk usage.</p>
+
+    <h3>Scanner</h3>
+    <ol class="step-list">
+      <li>Enter a directory path (or select a preset) and click <strong>Scan</strong>.</li>
+      <li>The scanner reads file names and extensions (not content). Results show size, type, and modification date.</li>
+      <li>Use the extension table to see what types of files are present.</li>
+    </ol>
+
+    <h3>Organizer</h3>
+    <p>Set rules (e.g. "move all .mp4 files to /Videos") and click <strong>Organize</strong>. The organizer moves files in batches. An <strong>Undo</strong> option is available immediately after each operation.</p>
+
+    <h3>Visualizer (Treemap)</h3>
+    <p>Switch to the <strong>Visualizer</strong> panel for an interactive treemap of disk usage. Each rectangle represents a file or folder — size is proportional to disk usage. Click to drill down, hover for details.</p>
+
+    <!-- ── GAME OPTIMIZER ─────────────────────────────────────── -->
+    <h2 id="games">Game Optimizer</h2>
+    <p>Auto-detect running games and generate hardware-aware performance presets.</p>
+
+    <h3>How It Works</h3>
+    <ol class="step-list">
+      <li>Open the <strong>Game Optimizer</strong> panel — it immediately starts polling for a running game (foreground process scan every 2.5 seconds).</li>
+      <li>When a game is detected, the title, PID, store (Steam / Epic / process scan), and live CPU/GPU/RAM metrics appear.</li>
+      <li>Select a preset: <strong>Max FPS</strong>, <strong>Balanced</strong>, or <strong>Quality</strong>.</li>
+      <li>The AI generates recommendations based on your detected hardware and the running game.</li>
+    </ol>
+
+    <h3>Manual Mode</h3>
+    <p>If your game isn't auto-detected, click <strong>Add Game Manually</strong> and paste the full .exe path. The path is added to an allowlist for future scans.</p>
+
+    <!-- ── DEVICES ────────────────────────────────────────────── -->
+    <h2 id="devices">Devices</h2>
+    <p>Inventory of connected USB drives, printers, and LAN devices.</p>
+
+    <h3>USB Storage</h3>
+    <p>Lists connected USB drives with capacity, free space, and mount point. Click a drive to open its directory in the File Storage scanner.</p>
+
+    <h3>Printers</h3>
+    <p>Discovers network printers via SNMP and WMI. Shows printer name, IP, and status. Test print sends a test page.</p>
+
+    <h3>LAN Scan</h3>
+    <p>Scans the local subnet for active devices. Shows IP, hostname, MAC address (where available), and detected services. Results are cached until the next manual rescan.</p>
+
+    <!-- ── MESH NETWORK ───────────────────────────────────────── -->
+    <h2 id="mesh">Mesh Network</h2>
+    <p>Connect multiple TLI instances on your LAN to share AI capacity, monitor remote nodes, and send tasks.</p>
+
+    <h3>Roles</h3>
+    <ul>
+      <li><strong>Standalone</strong> — Default. Not connected to any mesh.</li>
+      <li><strong>Host</strong> — Primary node. Accepts members, proxies AI requests, and maintains the mesh directory.</li>
+      <li><strong>Member</strong> — Routes all AI chat requests to the host. Shares its status with the host.</li>
+    </ul>
+
+    <h3>Joining a Mesh</h3>
+    <ol class="step-list">
+      <li>On the <strong>host</strong> node: click <strong>Become Host</strong>.</li>
+      <li>On the <strong>member</strong> node: enter the host's IP:port and click <strong>Join Mesh</strong>.</li>
+      <li>The member appears in the host's <strong>Mesh Directory</strong> once the heartbeat is received.</li>
+    </ol>
+
+    <h3>Remote Actions</h3>
+    <p>From the Mesh Directory, you can: <strong>Ping</strong> a node, fetch its <strong>Diagnostics</strong> (CPU/RAM/disk), view <strong>Recent Logs</strong>, and trigger <strong>Maintenance</strong> (clear temp files, refresh).</p>
+
+    <h3>Presence</h3>
+    <p>Node presence is based on heartbeat age: <span class="badge badge-green">Online</span> &lt;20s &nbsp; <span class="badge badge-yellow">Idle</span> &lt;2m &nbsp; <span class="badge badge-red">Offline</span> &gt;10m.</p>
+
+    <!-- ── TLI CHAT ───────────────────────────────────────────── -->
+    <h2 id="tli-chat">TLI Chat</h2>
+    <p>Real-time mesh chat between TLI nodes on your LAN. Messages are not AI-generated — they go directly to connected nodes.</p>
+    <ul>
+      <li>Select a target node from the dropdown.</li>
+      <li>Type a message and press <strong>Send</strong>.</li>
+      <li>Messages appear in the thread with sender, timestamp, and node name.</li>
+      <li>Requires at least two TLI nodes active on the same LAN.</li>
+    </ul>
+
+    <!-- ── TOOLS & SCRIPTS ────────────────────────────────────── -->
+    <h2 id="tools">Tools &amp; Scripts</h2>
+    <p>AI-generated scripts and one-click tool execution.</p>
+
+    <h3>Script Generator</h3>
+    <ol class="step-list">
+      <li>Describe what you need in plain language (e.g. "PowerShell script to find duplicate files in C:\Users").</li>
+      <li>Select the target shell: PowerShell, Bash, Python, CMD.</li>
+      <li>Click <strong>Generate</strong> — the AI writes the script and it appears in the editor.</li>
+      <li><strong>Save</strong> stores the script to your tools library. <strong>Copy</strong> puts it on the clipboard.</li>
+    </ol>
+
+    <h3>Saved Tools</h3>
+    <p>Previously generated scripts are listed in the <strong>My Tools</strong> tab. Run them directly (executes on the server), copy, or delete.</p>
+
+    <div class="warn-box">
+      <p><strong>Run executes on the TLI server process.</strong> Review scripts before running. There is no sandboxing.</p>
+    </div>
+
+    <!-- ── SETTINGS ───────────────────────────────────────────── -->
+    <h2 id="settings">Settings</h2>
+
+    <h3>Node Identity</h3>
+    <p>Set the <strong>node name</strong> and <strong>device nickname</strong> used throughout the UI and mesh directory. The node ID is auto-generated and cannot be changed.</p>
+
+    <h3>Access PIN</h3>
+    <p>Set a 4–32 character PIN to lock TLI. When a PIN is set, the lock screen appears on load and after the browser tab is closed. Sessions last 24 hours. Remove the PIN to return to open access.</p>
+    <ul>
+      <li>Changing the PIN requires the current PIN.</li>
+      <li>Removing the PIN also revokes all active sessions.</li>
+      <li>If locked out, use the <strong>Forgot PIN?</strong> link on the lock screen.</li>
+    </ul>
+
+    <h3>Intelligence (AI Source)</h3>
+    <p>Choose how TLI routes AI requests:</p>
+    <ul>
+      <li><strong>Auto</strong> — Uses local AI if available, falls back to LAN host if not.</li>
+      <li><strong>Local Only</strong> — Only uses LM Studio or bundled AI on this machine.</li>
+      <li><strong>LAN Only</strong> — Routes all requests to a mesh host node.</li>
+      <li><strong>Prefer Local / Allow LAN</strong> — Uses local first; LAN if local is unavailable.</li>
+      <li><strong>Prefer LAN / Allow Local</strong> — Uses LAN host first; local as fallback.</li>
+    </ul>
+
+    <h3>LM Studio URL</h3>
+    <p>The URL of your LM Studio OpenAI-compatible server. Default: <code>http://localhost:1234</code>. Test the connection and save via the <strong>Update LM Studio URL</strong> section in Settings.</p>
+
+    <h3>UI Mode</h3>
+    <p>Switch between <strong>Classic</strong> (single column, compact) and <strong>Dash2</strong> (modern dashboard layout with cards). Both modes show the same panels.</p>
+
+    <!-- ── AI PROVIDERS ───────────────────────────────────────── -->
+    <h2 id="ai-providers">AI Providers</h2>
+    <p>TLI supports two local AI providers, tried in order:</p>
+
+    <h3>1. Bundled AI (Qwen2.5)</h3>
+    <p>A local AI model that runs entirely on your machine. Choose from Lite (~1 GB), Standard (~2 GB), or Power (~4.5 GB) depending on your RAM. Handles general questions, chat, and coding. No external dependencies.</p>
+    <p>Status: visible on the AI badge and at <strong>Settings → AI Model</strong>.</p>
+
+    <h3>2. LM Studio</h3>
+    <p>Connect any model loaded in LM Studio. Recommended for code generation and complex reasoning. Supports auto-routing: TLI selects the best model based on message content.</p>
+
+    <h3>Model Auto-Routing</h3>
+    <table class="shortcut-table">
+      <thead><tr><th>Message Contains</th><th>Preferred Model</th></tr></thead>
+      <tbody>
+        <tr><td>code, script, python, bash, html, api…</td><td>Qwen (code model)</td></tr>
+        <tr><td>math, prove, logic, algorithm, optimize…</td><td>DeepSeek (reasoning model)</td></tr>
+        <tr><td>Short message (&lt;80 chars)</td><td>LLaMA (fast response)</td></tr>
+        <tr><td>Everything else</td><td>Default model</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ── SECURITY ───────────────────────────────────────────── -->
+    <h2 id="security">Security &amp; PIN</h2>
+    <p>TLI is designed for trusted LAN environments. Key security properties:</p>
+    <ul>
+      <li>All data stays on your machine/LAN. No telemetry, no cloud sync.</li>
+      <li>Vault encryption: AES-256-GCM with PBKDF2-SHA256 key derivation (260k iterations, 32-byte salt).</li>
+      <li>Sessions are tied to cookies (<code>httponly</code>, <code>samesite=strict</code>). Valid for 24 hours.</li>
+      <li>The PIN hash is stored, never the PIN itself.</li>
+      <li>All conversation and memory data is scoped per user — users cannot access each other's history.</li>
+      <li>HTTPS is supported via a self-signed TLS certificate (auto-generated on first run if <code>TLI_NO_TLS</code> is not set).</li>
+    </ul>
+
+    <!-- ── TROUBLESHOOTING ────────────────────────────────────── -->
+    <h2 id="troubleshoot">Troubleshooting</h2>
+
+    <h3>Lock screen won't dismiss</h3>
+    <p>Check if a PIN is set: <code>GET /system/pin/status</code> in your browser. If <code>enabled: false</code>, hard-refresh (Ctrl+Shift+R). If <code>enabled: true</code> and you don't know the PIN, use <strong>Forgot PIN?</strong> on the lock screen.</p>
+
+    <h3>AI chat returns "No available AI provider"</h3>
+    <ul>
+      <li>Start LM Studio and load a model.</li>
+      <li>Verify the LM Studio URL in Settings matches your server address.</li>
+      <li>Check bundled AI status at Settings → AI Model. If the model file is missing, click <strong>Download</strong>.</li>
+    </ul>
+
+    <h3>Command palette opens on load</h3>
+    <p>Hard-refresh the browser (Ctrl+Shift+R) to clear the cached JavaScript files.</p>
+
+    <h3>Vault says "Vault locked" after unlock</h3>
+    <p>Vault sessions expire after 30 minutes of inactivity. Re-enter your master password to unlock again. This is by design.</p>
+
+    <h3>Mesh node not appearing in directory</h3>
+    <ul>
+      <li>Ensure both nodes are on the same LAN subnet.</li>
+      <li>Verify the host node's address is correct on the member side.</li>
+      <li>Check that port 8000 (or your configured port) is not blocked by a firewall.</li>
+    </ul>
+
+    <h3>Games panel shows "No game detected"</h3>
+    <p>The game scanner reads the foreground window process. Ensure the game is running and in the foreground. For launchers that use indirect processes, use <strong>Add Game Manually</strong> with the full .exe path.</p>
+
+    <div style="margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border);">
+      <p style="color: var(--text-muted); font-size: 12px;">TLI v0.9.0 · Local. Private. No cloud. · <a href="/">Back to console</a></p>
+    </div>
+  </main>
+</div>
+</body>
+</html>

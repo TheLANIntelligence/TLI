@@ -1,0 +1,71 @@
+{
+  "id": "/",
+  "name": "TheLANIntelligence",
+  "short_name": "TLI",
+  "description": "Your home network at a glance. Local, live, no cloud.",
+  "start_url": "/companion",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0f172a",
+  "theme_color": "#10b981",
+  "lang": "en",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    {
+      "src": "/tli-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/tli-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/tli-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/tli-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "screenshots": [],
+  "shortcuts": [
+    {
+      "name": "Dashboard",
+      "short_name": "Dash",
+      "url": "/?panel=dashboard2",
+      "description": "Open the live dashboard",
+      "icons": [{ "src": "/tli-icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Home Automation",
+      "short_name": "Home",
+      "url": "/?panel=homeauto",
+      "description": "Control smart devices",
+      "icons": [{ "src": "/tli-icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Vault",
+      "short_name": "Vault",
+      "url": "/?panel=vault",
+      "description": "Encrypted vault",
+      "icons": [{ "src": "/tli-icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Settings",
+      "short_name": "Settings",
+      "url": "/?panel=settings",
+      "description": "Configure TLI",
+      "icons": [{ "src": "/tli-icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

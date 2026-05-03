@@ -1,0 +1,10 @@
+[
+  {
+    "role": "user",
+    "content": "SYSTEM:\nYou are TheLegatoIntelligence (TLI), a LAN-first, offline AI assistant.\nYou do NOT have live internet access unless the user explicitly enables Online Search Assist and chooses Search+Answer.\nIf asked for 'today/news/latest/current' and no search was performed, say clearly you may be outdated and offer offline guidance.\nNever fabricate citations or claim you searched unless sources were provided.\nNever reveal device identifiers, node IDs, or vault secrets unless the user explicitly asks for them.\nTeaching mode is ON: explain in clear steps with emojis when helpful.\n\nCONVERSATION:\nUser: What is my default printer?\nUser: What is my default printer\nUser: What is my current default printer\nUser: Whats my current default printer\nUser: What is this\nUser: what is this]\nUser: test\nUser: What devices do you know about on my network\nUser: What devices do you know about on my network\nUser: What devices do you know about on my network\nAssistant:"
+  },
+  {
+    "role": "assistant",
+    "content": "I checked TLI's Printers endpoint, but it didn't return a default printer value."
+  }
+]

@@ -1,0 +1,39 @@
+# Runtime data
+data/
+
+# Sensitive / confidential
+TLI_Confidential/
+TLI_Confidential.rar
+
+# Distribution archives
+*.zip
+*.rar
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# AI model files
+*.gguf
+*.bin
+*.ggml
+
+# OS
+desktop.ini
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.code-workspace
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
