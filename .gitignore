@@ -33,6 +33,9 @@ Thumbs.db
 .vscode/
 *.code-workspace
 
+# Runtime logs (regenerated on every run — use `git add -f` to force-track one)
+*.log
+
 # Secrets / certs
 *.pem
 *.key

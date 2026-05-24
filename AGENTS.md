@@ -1,6 +1,9 @@
-1# AGENTS.md
+# AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+Canonical project guidance for any coding agent working in this repo
+(Claude Code, OpenAI Codex, Cursor, Aider, etc.). `CLAUDE.md` is a thin
+pointer to this file so both tools share one source of truth — edit
+this file, not the pointer.
 
 ## Development Commands
 
