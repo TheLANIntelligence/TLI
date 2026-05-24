@@ -426,7 +426,7 @@ function renderAllShellyCards() {
 
   if (!devices.length) {
     setHomeAutoHealth("degraded", "Home Automation not configured yet.");
-    container.innerHTML = `<p class="sha-empty-state">No devices yet. Enter an IP above and click <strong>Add Device</strong>.</p>`;
+    container.innerHTML = `<p class="sha-empty-state">No devices yet. Click <strong>Discover</strong> to scan your LAN, or enter an IP manually.</p>`;
     return;
   }
 
@@ -947,6 +947,81 @@ syncShellyRegistry();
   });
 }
 
+async function discoverShellyDevices() {
+  const btn = $("shelly-discover-btn");
+  const orig = btn?.textContent || "Discover";
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Scanning...";
+  }
+
+  try {
+    showToast("Scanning your LAN for Shelly devices...", "info");
+    const res = await fetch("/shelly/discover");
+    if (!res.ok) {
+      let detail = "";
+      try {
+        const j = await res.json();
+        detail = j.detail || "";
+      } catch {
+        detail = await res.text();
+      }
+      if (res.status === 404) {
+        throw new Error("Discovery endpoint is not loaded yet. Restart TLI, then try Discover again.");
+      }
+      throw new Error(detail || "HTTP " + res.status);
+    }
+
+    const data = await res.json();
+    const found = Array.isArray(data.found) ? data.found : [];
+    if (!found.length) {
+      showToast(`No Shelly devices found on ${data.subnet || "this subnet"}.`, "info");
+      return;
+    }
+
+    let added = 0;
+    found.forEach((device) => {
+      const ip = String(device.ip || "").trim();
+      if (!ip) return;
+      const existingName = (shellyDevices?.[ip]?.name || "").trim();
+      const discoveredName = String(device.name || device.model || "Shelly").trim();
+      upsertShellyDevice(ip, {
+        ip,
+        name: existingName || discoveredName,
+        status: shellyDevices?.[ip]?.status || null,
+        discovered: {
+          model: device.model || null,
+          app: device.app || null,
+          gen: device.gen || null,
+          ver: device.ver || null,
+        },
+      });
+      added += 1;
+    });
+
+    saveShellyDevicesToStorage();
+    syncShellyRegistry();
+
+    const firstIp = String(found[0]?.ip || "").trim();
+    if (firstIp) setSelectedShellyIp(firstIp);
+
+    renderAllShellyCards();
+    await fetchAllShellyStatuses(true);
+    startShellyAutoRefresh();
+
+    showToast(`Found ${added} Shelly device${added === 1 ? "" : "s"}.`, "ok");
+  } catch (err) {
+    console.error("[Shelly] discovery failed:", err);
+    showToast("Shelly discovery failed: " + (err?.message || "unknown error"), "error");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+}
+
 
 function setupHomeAutomationPanel() {
     // ✅ On refresh: load saved Shelly devices + selection, render cards immediately
@@ -1032,6 +1107,13 @@ if (statusBtn) {
     startShellyAutoRefresh();
   });
 }
+
+  const discoverBtn = $("shelly-discover-btn");
+  if (discoverBtn) {
+    discoverBtn.addEventListener("click", () => {
+      discoverShellyDevices();
+    });
+  }
 
   const refreshAllBtn = $("shelly-refresh-all-btn");
   if (refreshAllBtn) {

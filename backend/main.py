@@ -194,11 +194,13 @@ from routers.federation_routes import router as federation_router
 from routers.identity_routes import router as identity_router
 from routers.relay_routes import router as relay_router
 from routers.update_routes import router as update_router
+from routers.builder import router as builder_router
 # ai_model_routes consolidated into ai/ai_routes.py
 
 app.include_router(identity_router)
 app.include_router(relay_router)
 app.include_router(update_router)
+app.include_router(builder_router)
 app.include_router(vault_router)
 app.include_router(satellite_router)
 app.include_router(hub_router)

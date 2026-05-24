@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import socket
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +19,50 @@ from license_gate import gate as _gate
 router = APIRouter(tags=["shelly"])
 
 _shelly_info_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _get_lan_ip() -> str:
+    """Best-effort LAN-facing IPv4 address for subnet discovery."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        sock.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
+def _probe_shelly_ip(ip: str) -> Optional[Dict[str, Any]]:
+    """Return Shelly device info when a Gen2 RPC endpoint responds."""
+    endpoint = f"http://{ip}/rpc/Shelly.GetDeviceInfo"
+    t0 = time.time()
+    try:
+        r = requests.get(endpoint, timeout=(0.35, 0.9))
+        if not r.ok:
+            return None
+        data = r.json() if r.content else {}
+        if not isinstance(data, dict):
+            return None
+        model = data.get("model")
+        app = data.get("app")
+        if not model and not app and "gen" not in data:
+            return None
+        return {
+            "ip": ip,
+            "name": data.get("name") or data.get("id") or model or f"Shelly {ip}",
+            "model": model,
+            "app": app,
+            "gen": str(data.get("gen") or "2"),
+            "fw_id": data.get("fw_id"),
+            "ver": data.get("ver"),
+            "latency_ms": int((time.time() - t0) * 1000),
+        }
+    except Exception:
+        return None
 
 
 def shelly_device_info_cached(ip: str, ttl_seconds: int = 20) -> Dict[str, Any]:
@@ -123,6 +170,62 @@ def homeauto_set_devices(payload: Dict[str, Any], _l=Depends(_gate("home_automat
             devices.append({"name": name, "ip": ip})
     S.save_shelly_registry(devices)
     return {"ok": True, "count": len(devices)}
+
+
+@router.get("/shelly/discover")
+def shelly_discover(
+    subnet: Optional[str] = Query(default=None, description="Optional IPv4 CIDR, e.g. 192.168.1.0/24"),
+    _l=Depends(_gate("home_automation")),
+):
+    """
+    Actively scan the local /24 subnet for Shelly Gen2 RPC devices.
+
+    Shelly devices do not all advertise consistently across Windows/macOS/Linux,
+    so this uses direct HTTP probing against /rpc/Shelly.GetDeviceInfo.
+    """
+    t0 = time.time()
+    lan_ip = _get_lan_ip()
+    if subnet:
+        try:
+            network = ipaddress.IPv4Network(subnet, strict=False)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid subnet. Use CIDR like 192.168.1.0/24.")
+    else:
+        try:
+            network = ipaddress.IPv4Network(f"{lan_ip}/24", strict=False)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Could not determine local subnet.")
+
+    if network.prefixlen < 24:
+        raise HTTPException(status_code=400, detail="Discovery is limited to /24 or smaller subnets.")
+
+    hosts = [str(h) for h in network.hosts()]
+    found: List[Dict[str, Any]] = []
+    seen_ips = set()
+
+    with ThreadPoolExecutor(max_workers=64) as executor:
+        futures = {executor.submit(_probe_shelly_ip, ip): ip for ip in hosts}
+        for future in as_completed(futures):
+            result = future.result()
+            if not result:
+                continue
+            ip = result.get("ip")
+            if ip in seen_ips:
+                continue
+            seen_ips.add(ip)
+            found.append(result)
+
+    found.sort(key=lambda d: tuple(int(p) for p in str(d.get("ip", "0.0.0.0")).split(".") if p.isdigit()))
+    S.log_debug("shelly", "INFO", "Shelly discovery complete",
+                subnet=str(network), scanned=len(hosts), found=len(found))
+    return {
+        "ok": True,
+        "subnet": str(network),
+        "lan_ip": lan_ip,
+        "scanned": len(hosts),
+        "found": found,
+        "elapsed_ms": int((time.time() - t0) * 1000),
+    }
 
 
 @router.get("/shelly/status")

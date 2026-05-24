@@ -23,6 +23,7 @@
   <link rel="stylesheet" href="/style.css?v=r4">
   <link rel="stylesheet" href="/chat_enhanced.css">
   <link rel="stylesheet" href="/settings_enhanced.css?v=r1">
+  <link rel="stylesheet" href="/builder.css?v=r9">
   <link rel="stylesheet" href="/nerve.css">
   <script src="/assets/d3.v7.min.js" defer></script>
 </head>
@@ -212,6 +213,13 @@
           data-panel-target="panel-dashboard2"
         >
           <div class="side-nav-button-icon">🧭</div><span>Dashboard</span>
+        </button>
+
+        <button
+          class="side-nav-button"
+          data-panel-target="panel-builder"
+        >
+          <div class="side-nav-button-icon">🛠️</div><span>Builder</span>
         </button>
 
 <button
@@ -1054,11 +1062,11 @@
             <div class="page-header">
               <div>
                 <h2 class="page-title">Home Automation</h2>
-                <p class="page-subtitle">Direct LAN control — Shelly, Hue, Govee, WLED, Yeelight, Sonoff, Kasa, Tuya, and more. Local-only.</p>
+                <p class="page-subtitle">Direct LAN control for Shelly devices. Bluetooth/cloud-only lights are not supported yet.</p>
               </div>
               <div class="page-header-tags">
                 <div class="page-tag">LAN-only</div>
-                <div class="page-tag">Multi-vendor</div>
+                <div class="page-tag">Shelly</div>
               </div>
               <button id="shelly-refresh-all-btn" class="btn-outline btn-sm sha-refresh-all-btn">⟳ Refresh All</button>
             </div>
@@ -1066,6 +1074,7 @@
             <!-- Compact add-device strip -->
             <div class="sha-add-strip">
               <input id="shelly-ip-input" type="text" class="field-input sha-add-ip" placeholder="192.168.x.x" />
+              <button id="shelly-discover-btn" class="btn-outline btn-sm">Discover</button>
               <button id="shelly-status-btn" class="btn-outline btn-sm">Check Status</button>
               <input id="shelly-name-input" type="text" class="field-input sha-add-name" placeholder="Device name (optional)" />
               <button id="shelly-add-device-btn" class="btn-primary btn-sm">Add Device</button>
@@ -1079,44 +1088,6 @@
               <summary>Raw Shelly JSON (advanced)</summary>
               <pre id="shelly-status-raw"></pre>
             </details>
-          </div>
-
-          <!-- Multi-vendor device manager -->
-          <div class="card" style="margin-top:16px;">
-            <div class="page-header" style="margin-bottom:12px;">
-              <div>
-                <h3 class="page-title" style="font-size:16px;">Device Library</h3>
-                <p class="page-subtitle">Add any LAN-compatible smart home device for use in scenes.</p>
-              </div>
-              <button id="hp-refresh-btn" class="btn-outline btn-sm">⟳ Refresh</button>
-            </div>
-
-            <!-- Add device form -->
-            <div class="hp-add-form" id="hp-add-form">
-              <div class="hp-add-row">
-                <select id="hp-vendor-select" class="field-input hp-vendor-select">
-                  <option value="shelly">Shelly</option>
-                  <option value="hue">Philips Hue</option>
-                  <option value="govee">Govee (LAN)</option>
-                  <option value="wled">WLED</option>
-                  <option value="yeelight">Yeelight</option>
-                  <option value="sonoff">Sonoff DIY</option>
-                  <option value="kasa">TP-Link Kasa</option>
-                  <option value="tuya">Tuya Local</option>
-                  <option value="generic_http">Generic HTTP</option>
-                </select>
-                <input id="hp-ip-input" type="text" class="field-input" placeholder="Device IP" style="flex:1;" />
-                <input id="hp-name-input" type="text" class="field-input" placeholder="Name (optional)" style="flex:1;" />
-              </div>
-              <!-- Vendor-specific extra fields (shown dynamically) -->
-              <div id="hp-extra-fields" class="hp-extra-fields" style="display:none;"></div>
-              <div class="hp-add-row" style="margin-top:8px;">
-                <button id="hp-add-btn" class="btn-primary btn-sm">Add to Library</button>
-              </div>
-            </div>
-
-            <!-- Device list -->
-            <div id="hp-device-list" style="margin-top:12px;"></div>
           </div>
 
           <!-- Hidden compat: renderShellyStatus still touches these IDs -->
@@ -2228,6 +2199,220 @@
           </div>
         </section>
 
+        <!-- BUILDER PANEL -->
+        <section class="panel-container" id="panel-builder" hidden>
+          <div class="builder-shell">
+            <header class="builder-header">
+              <div class="builder-header-title">
+                <h2 class="builder-title">TLI Builder</h2>
+                <span class="builder-subtitle">Local AI workspace for projects, files, photos, and guarded code changes.</span>
+              </div>
+              <div class="builder-header-project">
+                <button id="builder-project-btn" class="builder-project-btn" type="button" aria-haspopup="true" aria-expanded="false">
+                  <span class="builder-project-folder" aria-hidden="true">📁</span>
+                  <span id="builder-project-name" class="builder-project-name">No project</span>
+                  <span class="builder-project-caret" aria-hidden="true">▾</span>
+                </button>
+                <div id="builder-project-menu" class="builder-project-menu" hidden>
+                  <div class="builder-project-menu-section">
+                    <label class="field-label" for="builder-chat-project-path">Open project</label>
+                    <div class="builder-project-open-row">
+                      <input id="builder-chat-project-path" class="field-input" type="text" spellcheck="false"
+                             placeholder="C:\path\to\project" />
+                      <button id="builder-chat-scan-btn" class="btn-primary" type="button">Open</button>
+                    </div>
+                  </div>
+                  <details class="builder-new-project">
+                    <summary>New project</summary>
+                    <input id="builder-new-parent" class="field-input" type="text" spellcheck="false"
+                           placeholder="Parent folder" />
+                    <input id="builder-new-name" class="field-input" type="text" spellcheck="false"
+                           placeholder="Project name" />
+                    <select id="builder-new-template" class="field-select">
+                      <option value="blank">Blank</option>
+                      <option value="python">Python</option>
+                      <option value="web">Web</option>
+                    </select>
+                    <label class="builder-toggle">
+                      <input id="builder-new-create-parent" type="checkbox" />
+                      <span>Create parent folder if missing</span>
+                    </label>
+                    <button id="builder-create-project-btn" class="btn-primary" type="button">Create and open</button>
+                  </details>
+                  <div class="builder-project-menu-section">
+                    <label class="field-label" for="builder-permission">Project settings</label>
+                    <select id="builder-permission" class="field-select">
+                      <option value="ask" selected>Ask before edits</option>
+                      <option value="locked">Locked (read-only)</option>
+                      <option value="trusted">Trusted project</option>
+                    </select>
+                    <label class="builder-toggle">
+                      <input id="builder-golden" type="checkbox" checked />
+                      <span>Golden Build Guard</span>
+                    </label>
+                  </div>
+                  <div id="builder-project-summary-mini" class="builder-project-summary-mini"></div>
+                </div>
+              </div>
+              <div id="builder-backend-pill" class="builder-backend-pill" data-state="checking" title="Local AI backend status">
+                <span class="builder-backend-dot" aria-hidden="true"></span>
+                <span id="builder-backend-label" class="builder-backend-label">Checking…</span>
+              </div>
+            </header>
+
+            <section class="builder-hero">
+              <textarea id="builder-chat-input" class="builder-hero-input"
+                        placeholder="Tell the local agent what you want to do in this project. It can answer, inspect files, plan work, or run an approved task."></textarea>
+              <div id="builder-attach-dropzone" class="builder-attach-dropzone" tabindex="0">
+                <input id="builder-attach-input" type="file" multiple hidden />
+                <button id="builder-attach-btn" class="builder-attach-btn" type="button">Attach files or photos</button>
+                <span class="builder-attach-copy">Drop project notes, screenshots, mockups, logs, or reference files here.</span>
+              </div>
+              <div id="builder-attachment-tray" class="builder-attachment-tray" aria-live="polite"></div>
+              <div class="builder-hero-actions">
+                <button id="builder-chat-send-btn" class="btn-primary builder-hero-primary" type="button">Send</button>
+                <button id="builder-code-change-btn" class="btn-outline" type="button">Run agent task</button>
+                <button id="builder-chat-plan-btn" class="btn-outline" type="button">Plan task</button>
+                <button id="builder-chat-task-btn" class="btn-outline" type="button">Inspect project</button>
+                <button id="builder-new-project-open-btn" class="btn-outline" type="button">New project</button>
+              </div>
+              <div class="builder-hero-hints">
+                <span class="builder-hero-hints-label">Try</span>
+                <button class="builder-hint-chip" data-builder-prompt="Explain this project architecture." type="button">explain this project</button>
+                <button class="builder-hint-chip" data-builder-prompt="Find the files most likely responsible for the AI status pill." type="button">find AI status code</button>
+                <button class="builder-hint-chip" data-builder-prompt="Add a /healthz endpoint that returns the TLI version." type="button">add a /healthz endpoint</button>
+              </div>
+            </section>
+
+            <section class="builder-stream-section" id="builder-stream-section">
+              <button class="builder-stream-head" id="builder-stream-toggle" type="button" aria-expanded="true" aria-controls="builder-stream">
+                <span class="builder-stream-caret" aria-hidden="true">▾</span>
+                <h3 class="builder-stream-title">Workspace thread</h3>
+                <span id="builder-stream-count" class="builder-stream-count"></span>
+              </button>
+              <div id="builder-stream" class="builder-stream" aria-live="polite">
+                <div class="builder-stream-empty">Open or create a project, attach anything useful, then ask Builder what to do.</div>
+              </div>
+            </section>
+
+            <details class="builder-advanced">
+              <summary>Power tools</summary>
+              <div class="builder-power-grid">
+
+                <section class="builder-power-card">
+                  <div class="builder-power-head">
+                    <h4 class="builder-power-title">Manual patch</h4>
+                    <span class="builder-power-tag">escape hatch</span>
+                  </div>
+                  <p class="builder-power-desc">When the model can't figure it out, write the find/replace yourself.</p>
+                  <label class="field-label" for="builder-diff-file">Target file</label>
+                  <input id="builder-diff-file" class="field-input" type="text" spellcheck="false"
+                         placeholder="frontend/app.js" list="builder-file-options" />
+                  <datalist id="builder-file-options"></datalist>
+                  <div class="builder-diff-inputs">
+                    <div>
+                      <label class="field-label" for="builder-find-text">Find</label>
+                      <textarea id="builder-find-text" class="field-textarea builder-diff-text"
+                                placeholder="Exact text to replace"></textarea>
+                    </div>
+                    <div>
+                      <label class="field-label" for="builder-replace-text">Replace</label>
+                      <textarea id="builder-replace-text" class="field-textarea builder-diff-text"
+                                placeholder="Replacement"></textarea>
+                    </div>
+                  </div>
+                  <label class="builder-toggle">
+                    <input id="builder-replace-all" type="checkbox" />
+                    <span>Replace all matches</span>
+                  </label>
+                  <div class="button-row">
+                    <button id="builder-generate-diff-btn" class="btn-primary">Generate diff</button>
+                    <button id="builder-copy-diff-btn" class="btn-outline" disabled>Copy patch</button>
+                  </div>
+                  <pre id="builder-diff-output" class="builder-diff-output">No diff generated yet.</pre>
+                  <label class="builder-toggle builder-approval">
+                    <input id="builder-apply-approved" type="checkbox" />
+                    <span>I approve applying this patch.</span>
+                  </label>
+                  <div class="button-row">
+                    <button id="builder-apply-patch-btn" class="btn-primary" disabled>Apply approved patch</button>
+                  </div>
+                  <div id="builder-apply-output" class="builder-output">
+                    <div class="builder-empty">No patch applied in this session.</div>
+                  </div>
+                </section>
+
+                <section class="builder-power-card">
+                  <div class="builder-power-head">
+                    <h4 class="builder-power-title">Command runner</h4>
+                    <span class="builder-power-tag">tests &amp; builds</span>
+                  </div>
+                  <p class="builder-power-desc">Run a one-off approved command inside the project root.</p>
+                  <label class="field-label" for="builder-command-input">Command</label>
+                  <input id="builder-command-input" class="field-input" type="text" spellcheck="false"
+                         placeholder="e.g. python -m pytest" />
+                  <div class="builder-command-controls">
+                    <input id="builder-command-cwd" class="field-input" type="text" spellcheck="false"
+                           placeholder="Working dir (optional)" />
+                    <input id="builder-command-timeout" class="field-input" type="number" min="1" max="600" value="120" />
+                  </div>
+                  <label class="builder-toggle builder-approval">
+                    <input id="builder-command-approved" type="checkbox" />
+                    <span>I approve running this local command.</span>
+                  </label>
+                  <label class="builder-toggle">
+                    <input id="builder-command-network" type="checkbox" />
+                    <span>Allow commands that may contact the internet</span>
+                  </label>
+                  <div class="button-row">
+                    <button id="builder-run-command-btn" class="btn-primary">Run command</button>
+                  </div>
+                  <pre id="builder-command-output" class="builder-diff-output">No command run yet.</pre>
+                </section>
+
+                <section class="builder-power-card">
+                  <div class="builder-power-head">
+                    <h4 class="builder-power-title">Snapshots</h4>
+                    <span class="builder-power-tag">rollback</span>
+                  </div>
+                  <p class="builder-power-desc">Every applied patch creates a snapshot. Roll back to restore the originals.</p>
+                  <div class="button-row">
+                    <button id="builder-load-snapshots-btn" class="btn-outline">Refresh snapshots</button>
+                  </div>
+                  <div id="builder-snapshots" class="builder-list builder-snapshots">
+                    <div class="builder-empty">No snapshots loaded.</div>
+                  </div>
+                  <label class="field-label" for="builder-rollback-id">Snapshot ID</label>
+                  <input id="builder-rollback-id" class="field-input" type="text" spellcheck="false"
+                         placeholder="2026-05-17-..." />
+                  <label class="builder-toggle builder-approval">
+                    <input id="builder-rollback-approved" type="checkbox" />
+                    <span>I approve restoring this snapshot.</span>
+                  </label>
+                  <div class="button-row">
+                    <button id="builder-rollback-btn" class="btn-outline danger">Rollback snapshot</button>
+                  </div>
+                  <div id="builder-rollback-output" class="builder-output">
+                    <div class="builder-empty">Rollback output will appear here.</div>
+                  </div>
+                </section>
+
+                <section class="builder-power-card">
+                  <div class="builder-power-head">
+                    <h4 class="builder-power-title">Receipts log</h4>
+                    <span class="builder-power-tag">audit</span>
+                  </div>
+                  <p class="builder-power-desc">Every Builder action records an auditable receipt.</p>
+                  <div id="builder-receipts" class="builder-list builder-receipts">
+                    <div class="builder-empty">No Builder receipts yet.</div>
+                  </div>
+                </section>
+
+              </div>
+            </details>
+          </div>
+        </section>
+
         <!-- SETTINGS PANEL -->
         <!-- ══════════════════════════════════════════════════════ -->
         <!-- TLI HUB PANEL                                        -->
@@ -3008,8 +3193,7 @@
   <script src="/js/tools.js?v=r1"></script>
   <script src="/js/mesh.js?v=r2"></script>
   <script src="/js/settings.js?v=r1"></script>
-  <script src="/js/home-auto.js?v=r1"></script>
-  <script src="/js/home-power-devices.js?v=r1"></script>
+  <script src="/js/home-auto.js?v=r2"></script>
   <script src="/js/satellite.js?v=r1"></script>
   <script src="/js/federation.js?v=r1"></script>
   <script src="/js/hub.js?v=r3"></script>
@@ -3030,6 +3214,7 @@
   <!-- JS modules (extracted from app.js for maintainability) -->
   <script src="/js/tli-games.js?v=r3"></script>
   <script src="/js/tli-system.js?v=r3"></script>
+  <script src="/js/builder.js?v=r11"></script>
   <script src="/js/mesh-service.js?v=r3"></script>
   <script src="/js/pin-lock.js?v=r3"></script>
   <script src="/js/cmd-palette.js?v=r3"></script>
@@ -3252,6 +3437,9 @@
     </button>
     <button class="tli-more-item" data-panel-target="panel-scripts">
       <span class="tli-more-icon">📜</span><span>Scripts</span>
+    </button>
+    <button class="tli-more-item" data-panel-target="panel-builder">
+      <span class="tli-more-icon">B</span><span>Builder</span>
     </button>
     <button class="tli-more-item" data-panel-target="panel-automations">
       <span class="tli-more-icon">⚡</span><span>Automations</span>

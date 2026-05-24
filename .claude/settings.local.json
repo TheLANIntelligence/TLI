@@ -110,7 +110,19 @@
       "Bash(bash -n \"J:/TheLegatoIntelligence/TLI_Start.command\")",
       "Bash(bash -n \"J:/TheLegatoIntelligence/TLI_Start.sh\")",
       "Bash(/j/TheLegatoIntelligence/backend/.venv/Scripts/python.exe *)",
-      "Bash(git -C \"J:/TheLegatoIntelligence\" status)"
+      "Bash(git -C \"J:/TheLegatoIntelligence\" status)",
+      "Bash(git -C \"J:/TheLegatoIntelligence\" status --short)",
+      "Bash(git -C \"J:/TheLegatoIntelligence\" config user.email \"thelegatofox@gmail.com\")",
+      "Bash(git -C \"J:/TheLegatoIntelligence\" config user.name \"TheLegatoFox\")",
+      "Bash(git *)",
+      "PowerShell(gh auth *)",
+      "PowerShell(gh repo *)",
+      "PowerShell(git *)",
+      "Bash(curl -sS http://localhost:8000/api/builder/backend-status)",
+      "Bash(curl -sS -X POST http://localhost:8000/api/builder/warm-backend)",
+      "Bash(curl -sS http://localhost:8000/api/builder/status)",
+      "Bash(J:/TheLegatoIntelligence/backend/.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe main.py)"
     ]
   }
 }
