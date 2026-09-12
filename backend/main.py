@@ -8,8 +8,18 @@ from __future__ import annotations
 
 import os
 import sys
+# Frozen scan children must dispatch before FastAPI, state, providers or startup.
+if "--tli-storage-worker" in sys.argv:
+    if sys.argv[1:] != ["--tli-storage-worker"]:
+        raise SystemExit(2)
+    from storage_scan_worker import main as _storage_worker_main
+    _storage_worker_main()
+    raise SystemExit(0)
 import time
 from pathlib import Path
+
+import release_identity
+release_identity.capture()
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,15 +28,49 @@ from fastapi.staticfiles import StaticFiles
 
 import tli_state as S
 
+
+def _validate_startup():
+    from startup_config import resolve, local_only
+    from security_state import validate_existing_security
+    settings = resolve(S.BASE_DIR)
+    validate_existing_security()
+    if settings["configured"] and not local_only(settings["effective_next"]["host"]) and not S.load_pin_config()["enabled"]:
+        raise RuntimeError("Saved secure LAN startup requires a readable, enabled desktop PIN. Restore the matching configuration before restarting.")
+    return settings["effective_next"]
+
+
+# Validate persisted security before identity initialization, relay/update startup
+# or any other application worker. Invalid files must not become a fresh setup.
+try:
+    _validate_startup()
+except Exception as error:
+    if __name__ == "__main__" or getattr(sys, "frozen", False):
+        print(f"[TLI] Startup stopped: {getattr(error, 'detail', str(error))}", flush=True)
+        raise SystemExit(1) from error
+    raise
+
 # ============================================
 #  FastAPI App
 # ============================================
 
 app = FastAPI(title="TheLANIntelligence Backend")
 
+
+def _cors_origins() -> list[str]:
+    raw = os.environ.get("TLI_CORS_ORIGINS", "").strip()
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+    if os.environ.get("TLI_ALLOW_ANY_CORS") == "1":
+        return ["*"]
+    return [
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins(),
     allow_credentials=False,   # wildcard + credentials=True is a CSRF vector; same-origin cookies work without this
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
@@ -240,6 +284,40 @@ app.include_router(_event_bus.router)
 
 from routers.dashboard_presence import router as dashboard_presence_router, start_polling as _dp_start_polling, on_event as _dp_on_event
 app.include_router(dashboard_presence_router)
+from routers.intelligence_routes import router as intelligence_router
+app.include_router(intelligence_router)
+from routers.places_routes import router as places_router
+app.include_router(places_router)
+from routers.memory_tools_routes import router as memory_tools_router
+app.include_router(memory_tools_router)
+from routers.conversation_search_routes import router as conversation_search_router
+app.include_router(conversation_search_router)
+from routers.backup_routes import router as backup_router
+app.include_router(backup_router)
+from routers.vault_backup_routes import router as vault_backup_router
+app.include_router(vault_backup_router)
+from routers.cases_routes import router as cases_router
+app.include_router(cases_router)
+from routers.case_export_routes import router as case_export_router
+app.include_router(case_export_router)
+from routers.document_extraction_routes import router as document_extraction_router
+app.include_router(document_extraction_router)
+from routers.note_search_routes import router as note_search_router
+app.include_router(note_search_router)
+from routers.mcp_routes import router as mcp_router
+app.include_router(mcp_router)
+from routers.home_assistant_routes import router as home_assistant_router
+app.include_router(home_assistant_router)
+from routers.mcp_client_routes import router as mcp_client_router
+app.include_router(mcp_client_router)
+from routers.performance_routes import router as performance_router
+app.include_router(performance_router)
+from routers.companion_routes import router as companion_router
+app.include_router(companion_router)
+from routers.peer_transfer_routes import router as peer_transfer_router
+app.include_router(peer_transfer_router)
+from companion_auth import validate_authorization as _validate_companion_authorization
+app.middleware("http")(_validate_companion_authorization)
 
 from routers.cleanup_routes import router as cleanup_router, start_cleanup_scanner as _cleanup_start, stop_cleanup_scanner as _cleanup_stop
 app.include_router(cleanup_router)
@@ -313,7 +391,7 @@ def tli_ai_chat_peer(payload: dict):
 
     t0 = _time.time()
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with mgr.generation(), urllib.request.urlopen(req, timeout=60) as resp:
             result = _json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
@@ -527,6 +605,8 @@ import lan_discovery
 
 @app.on_event("startup")
 async def on_startup():
+    _validate_startup()
+    _event_bus.start_activity_history(S.DATA_DIR)
     import asyncio as _asyncio
     loop = _asyncio.get_running_loop()
     # Capture running event loop for SSE presence broadcasts
@@ -558,24 +638,33 @@ async def on_startup():
             pass
 
     # Auto-open browser when running as packaged EXE
-    if getattr(sys, "frozen", False):
+    if getattr(sys, "frozen", False) or os.environ.get("TLI_OPEN_BROWSER") == "1":
         import threading, webbrowser, socket as _socket
-        port = int(os.environ.get("TLI_PORT", "8000"))
-        scheme = "https" if S.TLS_ENABLED else "http"
+        from startup_config import browser_url
+        port = S.SERVER_BIND_PORT
+        host = S.SERVER_BIND_HOST
+        connect_host = "::1" if host in {"::", "::1"} else "127.0.0.1" if host in {"0.0.0.0", "localhost"} else host
+        url = browser_url({"host": host, "port": port, "https": bool(S.TLS_ENABLED)})
         def _open_browser():
             # Wait until the server is actually accepting connections (up to 15s)
             deadline = time.time() + 15
             while time.time() < deadline:
                 try:
-                    with _socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                    with _socket.create_connection((connect_host, port), timeout=0.5):
                         break
                 except OSError:
                     time.sleep(0.3)
-            webbrowser.open(f"{scheme}://localhost:{port}")
+            else:
+                return  # startup never became reachable; do not open a dead page
+            webbrowser.open(url)
         threading.Thread(target=_open_browser, daemon=True).start()
 
 @app.on_event("shutdown")
 def on_shutdown():
+    from storage_jobs import shutdown as _storage_jobs_shutdown
+    _storage_jobs_shutdown()
+    _event_bus.unregister_post_emit_hook(_dp_on_event)
+    _event_bus.set_event_loop(None)
     lan_discovery.stop()
     try:
         from routers.dashboard_presence import stop_polling as _dp_stop
@@ -590,82 +679,59 @@ def on_shutdown():
         BundledAIManager.get().stop()
     except Exception:
         pass
+    _event_bus.stop_activity_history()
 
 
 # ============================================
 #  Packaged EXE entrypoint (PyInstaller)
 # ============================================
 
-def _free_port(port: int) -> None:
-    """
-    If another process is already listening on `port`, terminate it gracefully
-    before we try to bind.  This prevents the WinError 10048 / EADDRINUSE crash
-    that happens when a previous TLI instance wasn't cleanly shut down.
-    Cross-platform: uses psutil (already a TLI dependency).
-    """
-    try:
-        import psutil
-        my_pid = os.getpid()
-        for conn in psutil.net_connections(kind="tcp"):
-            if conn.laddr.port != port:
-                continue
-            if conn.status not in ("LISTEN", psutil.CONN_LISTEN):
-                continue
-            pid = conn.pid
-            if not pid or pid == my_pid:
-                continue
-            try:
-                proc = psutil.Process(pid)
-                name = proc.name()
-                print(
-                    f"[TLI] Port {port} held by '{name}' (PID {pid}) — "
-                    "terminating previous instance…",
-                    flush=True,
-                )
-                proc.terminate()
-                proc.wait(timeout=4)
-                print(f"[TLI] Previous instance (PID {pid}) stopped.", flush=True)
-            except psutil.NoSuchProcess:
-                pass
-            except psutil.TimeoutExpired:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            except Exception as _e:
-                print(f"[TLI] Could not free port {port}: {_e}", flush=True)
-    except Exception:
-        pass  # psutil unavailable or permission denied — let uvicorn surface the error naturally
-
-
 def _tli_run_server():
     import uvicorn
+    from launch_checks import check_port
     from tls_cert import ensure_tls_cert
 
-    host = os.environ.get("TLI_HOST", "0.0.0.0")
-    port = int(os.environ.get("TLI_PORT", "8000"))
-    _free_port(port)
+    settings = _validate_startup()
+    host, port = settings["host"], settings["port"]
+    check_port(host, port)
+    S.SERVER_BIND_HOST = host
+    S.SERVER_BIND_PORT = port
 
     ssl_certfile = None
     ssl_keyfile = None
 
-    # HTTPS is opt-in only — self-signed certs cause scary browser warnings for new users.
-    # Set TLI_ENABLE_TLS=1 to turn it on (advanced / server deployments).
-    if os.environ.get("TLI_ENABLE_TLS"):
+    # HTTPS remains opt-in through saved settings or explicit environment values.
+    S.TLS_ENABLED = False
+    if settings["https"]:
         if ensure_tls_cert(S.TLS_CERT_PATH, S.TLS_KEY_PATH):
             ssl_certfile = S.TLS_CERT_PATH
             ssl_keyfile = S.TLS_KEY_PATH
             S.TLS_ENABLED = True
             print(f"[TLS] HTTPS enabled  cert={S.TLS_CERT_PATH}", flush=True)
         else:
-            print("[TLS] Certificate unavailable — falling back to HTTP", flush=True)
+            raise RuntimeError("HTTPS was requested but the certificate/key is unavailable or invalid. Repair TLS before restarting; HTTP was not started.")
     else:
         print("[TLS] Running HTTP (set TLI_ENABLE_TLS=1 to enable HTTPS)", flush=True)
+
+    from startup_config import browser_url
+    print(f"[TLI] Starting at {browser_url(settings)}", flush=True)
+
+    from startup_config import local_only
+    if not local_only(host):
+        print(
+            "[TLI] LAN bind enabled. Use TLI_HOST=127.0.0.1 for local-only or set a PIN before exposing on LAN.",
+            flush=True,
+        )
+    else:
+        print("[TLI] Local-only bind. Set TLI_LAN_MODE=1 or TLI_HOST=0.0.0.0 for LAN access.", flush=True)
 
     uvicorn.run(
         app, host=host, port=port, log_level="info",
         ssl_certfile=ssl_certfile,
         ssl_keyfile=ssl_keyfile,
+        # Bound active-request/transport draining, then run normal lifespan
+        # cleanup even if a disconnected browser leaves a transport waiting.
+        timeout_graceful_shutdown=30,
     )
 
 

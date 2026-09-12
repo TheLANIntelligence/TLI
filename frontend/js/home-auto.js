@@ -4,209 +4,108 @@ const shellyDevicesStorageKey = "tli_shelly_devices_v1"; // NEW (multi-device)
 // 🔒 UI lock: prevents card re-render during inline rename
 let shellyRenameLock = false;
 
+const shellyCommands = new Set();
+const shellyReads = new Map();
+const shellyRevisions = new Map();
+const shellySelectedRelayStorageKey = "tli_shelly_selected_relay_v1";
+const shellySelectedIpStorageKey = "tli_shelly_selected_ip_v1";
+let shellyAutoTimer = null, shellyAgeTimer = null, shellyAutoEpoch = 0, lastShellyStatus = null;
+let shellyPanelBound = false;
+let shellyHostLoad = null;
+let shellyCycle = null;
+let shellyRenderedFreshness = new Map();
+function shellyReadingFresh(d) { return !!(d.status?.checkedAt && Date.now() - d.status.checkedAt <= 30000 && !d.statusError); }
+
+function shellyKey(ip, relay = 0) { return `${String(ip).trim().toLowerCase()}#${relay}`; }
+function shellyTarget(ip, relay = null) {
+  ip = String(ip || '').trim();
+  if (!ip) throw new Error('Enter a Shelly address first.');
+  const matches = Object.values(shellyDevices).filter(d => d.ip.toLowerCase() === ip.toLowerCase());
+  if (relay == null) {
+    const relays = [...new Set(matches.map(d => d.relay))];
+    if (relays.length > 1) throw new Error('This address has multiple relays. Choose a relay explicitly.');
+    relay = relays[0] ?? 0;
+  }
+  if (!Number.isInteger(Number(relay)) || Number(relay) < 0 || Number(relay) > 255 || relay === '') throw new Error('Enter a relay index from 0 to 255.');
+  return {ip, relay:Number(relay), key:shellyKey(ip, Number(relay))};
+}
 function loadShellyDevicesFromStorage() {
   try {
-    const raw = localStorage.getItem(shellyDevicesStorageKey);
-    const obj = raw ? JSON.parse(raw) : {};
-    // Ensure shellyDevices is populated (global already exists)
+    const saved = JSON.parse(localStorage.getItem(shellyDevicesStorageKey) || '{}');
     Object.keys(shellyDevices).forEach(k => delete shellyDevices[k]);
-    Object.entries(obj || {}).forEach(([ip, dev]) => {
-      if (!ip) return;
-      shellyDevices[ip] = {
-        ip,
-        name: dev?.name || "",
-        status: dev?.status || null,
-        updatedAt: dev?.updatedAt || null,
-      };
-    });
-  } catch (e) {
-    console.warn("Shelly: failed to load multi-device store:", e);
-  }
+    for (const [key, d] of Object.entries(saved || {})) {
+      if (!d || typeof d !== 'object') continue;
+      const target = shellyTarget(d.ip || key, d.relay ?? 0);
+      // A browser cache is not evidence of the host's current relay state.
+      shellyDevices[target.key] = {...d, ...target, status:null, statusError:null, commandResult:''};
+    }
+  } catch (e) { console.warn('Shelly cache unavailable:', e); }
 }
-
 function saveShellyDevicesToStorage() {
-  try {
-    localStorage.setItem(shellyDevicesStorageKey, JSON.stringify(shellyDevices));
-  } catch (e) {
-    console.warn("Shelly: failed to save multi-device store:", e);
-  }
+  try { localStorage.setItem(shellyDevicesStorageKey, JSON.stringify(shellyDevices)); } catch {}
 }
-
 function upsertShellyDevice(ip, patch = {}) {
-  if (!ip) return;
-
-  const existing = shellyDevices[ip] || {
-    ip,
-    name: "",
-    status: null,
-    updatedAt: null
-  };
-
-  const next = {
-    ...existing,
-    ...patch,
-    ip,
-    updatedAt: new Date().toISOString()
-  };
-
-  // 🔒 PROTECT NAME
-  if (
-    patch.name === undefined ||
-    patch.name === null ||
-    patch.name.trim?.() === ""
-  ) {
-    next.name = existing.name;
-  }
-
-  shellyDevices[ip] = next;
+  const target = shellyTarget(ip, patch.relay ?? null);
+  const old = shellyDevices[target.key] || {name:'', status:null};
+  shellyDevices[target.key] = {...old, ...patch, ...target, updatedAt:new Date().toISOString()};
   saveShellyDevicesToStorage();
+  return shellyDevices[target.key];
 }
-
-
-
-let shellyAutoTimer = null;
-let lastShellyStatus = null; // last known Shelly state for chat + self-awareness
-const shellySelectedIpStorageKey = "tli_shelly_selected_ip_v1";
-
 function getSelectedShellyIp() {
-  try {
-    return (localStorage.getItem(shellySelectedIpStorageKey) || "").trim() || null;
-  } catch {
-    return null;
-  }
+  try { return localStorage.getItem(shellySelectedIpStorageKey)?.trim() || null; } catch { return null; }
 }
-
-function setSelectedShellyIp(ip) {
-  const trimmed = (ip || "").trim();
+function setSelectedShellyIp(ip, relay = null) {
+  const target = shellyTarget(ip, relay);
   try {
-    if (trimmed) localStorage.setItem(shellySelectedIpStorageKey, trimmed);
-    else localStorage.removeItem(shellySelectedIpStorageKey);
+    localStorage.setItem(shellySelectedIpStorageKey, target.ip);
+    localStorage.setItem(shellySelectedRelayStorageKey, String(target.relay));
   } catch {}
-
-  // Keep the existing UI inputs aligned (nice UX)
-  const ipInput = $("shelly-ip-input");
-  if (ipInput && trimmed) ipInput.value = trimmed;
-
-  const nameInput = $("shelly-name-input");
-  if (nameInput && trimmed) {
-    const nm = (shellyDevices?.[trimmed]?.name || "").trim();
-    if (nm) nameInput.value = nm;
-  }
+  if ($('shelly-ip-input')) $('shelly-ip-input').value = target.ip;
+  if ($('shelly-relay-input')) $('shelly-relay-input').value = String(target.relay);
+  if ($('shelly-name-input')) $('shelly-name-input').value = shellyDevices[target.key]?.name || '';
 }
-
-// ✅ Save name button (per selected device)
-const renameBtn = $("shelly-rename-btn");
-if (renameBtn) {
-  renameBtn.addEventListener("click", () => {
-    const ip = (typeof getSelectedShellyIp === "function" ? getSelectedShellyIp() : "").trim();
-    if (!ip) {
-      showToast("Select a Shelly card first, then rename it.", "warn");
-      return;
-    }
-
-    const nm = (nameInput?.value || "").trim();
-    if (!nm) {
-      showToast("Enter a name first (example: Bedside lamp).", "warn");
-      return;
-    }
-
-    upsertShellyDevice(ip, { name: nm });
-    applyShellyNameToUI(nm);
-    renderAllShellyCards();
-    showToast(`Saved name: ${nm} (${ip})`, "ok");
-  });
+function readShellyTarget() {
+  const ip = $('shelly-ip-input')?.value.trim() || getSelectedShellyIp();
+  return shellyTarget(ip, $('shelly-relay-input')?.value ?? null);
 }
-
-
-const SHELLY_AUTO_INTERVAL_MS = 3000; // 3s; tweak if you want
-
-function buildShellySnapshotFromPayload(ip, payload) {
-  const raw = payload && (payload.raw || payload);
-
-  const sw = raw && raw["switch:0"] ? raw["switch:0"] : null;
-
-  const snapshot = {
-    ip,
-    isOn: !!(sw && typeof sw.output === "boolean" ? sw.output : false),
-    power: sw && typeof sw.apower === "number" ? sw.apower : null,
-    voltage: sw && typeof sw.voltage === "number" ? sw.voltage : null,
-    current: sw && typeof sw.current === "number" ? sw.current : null,
-    temperature:
-      raw && raw.temperature && typeof raw.temperature.tC === "number"
-        ? raw.temperature.tC
-        : null,
-    checkedAt: Date.now(),
-  };
-
-  return snapshot;
+async function shellyRequest(url, options = {}) {
+  const response = await fetch(url, {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(45000), ...options});
+  const data = await response.json();
+  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
+  return data;
 }
-
+function buildShellySnapshotFromPayload(ip, payload, relay = 0) {
+  const raw = payload?.raw;
+  const sw = raw?.[`switch:${relay}`];
+  const valid = payload?.ok !== false && raw && !('error' in raw) && !('code' in raw) && !('text' in raw) && typeof sw?.output === 'boolean';
+  const metric = key => valid && Number.isFinite(sw[key]) ? sw[key] : null;
+  return {ip, relay, isOn:valid ? sw.output : null, power:metric('apower'), voltage:metric('voltage'), current:metric('current'),
+    temperature:valid && Number.isFinite(sw?.temperature?.tC) ? sw.temperature.tC : null,
+    checkedAt:valid ? Date.now() : null};
+}
 function startShellyAutoRefresh() {
-  if (shellyAutoTimer) return; // already running
-
-  const perDeviceDelayMs = 800; // stagger between devices
-  const cycleDelayMs = 5000; // wait between full cycles
-
-  const tick = async () => {
-    const devices = Object.values(shellyDevices || {}).filter((d) => d && d.ip);
-    if (!devices.length) return;
-
-    const selected = getSelectedShellyIp();
-
-    // Always poll selected first, but DO NOT update Quick Control unless it's selected.
-    const ordered = selected
-      ? [
-          ...devices.filter((d) => (d.ip || "").trim() === selected),
-          ...devices.filter((d) => (d.ip || "").trim() !== selected),
-        ]
-      : devices;
-
-    for (let i = 0; i < ordered.length; i++) {
-      const ip = (ordered[i].ip || "").trim();
-      if (!ip) continue;
-
-      try {
-        const res = await fetch("/shelly/status?ip=" + encodeURIComponent(ip));
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-
-        // ✅ Always update the CARD snapshot (no Quick Control UI changes here)
-        const snap = buildShellySnapshotFromPayload(ip, data);
-        const nm = (shellyDevices?.[ip]?.name || "").trim();
-        upsertShellyDevice(ip, { name: nm, status: snap });
-
-        // ✅ Only the SELECTED device is allowed to touch Quick Control widgets
-        if (selected && ip === selected) {
-          renderShellyStatus(ip, data);
-        }
-
-        renderAllShellyCards();
-      } catch {
-        // quiet failure; just mark this device stale/unavailable
-        const nm = (shellyDevices?.[ip]?.name || "").trim();
-        upsertShellyDevice(ip, { name: nm, status: null });
-        renderAllShellyCards();
-      }
-
-      await new Promise((r) => setTimeout(r, perDeviceDelayMs));
-    }
+  if (shellyAutoTimer !== null) return;
+  const epoch = ++shellyAutoEpoch;
+  const age = () => {
+    if (epoch !== shellyAutoEpoch) return;
+    if (Object.values(shellyDevices).some(d => shellyReadingFresh(d) !== shellyRenderedFreshness.get(d.key))) renderAllShellyCards();
+    shellyAgeTimer = window.setTimeout(age, 1000);
   };
-
-  tick();
-  shellyAutoTimer = window.setInterval(tick, cycleDelayMs);
+  shellyAgeTimer = window.setTimeout(age, 1000);
+  const tick = async () => {
+    if (epoch !== shellyAutoEpoch) return;
+    await fetchAllShellyStatuses(true);
+    if (epoch === shellyAutoEpoch) shellyAutoTimer = window.setTimeout(tick, 5000);
+  };
+  shellyAutoTimer = window.setTimeout(tick, 0);
 }
-
-
-
 function stopShellyAutoRefresh() {
-  if (!shellyAutoTimer) return;
-  window.clearInterval(shellyAutoTimer);
+  shellyAutoEpoch++;
+  if (shellyAutoTimer !== null) window.clearTimeout(shellyAutoTimer);
+  if (shellyAgeTimer !== null) window.clearTimeout(shellyAgeTimer);
   shellyAutoTimer = null;
+  shellyAgeTimer = null;
 }
-
-// Returns ONLY what the user configured (input or saved storage).
-// IMPORTANT: No fallback IPs here — this is used for "Integration Health" logic.
-
 
 function readShellyIpConfigured() {
   const input = $("shelly-ip-input");
@@ -284,25 +183,28 @@ function applyShellyNameToUI(name) {
     label.style.display = "";
   }
 }
-async function syncShellyRegistry() {
-  try {
-    const devices = Object.values(shellyDevices || {}).map(d => ({
-      name: d.name || "",
-      ip: d.ip,
-    }));
-
-    if (!devices.length) return;
-
-    await fetch("/homeauto/devices", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ devices }),
-    });
-  } catch (e) {
-    console.warn("Shelly registry sync failed:", e);
+async function loadShellyHostRegistry() {
+  const data = await shellyRequest('/homeauto/devices');
+  if (!Array.isArray(data.devices)) throw new Error('The host returned no valid device registry.');
+  const next = {};
+  for (const d of data.devices) {
+    const target = shellyTarget(d.ip, d.relay ?? 0);
+    const old = shellyDevices[target.key];
+    next[target.key] = {...d, ...target, status:old?.status || null,
+      statusError:old?.statusError || null, commandResult:old?.commandResult || ''};
   }
+  Object.keys(shellyDevices).forEach(k => delete shellyDevices[k]);
+  Object.assign(shellyDevices, next);
+  saveShellyDevicesToStorage(); renderAllShellyCards();
 }
-
+async function syncShellyRegistry(changes = null) {
+  const devices = changes || Object.values(shellyDevices);
+  if (!devices.length) return;
+  const result = await shellyRequest('/homeauto/devices', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({merge:true, devices:devices.map(d => ({ip:d.ip, relay:d.relay ?? 0, name:d.name || ''}))})});
+  if (result.ok !== true) throw new Error('Device registry was not saved.');
+  return result;
+}
 
 function persistShellyIp(ip) {
   try {
@@ -366,44 +268,19 @@ function cancelShellyInlineRename(cardEl) {
   renderAllShellyCards(); // re-render restores normal view
 }
 
-function commitShellyInlineRename(cardEl, ip) {
-  if (!cardEl || !ip) return;
-
-  const input = cardEl.querySelector("[data-shelly-name-input]");
-  if (!input) return;
-
-  const newName = (input.value || "").trim();
-  if (!newName) {
-    showToast("Name can't be empty.", "warn");
-    cancelShellyInlineRename(cardEl);
-    return;
-  }
-
-  const prev = shellyDevices[ip] || { ip };
-  shellyDevices[ip] = {
-    ...prev,
-    ip,
-    name: newName,
-  };
-
+async function commitShellyInlineRename(cardEl, ip, relay = null) {
+  if (!cardEl || cardEl.dataset.saving === 'true') return;
+  const name = cardEl.querySelector('[data-shelly-name-input]')?.value.trim();
+  if (!name) { showToast("Name can't be empty.", 'warn'); return; }
+  cardEl.dataset.saving = 'true';
   try {
-    if (typeof saveShellyDevicesToStorage === "function") {
-      saveShellyDevicesToStorage();
-    }
-  } catch {}
-
-  // If this device is selected, reflect into the "Device name" UI line too
-  const selectedIp = (getSelectedShellyIp() || "").trim();
-  if (selectedIp && selectedIp === ip) {
-    try {
-      const nameInput = $("shelly-name-input");
-      if (nameInput) nameInput.value = newName;
-      if (typeof applyShellyNameToUI === "function") applyShellyNameToUI(newName);
-    } catch {}
-  }
-
-  showToast(`Saved name: ${newName} (${ip})`, "ok");
-  renderAllShellyCards();
+    const target = shellyTarget(ip, relay);
+    await syncShellyRegistry([{...target, name}]);
+    upsertShellyDevice(ip, {relay:target.relay, name});
+    showToast(`Saved name: ${name} (${ip}, relay ${target.relay})`, 'ok');
+    cardEl.classList.remove('is-renaming'); renderAllShellyCards();
+  } catch (e) { showToast('Name was not saved: ' + e.message, 'error'); }
+  finally { cardEl.dataset.saving = 'false'; }
 }
 
 function _shellyAgo(ts) {
@@ -420,7 +297,9 @@ function renderAllShellyCards() {
   const container = $("shellyCards");
   if (!container) return;
 
+  if (isShellyInlineRenamingActive()) return;
   container.innerHTML = "";
+  shellyRenderedFreshness = new Map();
 
   const devices = Object.values(shellyDevices || {}).filter((d) => d && d.ip);
 
@@ -437,9 +316,14 @@ function renderAllShellyCards() {
     if (!ip) return;
 
     const name = String(device.name || "Shelly").trim() || "Shelly";
-    const s = device.status || null;
+    const relay = device.relay ?? 0;
+    const key = shellyKey(ip, relay);
+    const observed = device.status;
+    const fresh = shellyReadingFresh(device);
+    shellyRenderedFreshness.set(key, fresh);
+    const s = fresh ? observed : null;
 
-    // Determine state: null status = unreachable
+    // Missing or stale observations never imply that the relay is OFF.
     const reachable = s !== null;
     const isOn = reachable && s.isOn === true;
     const isOff = reachable && s.isOn === false;
@@ -460,11 +344,13 @@ function renderAllShellyCards() {
     const currentStr = s?.current != null ? s.current.toFixed(3) + " A" : "—";
     const prominentPower = isOn && s?.power != null;
 
-    const lastChecked = s?.checkedAt ? `Last checked: ${_shellyAgo(s.checkedAt)}` : "Not yet checked";
+    const lastChecked = device.statusError ? 'Status unavailable · ' + device.statusError :
+      observed?.checkedAt ? `${fresh ? 'Last checked' : 'Stale reading'}: ${_shellyAgo(observed.checkedAt)}` : 'Not yet checked';
 
     const card = document.createElement("div");
     card.className = `card-section shelly-device-card sha-card ${cardState}`;
     card.dataset.ip = ip;
+    card.dataset.relay = String(relay);
 
     card.innerHTML = `
       <div class="sha-card-header">
@@ -476,7 +362,7 @@ function renderAllShellyCards() {
             <button class="btn-icon shelly-rename-btn" type="button" title="Rename device">✏️</button>
           </div>
         </div>
-        <span class="sha-card-ip">${escapeHtml(ip)}</span>
+        <span class="sha-card-ip">${escapeHtml(ip)} · Relay ${relay}</span>
       </div>
 
       <div class="sha-metrics">
@@ -505,7 +391,8 @@ function renderAllShellyCards() {
           <button class="btn-outline btn-sm sha-btn-action" data-sha-action="toggle" type="button">Toggle</button>
           <button class="btn-outline btn-sm sha-btn-refresh-card"                    type="button">⟳ Refresh</button>
         </div>
-        <span class="sha-last-checked">${lastChecked}</span>
+        <span class="sha-last-checked">${escapeHtml(lastChecked)}</span>
+        <p class="sha-command-result" role="status">${escapeHtml(device.commandResult || "")}</p>
       </div>
     `;
 
@@ -526,7 +413,7 @@ function renderAllShellyCards() {
         if (e.key === "Enter") {
           e.preventDefault();
           e.stopPropagation();
-          commitShellyInlineRename(card, ip);
+          commitShellyInlineRename(card, ip, relay);
         } else if (e.key === "Escape") {
           e.preventDefault();
           e.stopPropagation();
@@ -534,12 +421,14 @@ function renderAllShellyCards() {
         }
       });
       renameInput.addEventListener("blur", () => {
-        if (card.classList.contains("is-renaming")) commitShellyInlineRename(card, ip);
+        if (card.classList.contains("is-renaming")) commitShellyInlineRename(card, ip, relay);
       });
     }
 
     // --- Action buttons (on / off / toggle) ---
     card.querySelectorAll(".sha-btn-action").forEach((btn) => {
+      btn.disabled = shellyCommands.has(key);
+      btn.setAttribute('aria-label', `${btn.textContent.trim()} ${name}, relay ${relay}`);
       btn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const action = btn.dataset.shaAction;
@@ -547,7 +436,7 @@ function renderAllShellyCards() {
         btn.disabled = true;
         btn.textContent = "…";
         try {
-          await sendShellyAction(action, ip);
+          await sendShellyAction(action, ip, relay);
         } finally {
           btn.disabled = false;
           btn.textContent = orig;
@@ -558,13 +447,14 @@ function renderAllShellyCards() {
     // --- Per-card Refresh ---
     const refreshBtn = card.querySelector(".sha-btn-refresh-card");
     if (refreshBtn) {
+      refreshBtn.setAttribute('aria-label', `Refresh ${name}, relay ${relay}`);
       refreshBtn.addEventListener("click", async (e) => {
         e.stopPropagation();
         const orig = refreshBtn.textContent;
         refreshBtn.disabled = true;
         refreshBtn.textContent = "…";
         try {
-          await fetchShellyStatusForIp(ip, true);
+          await fetchShellyStatusForIp(ip, true, relay);
         } finally {
           refreshBtn.disabled = false;
           refreshBtn.textContent = orig;
@@ -576,375 +466,97 @@ function renderAllShellyCards() {
   });
 
   // Update home health pill
-  if (anyOn || anyOff)       setHomeAutoHealth("ok",       "Shelly devices reachable.");
-  else if (anyUnknown)       setHomeAutoHealth("degraded", "Some devices unreachable.");
+  if (anyUnknown) setHomeAutoHealth("degraded", "Some relay states are unavailable, stale or not yet checked.");
+  else if (anyOn || anyOff) setHomeAutoHealth("ok", "Registered relay states were reported in the latest checks.");
 }
 
-async function fetchShellyStatusForIp(ip, silent = false) {
-  const targetIp = (ip || "").trim();
-  if (!targetIp) return;
-
-  try {
-    const res = await fetch("/shelly/status?ip=" + encodeURIComponent(targetIp));
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-
-    // Update single-device widgets (pill/summary/raw/quick card)
-    renderShellyStatus(targetIp, data);
-
-    // Save snapshot into the registry for cards
-    const nm = (shellyDevices?.[targetIp]?.name || "").trim();
-    const snap = buildShellySnapshotFromPayload(targetIp, data);
-    upsertShellyDevice(targetIp, { name: nm, status: snap });
-
-    renderAllShellyCards();
-    if (!silent) showToast("Shelly status updated.", "ok");
-  } catch (err) {
-    if (!silent) showToast("Shelly status failed: " + err.message, "error");
-  }
+async function fetchShellyStatusForIp(ip, silent = false, relay = null) {
+  const target = shellyTarget(ip, relay);
+  if (shellyReads.has(target.key)) return shellyReads.get(target.key);
+  const revision = shellyRevisions.get(target.key) || 0;
+  const request = (async () => {
+    try {
+      const data = await shellyRequest(`/shelly/status?ip=${encodeURIComponent(target.ip)}&relay=${target.relay}`);
+      const snapshot = buildShellySnapshotFromPayload(target.ip, data, target.relay);
+      if (snapshot.isOn === null) throw new Error(data.summary || 'The requested relay state is unavailable.');
+      if ((shellyRevisions.get(target.key) || 0) !== revision) return false;
+      upsertShellyDevice(target.ip, {relay:target.relay, status:snapshot, statusError:null});
+      renderShellyStatus(target.ip, data, target.relay);
+      if (!silent) showToast(`Relay ${target.relay} status updated.`, 'ok');
+      return true;
+    } catch (e) {
+      if ((shellyRevisions.get(target.key) || 0) !== revision) return false;
+      upsertShellyDevice(target.ip, {relay:target.relay, statusError:e.message});
+      if (!silent) showToast('Status unavailable: ' + e.message, 'error');
+      return false;
+    } finally { renderAllShellyCards(); }
+  })();
+  shellyReads.set(target.key, request);
+  try { return await request; } finally { if (shellyReads.get(target.key) === request) shellyReads.delete(target.key); }
 }
-
 async function fetchAllShellyStatuses(silent = false) {
-  suppressShellySelection = true;
-  const selectedIp = (getSelectedShellyIp() || "").trim();
-
-  try {
-    const devices = Object.values(shellyDevices || {}).filter(d => d && d.ip);
-
-    if (!devices.length) {
-      setHomeAutoHealth("degraded", "Home Automation not configured yet.");
-      if (!silent) showToast("Add a Shelly IP first.", "info");
-      return;
-    }
-
-    const results = await Promise.allSettled(
-      devices.map(d =>
-        fetch("/shelly/status?ip=" + encodeURIComponent(d.ip))
-          .then(r => {
-            if (!r.ok) throw new Error("HTTP " + r.status);
-            return r.json();
-          })
-          .then(payload => ({ ip: d.ip, payload }))
-      )
-    );
-
-    let okCount = 0;
-    let failCount = 0;
-
-    for (const res of results) {
-      if (res.status !== "fulfilled") {
-        failCount++;
-        continue;
-      }
-
-      const ip = (res.value?.ip || "").trim();
-      const payload = res.value?.payload;
-
-      if (!ip) {
-        failCount++;
-        continue;
-      }
-
-      // Normalize payload → status object (use your existing normalizer if present)
-      const statusObj =
-        (typeof normalizeShellyStatus === "function")
-          ? normalizeShellyStatus(payload)
-          : payload;
-
-      upsertShellyDevice(ip, { status: statusObj });
-      okCount++;
-
-      // ✅ Only update single-device widgets for selected device
-      if (selectedIp && ip === selectedIp) {
-        try {
-          if (typeof renderShellyStatus === "function") {
-            renderShellyStatus(ip, payload);
-          }
-        } catch {}
-
-        const ipInput = $("shelly-ip-input");
-        if (ipInput) ipInput.value = ip;
-
-        const nameInput = $("shelly-name-input");
-        if (nameInput) {
-          const nm = (shellyDevices?.[ip]?.name || "").trim();
-          nameInput.value = nm || "";
-        }
-      }
-    }
-
-    // ✅ render cards once after updates
+  if (shellyCycle) return shellyCycle;
+  shellyCycle = (async () => {
+    if (shellyHostLoad) await shellyHostLoad;
+    const devices = Object.values(shellyDevices).filter(d => !shellyCommands.has(d.key));
+    let reported = 0;
+    for (const d of devices) if (await fetchShellyStatusForIp(d.ip, true, d.relay)) reported++;
     renderAllShellyCards();
-    if (typeof syncShellyRegistry === "function") syncShellyRegistry();
-
-    // ✅ Update health once
-    if (okCount > 0 && failCount === 0) {
-      setHomeAutoHealth("ok", "All Shelly devices reachable.");
-    } else if (okCount > 0) {
-      setHomeAutoHealth("degraded", "Some Shelly devices unreachable.");
-    } else {
-      setHomeAutoHealth("down", "No Shelly devices reachable.");
-    }
-  } finally {
-    suppressShellySelection = false;
-  }
+    if (!silent) showToast(`${reported} of ${devices.length} relay states reported.`, reported === devices.length ? 'ok' : 'warn');
+  })();
+  try { return await shellyCycle; } finally { shellyCycle = null; }
 }
-
-
 async function fetchShellyStatus(silent = false) {
-  // For health: only treat Shelly as "configured" if user actually set an IP.
-  const configuredIp = readShellyIpConfigured();
-
-  if (!configuredIp) {
-    // Don’t scream DOWN if the user never configured Home Automation.
-    setHomeAutoHealth("degraded", "Home Automation not configured yet.");
-    if (!silent) showToast("Enter a Shelly IP first.", "info");
-    return;
-  }
-
-  // For actual fetch calls, keep your existing behavior (it can still default if you want)
-  const ip = configuredIp;
-
-
-  const pill = $("shelly-status-pill");
-  const rawBox = $("shelly-status-raw");
-  const summaryEl = $("shelly-status-summary");
-
-  if (pill && !silent) {
-    pill.textContent = "Checking…";
-    pill.classList.remove("pill-ok", "pill-error");
-    pill.classList.add("pill-muted");
-  }
-  if (rawBox && !silent) {
-    rawBox.textContent = "Loading status from http://" + ip + "/status …";
-  }
-
+  try { const t = readShellyTarget(); return await fetchShellyStatusForIp(t.ip, silent, t.relay); }
+  catch (e) { if (!silent) showToast(e.message, 'error'); return false; }
+}
+function renderShellyStatus(ip, payload, relay = 0) {
+  const snapshot = buildShellySnapshotFromPayload(ip, payload, relay);
+  lastShellyStatus = snapshot;
+  const pill = $('shelly-status-pill');
+  if (pill) pill.textContent = snapshot.isOn === null ? 'State unavailable' : `Relay ${relay} ${snapshot.isOn ? 'ON' : 'OFF'}`;
+  if ($('shelly-status-summary')) $('shelly-status-summary').textContent = `${ip} · Relay ${relay} · ${formatShellyStatusSummary(snapshot)}`;
+  if ($('shelly-status-raw')) $('shelly-status-raw').textContent = JSON.stringify(payload, null, 2);
+}
+async function sendShellyAction(action, ipOverride = null, relayOverride = null) {
+  let target;
+  try { target = ipOverride ? shellyTarget(ipOverride, relayOverride) : readShellyTarget(); }
+  catch (e) { showToast(e.message, 'error'); return {ok:false, summary:e.message}; }
+  if (shellyCommands.has(target.key)) return {ok:false, summary:'Another command for this relay is running.'};
+  if (!['on','off','toggle'].includes(action)) return {ok:false, summary:'Unsupported action.'};
+  shellyCommands.add(target.key);
+  shellyRevisions.set(target.key, (shellyRevisions.get(target.key) || 0) + 1);
+  upsertShellyDevice(target.ip, {relay:target.relay, commandResult:'Sending command…', statusError:'Awaiting a fresh reading after the command.'});
+  renderAllShellyCards();
+  let result;
   try {
-    const res = await fetch("/shelly/status?ip=" + encodeURIComponent(ip));
-    if (!res.ok) {
-      throw new Error("HTTP " + res.status);
-    }
-    const data = await res.json();
-    renderShellyStatus(ip, data);
-
-upsertShellyDevice(ip, { name: (readShellyName() || "").trim(), status: lastShellyStatus });
-syncShellyRegistry();
-renderAllShellyCards();
-
-    if (!silent) {
-      showToast("Shelly status updated.", "ok");
-    }
-
-  } catch (err) {
-    console.error("[Shelly] status failed:", err);
-    if (pill) {
-      pill.textContent = "Offline / unreachable";
-      pill.classList.remove("pill-ok", "pill-muted");
-      pill.classList.add("pill-error");
-    }
-    if (rawBox && !silent) {
-      rawBox.textContent = "Status request failed: " + err.message;
-    }
-    if (summaryEl && !silent) {
-      summaryEl.textContent = "";
-    }
-    if (!silent) {
-      showToast("Shelly status failed: " + err.message, "error");
-    }
-  }
-}
-
-function renderShellyStatus(ip, payload) {
-  const pill = $("shelly-status-pill");
-  const rawBox = $("shelly-status-raw");
-  const summaryEl = $("shelly-status-summary");
-  const devEl = $("shelly-device-meta");
-  const quickCard = $("shelly-quick-card");
-  const powerDot = $("shelly-power-indicator");
-
-  // --- normalize inputs from backend ---
-  const raw = payload && payload.raw ? payload.raw : null;
-  const device = payload && payload.device ? payload.device : null;
-
-  // Pull Gen2 switch metrics from raw JSON
-  const sw = raw && raw["switch:0"] ? raw["switch:0"] : null;
-
-  const isOn =
-    sw && typeof sw.output === "boolean" ? sw.output : null;
-
-  const power =
-    sw && typeof sw.apower === "number" ? sw.apower : null;
-
-  const voltage =
-    sw && typeof sw.voltage === "number" ? sw.voltage : null;
-
-  const current =
-    sw && typeof sw.current === "number" ? sw.current : null;
-
-  const temperature =
-    raw && raw.temperature && typeof raw.temperature.tC === "number"
-      ? raw.temperature.tC
-      : null;
-
-  // --- Device meta line (model · fw) ---
-  if (devEl) {
-    if (device && device.ok) {
-      const model = device.model || "Shelly";
-      const ver = device.ver || device.fw_id || "fw?";
-      devEl.textContent = `· ${model} · ${ver}`;
-    } else if (device && device.ok === false) {
-      devEl.textContent = `· device info unavailable`;
+    result = await shellyRequest('/shelly/relay', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ip:target.ip, relay:target.relay, action,
+      request_id:Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,'0')).join('')})});
+    if (result.ok !== true) {
+      result = {...result, ok:false, summary:result.summary || 'The device did not confirm the command.'};
     } else {
-      devEl.textContent = "";
+      result.summary = `Relay ${target.relay}: command acknowledged. Checking current state…`;
     }
+  } catch (e) {
+    result = {ok:false, outcome:'unknown', summary:'Command outcome unconfirmed. Check status before trying again. ' + e.message};
   }
-
-  // --- Status pill (ONLINE, not "offline") ---
-  if (pill) {
-    if (isOn === true) {
-      pill.textContent = "Relay ON";
-      pill.classList.remove("pill-muted", "pill-error");
-      pill.classList.add("pill-ok");
-    } else if (isOn === false) {
-      pill.textContent = "Relay OFF";
-      pill.classList.remove("pill-muted", "pill-error");
-      pill.classList.add("pill-ok");
-    } else {
-      pill.textContent = "Online";
-      pill.classList.remove("pill-error");
-      pill.classList.add("pill-muted");
+  upsertShellyDevice(target.ip, {relay:target.relay, commandResult:result.summary});
+  showToast(result.summary, result.ok ? 'ok' : 'error');
+  try {
+    if (result.ok) {
+      if (shellyReads.has(target.key)) await shellyReads.get(target.key);
+      const verified = await fetchShellyStatusForIp(target.ip, true, target.relay);
+      const observed = shellyDevices[target.key]?.status;
+      const expected = action === 'on' ? true : action === 'off' ? false : null;
+      const message = verified ? `Command acknowledged. Relay ${target.relay} now reports ${observed.isOn ? 'ON' : 'OFF'}.` +
+        (expected !== null && observed.isOn !== expected ? ' This differs from the requested state.' : '') :
+        'Command acknowledged; current relay state could not be verified. Check status before trying again.';
+      upsertShellyDevice(target.ip, {relay:target.relay, commandResult:message});
+      result = {...result, state_verified:verified, on:verified ? observed.isOn : null, summary:message};
     }
-  }
-
-  // --- Glow / ON state classes ---
-  const on = isOn === true;
-
-  if (quickCard) {
-    quickCard.classList.toggle("shelly-on", on);
-    quickCard.classList.toggle("shelly-off", !on);
-  }
-  if (powerDot) {
-    powerDot.classList.toggle("shelly-on", on);
-    powerDot.classList.toggle("shelly-off", !on);
-  }
-
-  // --- Summary line (this drives the text you see under the buttons) ---
-  let summaryText = null;
-  if (summaryEl) {
-    const bits = [];
-    bits.push("IP " + ip);
-
-    if (typeof isOn === "boolean") bits.push(isOn ? "ON" : "OFF");
-    if (power != null) bits.push(power.toFixed(1) + " W");
-    if (voltage != null) bits.push(voltage.toFixed(1) + " V");
-    if (current != null) bits.push(current.toFixed(3) + " A");
-    if (temperature != null) bits.push(temperature.toFixed(1) + " °C");
-
-    summaryText = bits.join(" · ");
-    summaryEl.textContent = summaryText;
-
-    // pulse refresh animation (if you have the CSS class)
-    summaryEl.classList.remove("shelly-metric-pulse");
-    void summaryEl.offsetWidth;
-    summaryEl.classList.add("shelly-metric-pulse");
-  }
-
-  // --- Store last-known status for cards + other features ---
-  lastShellyStatus = {
-    ip,
-    isOn,
-    power,
-    voltage,
-    current,
-    temperature,
-    summaryText,
-    at: new Date().toISOString(),
-    raw,
-  };
-
-  // --- Raw JSON viewer ---
-  if (rawBox) {
-    try {
-      rawBox.textContent = JSON.stringify(payload, null, 2);
-    } catch {
-      rawBox.textContent = String(payload);
-    }
-  }
-    // ✅ Save normalized snapshot globally so multi-device cards can reuse it
-  lastShellyStatus = {
-    ip: (ip || "").trim(),
-    isOn: typeof isOn === "boolean" ? isOn : null,
-    power: typeof power === "number" ? power : null,
-    voltage: typeof voltage === "number" ? voltage : null,
-    current: typeof current === "number" ? current : null,
-    temperature: typeof temperature === "number" ? temperature : null,
-    at: new Date().toISOString(),
-  };
-
-}
-
-
-// --- Home Automation health: SUCCESS path ---
-// If we rendered Shelly status, Home automation is healthy.
-setHomeAutoHealth(
-  "ok",
-  "Shelly reachable and responding. Home Automation layer is healthy."
-);
-
-
-async function sendShellyAction(action, ipOverride = null) {
-  const ip = (ipOverride || getSelectedShellyIp() || readShellyIp() || "").trim();
-  if (!ip) {
-    showToast("Enter a Shelly IP first.", "info");
-    return;
-  }
-
-  // If an override was used, keep the input in sync (nice UX)
-  const ipInput = $("shelly-ip-input");
-  if (ipInput && ipOverride) ipInput.value = ipOverride;
-
-  
-  // ensure device exists in registry
-const typedName = ($("shelly-name-input")?.value || "").trim();
-const existingName = (shellyDevices?.[ip]?.name || "").trim();
-upsertShellyDevice(ip, { name: existingName || typedName || "" });
-syncShellyRegistry();
-
-
-  const btnId = action === "on" ? "shelly-on-btn" : "shelly-off-btn";
-  const btn = $(btnId);
-
-  await withButtonBusy(btn, "Working…", async () => {
-    try {
-      const res = await fetch("/shelly/relay", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ip, action }),
-      });
-      if (!res.ok) {
-        let detail = "";
-        try {
-          const j = await res.json();
-          detail = j.detail || "";
-        } catch {
-          detail = await res.text();
-        }
-        throw new Error(detail || "HTTP " + res.status);
-      }
-
-      const data = await res.json();
-      // Update pill immediately from this response
-      renderShellyStatus(ip, data);
-      showToast("Shelly action '" + action + "' sent.", "ok");
-
-      // Then silently refresh full metrics (W/A/V) + keep auto refresh going
-      await fetchAllShellyStatuses(true);
-
-    } catch (err) {
-      console.error("[Shelly] action failed:", err);
-      showToast("Shelly action failed: " + err.message, "error");
-    }
-  });
+  } finally { shellyCommands.delete(target.key); renderAllShellyCards(); }
+  return result;
 }
 
 async function discoverShellyDevices() {
@@ -984,12 +596,12 @@ async function discoverShellyDevices() {
     found.forEach((device) => {
       const ip = String(device.ip || "").trim();
       if (!ip) return;
-      const existingName = (shellyDevices?.[ip]?.name || "").trim();
+      const existingName = (shellyDevices?.[shellyKey(ip, 0)]?.name || "").trim();
       const discoveredName = String(device.name || device.model || "Shelly").trim();
       upsertShellyDevice(ip, {
-        ip,
+        ip, relay:0,
         name: existingName || discoveredName,
-        status: shellyDevices?.[ip]?.status || null,
+        status: shellyDevices?.[shellyKey(ip, 0)]?.status || null,
         discovered: {
           model: device.model || null,
           app: device.app || null,
@@ -1001,10 +613,10 @@ async function discoverShellyDevices() {
     });
 
     saveShellyDevicesToStorage();
-    syncShellyRegistry();
+    await syncShellyRegistry(found.map(d => ({ip:d.ip, relay:0, name:shellyDevices[shellyKey(d.ip, 0)]?.name || d.name || "Shelly"})));
 
     const firstIp = String(found[0]?.ip || "").trim();
-    if (firstIp) setSelectedShellyIp(firstIp);
+    if (firstIp) setSelectedShellyIp(firstIp, 0);
 
     renderAllShellyCards();
     await fetchAllShellyStatuses(true);
@@ -1024,166 +636,41 @@ async function discoverShellyDevices() {
 
 
 function setupHomeAutomationPanel() {
-    // ✅ On refresh: load saved Shelly devices + selection, render cards immediately
-  loadShellyDevicesFromStorage();
-
-  // Restore selected device (or pick first known IP)
-  const savedSelected = getSelectedShellyIp();
-  const firstIp = Object.keys(shellyDevices || {})[0] || null;
-  if (savedSelected) {
-    setSelectedShellyIp(savedSelected);
-  } else if (firstIp) {
-    setSelectedShellyIp(firstIp);
-  }
-
-  renderAllShellyCards();
-
-  const ipInput = $("shelly-ip-input");
-  if (ipInput) {
-    const saved = (() => {
-      try {
-        return localStorage.getItem(shellyIpStorageKey);
-      } catch {
-        return null;
-      }
-    })();
-    if (saved) {
-      ipInput.value = saved;
-    } else {
-      ipInput.placeholder = "Enter Shelly IP (per device)";
-    }
-  }
-
-  // NEW: Shelly friendly name
-  const nameInput = $("shelly-name-input");
-  if (nameInput) {
-// ✅ On load: prefer selected device name (multi-device), fallback to legacy single-name
-const selectedIp = (typeof getSelectedShellyIp === "function" ? getSelectedShellyIp() : null) || "";
-const selectedName = (selectedIp && shellyDevices?.[selectedIp]?.name) ? String(shellyDevices[selectedIp].name).trim() : "";
-const fallbackName = (readShellyName() || "").trim();
-const initialName = (selectedName || fallbackName || "").trim();
-
-if (initialName) nameInput.value = initialName;
-applyShellyNameToUI(initialName);
-
-
-nameInput.addEventListener("change", () => {
-  const value = (nameInput.value || "").trim();
-
-  // ✅ Multi-device: save name to the currently targeted IP (selected preferred, else typed)
-  const selectedIp = (typeof getSelectedShellyIp === "function" ? getSelectedShellyIp() : null) || "";
-  const typedIp = ($("shelly-ip-input")?.value || "").trim();
-  const ip = (selectedIp || typedIp || "").trim();
-
-  if (ip) {
-    upsertShellyDevice(ip, { name: value });
-    saveShellyDevicesToStorage();
-    syncShellyRegistry();
-    renderAllShellyCards();
-    showToast(`Saved name for ${ip}`, "ok");
-  } else {
-    // fallback (no IP yet) — keep old behavior so you don’t lose UX
-    persistShellyName(value);
-    syncShellyRegistry();
-  }
-
-  applyShellyNameToUI(value);
-});
-
-
-  } else {
-    // still ensure label reflects whatever is in storage
-    applyShellyNameToUI(readShellyName());
-  }
-
- const statusBtn = $("shelly-status-btn");
-if (statusBtn) {
-  statusBtn.addEventListener("click", () => {
-    if (typeof fetchAllShellyStatuses === "function") {
-      fetchAllShellyStatuses(true);
-    } else {
-      fetchShellyStatus(true);
-    }
-    startShellyAutoRefresh();
+  if (shellyPanelBound) return;
+  shellyPanelBound = true;
+  loadShellyDevicesFromStorage(); renderAllShellyCards();
+  // Existing browser-only records remain readable, but are never automatically
+  // written over the host registry. Importing them is an explicit action.
+  let cached = Object.values(shellyDevices).map(d => ({ip:d.ip, relay:d.relay, name:d.name}));
+  try {
+    const backup = localStorage.getItem('tli_shelly_browser_import_v1');
+    if (backup) cached = JSON.parse(backup);
+    else if (cached.length) localStorage.setItem('tli_shelly_browser_import_v1', JSON.stringify(cached));
+  } catch {}
+  const importBtn = $('shelly-import-cache-btn');
+  const load = async () => {
+    try {
+      await loadShellyHostRegistry();
+      if (importBtn) importBtn.hidden = !cached.some(d => !shellyDevices[shellyKey(d.ip,d.relay)]);
+    } catch (e) { showToast('Host registry unavailable; showing previously loaded devices. ' + e.message, 'error'); }
+  };
+  shellyHostLoad = load();
+  const bind = (id, fn) => $(id)?.addEventListener('click', async () => {
+    const button = $(id); if (button.disabled) return; button.disabled = true;
+    try { await shellyHostLoad; await fn(); } catch (e) { showToast(e.message, 'error'); } finally { button.disabled = false; }
+  });
+  bind('shelly-refresh-all-btn', async () => { await load(); await fetchAllShellyStatuses(false); });
+  bind('shelly-status-btn', async () => { await fetchShellyStatus(false); });
+  bind('shelly-discover-btn', discoverShellyDevices);
+  bind('shelly-on-btn', () => sendShellyAction('on'));
+  bind('shelly-off-btn', () => sendShellyAction('off'));
+  bind('shelly-import-cache-btn', async () => { await syncShellyRegistry(cached); await load(); showToast('Browser devices merged into the host registry.', 'ok'); });
+  bind('shelly-add-device-btn', async () => {
+    const target = readShellyTarget(), name = $('shelly-name-input')?.value.trim() || '';
+    await syncShellyRegistry([{...target,name}]);
+    upsertShellyDevice(target.ip, {relay:target.relay, name});
+    setSelectedShellyIp(target.ip, target.relay); renderAllShellyCards();
+    showToast(`Saved ${name || target.ip} · relay ${target.relay}.`, 'ok');
+    await fetchShellyStatusForIp(target.ip, true, target.relay);
   });
 }
-
-  const discoverBtn = $("shelly-discover-btn");
-  if (discoverBtn) {
-    discoverBtn.addEventListener("click", () => {
-      discoverShellyDevices();
-    });
-  }
-
-  const refreshAllBtn = $("shelly-refresh-all-btn");
-  if (refreshAllBtn) {
-    refreshAllBtn.addEventListener("click", async () => {
-      const orig = refreshAllBtn.textContent;
-      refreshAllBtn.disabled = true;
-      refreshAllBtn.textContent = "…";
-      try {
-        await fetchAllShellyStatuses(false);
-      } finally {
-        refreshAllBtn.disabled = false;
-        refreshAllBtn.textContent = orig;
-      }
-    });
-  }
-
-  const onBtn = $("shelly-on-btn");
-  if (onBtn) {
-    onBtn.addEventListener("click", () => {
-      sendShellyAction("on");
-      startShellyAutoRefresh();
-    });
-  }
-
-  const offBtn = $("shelly-off-btn");
-  if (offBtn) {
-    offBtn.addEventListener("click", () => {
-      sendShellyAction("off");
-      startShellyAutoRefresh();
-    });
-  }
-  // ✅ Add Device button (inject if not present in HTML)
-  let addBtn = $("shelly-add-device-btn");
-  const nameInputEl = $("shelly-name-input");
-  const ipInputEl = $("shelly-ip-input");
-
-  if (!addBtn && nameInputEl && nameInputEl.parentElement) {
-    addBtn = document.createElement("button");
-    addBtn.id = "shelly-add-device-btn";
-    addBtn.type = "button";
-    addBtn.className = "btn"; // uses your existing button styling
-    addBtn.textContent = "Add Device";
-
-    // Insert right after the name input
-    nameInputEl.parentElement.appendChild(addBtn);
-  }
-
-  if (addBtn) {
-    addBtn.addEventListener("click", async () => {
-      const ip = (ipInputEl?.value || "").trim();
-      const name = (nameInputEl?.value || "").trim();
-
-      if (!ip) {
-        showToast("Enter the Shelly IP first.", "info");
-        return;
-      }
-
-      upsertShellyDevice(ip, { ip, name, status: shellyDevices?.[ip]?.status || null });
-      saveShellyDevicesToStorage();
-      syncShellyRegistry();
-
-      setSelectedShellyIp(ip);
-      renderAllShellyCards();
-
-      // Immediately fetch status so the card isn't blank
-      await fetchShellyStatusForIp(ip, true);
-
-      showToast(`Added ${name || "Shelly"} (${ip})`, "ok");
-    });
-  }
-
-}
-

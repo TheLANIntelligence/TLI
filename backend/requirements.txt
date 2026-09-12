@@ -1,6 +1,8 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 requests>=2.31.0
+# Explicit related-note requests use bounded HTTPX transports at runtime.
+httpx>=0.28.1,<0.29
 pydantic>=2.0.0
 python-multipart>=0.0.9
 cryptography>=42.0.0
@@ -8,3 +10,9 @@ psutil>=5.9.0
 send2trash>=1.8.3
 qrcode>=7.4.2
 websockets>=12.0
+
+# Validate and strip image metadata before model requests.
+Pillow>=12.1.1
+
+# Bounded PDF text extraction runs only in an isolated, resource-limited child.
+pypdf>=6.18.0,<7

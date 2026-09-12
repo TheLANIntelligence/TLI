@@ -1,4 +1,4 @@
-"""
+r"""
 game_configs/cyberpunk2077.py — Cyberpunk 2077 config reader.
 
 Config file: UserSettings.json

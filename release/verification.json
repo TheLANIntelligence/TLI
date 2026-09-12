@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "release_tag": "anniversary-preview-1",
+  "release_title": "TLI Anniversary Preview 1",
+  "status": "software_verified_preview; not physically validated",
+  "accepted_application_source": {
+    "fingerprint": "4e36dcadc8b45e3ca0a98da73468bc91365493d30c8b641a2c6759c91150e190",
+    "files": 796,
+    "manifest": "verified-source-manifest.json"
+  },
+  "publication_scope": {
+    "application_files_unchanged": 795,
+    "documentation_difference": "README.md",
+    "ancillary_source_files_unchanged": 19,
+    "docs_local_evidence_links_labeled": 138
+  },
+  "software_stages": 27,
+  "counts": {
+    "backend tests": 2769,
+    "desktop tests": 1133,
+    "Companion tests": 191,
+    "software stages": 27,
+    "extracted_backend_tests": 2757,
+    "tooling_tests": 178
+  },
+  "desktop": {
+    "asset": "TLI-Anniversary-Preview-1-source.zip",
+    "sha256": "ccc89756dc9a2def512607a8e8e39504cb66c50c86a5e6266b5b96a51caaa80c",
+    "bytes": 20227395,
+    "type": "Verified source ZIP; not an in-place updater"
+  },
+  "android": {
+    "asset": "TLI-Companion-Beta-0.1.0-8.apk",
+    "sha256": "bacc0c4063f48527f54ab0196c9c58cd642e482548b310eaaf177390e377b5ff",
+    "bytes": 122106515,
+    "package": "com.thelegatointelligence.companion.beta",
+    "version_name": "0.1.0",
+    "version_code": 8,
+    "signer_sha256": [
+      "bb85fe308fb491a6e0335385edb4c56153b3296ab7cbe6cd3a672154d6ad6b60"
+    ],
+    "update": "Install over existing Beta; do not uninstall or clear data",
+    "physical_acceptance": "not_run"
+  },
+  "ai_quality": {
+    "experimental_preparation": "rejected",
+    "delivered_preparation": "baseline",
+    "strict_quality": "failed",
+    "validated_model_winner": false,
+    "active_model_changed": false
+  },
+  "physical_acceptance": {
+    "android_update_pairing_keyboard": "not_run",
+    "android_interruption_and_continuation": "not_run",
+    "two_computers": "not_run",
+    "native_installers": "not_run",
+    "real_data_restore": "not_run",
+    "optional_devices_and_services": "not_run",
+    "signed_iphone": "not_run"
+  },
+  "remote_access": "deferred",
+  "originals": [
+    {
+      "tag": "v1.3.5-beta",
+      "title": "TLI Beta v1.3.5-beta",
+      "url": "https://github.com/TheLANIntelligence/TLI/releases/tag/v1.3.5-beta",
+      "assets": [
+        {
+          "name": "TLI_dist_1.3.5-beta.zip",
+          "sha256": "f644d5639fd6a0c5e907f6e2daaba97720e73fc38f0f47785906467b2e3a9c6b",
+          "bytes": 36759231
+        }
+      ]
+    },
+    {
+      "tag": "v1.0-beta",
+      "title": "TLI Beta v1.2.0",
+      "url": "https://github.com/TheLANIntelligence/TLI/releases/tag/v1.0-beta",
+      "assets": [
+        {
+          "name": "TLI_Beta_V1.2.0.zip",
+          "sha256": "49688938ef8e28292db139dd4cd8939a2243c992cbd45b5bc83640c4aebd0f4b",
+          "bytes": 36623171
+        }
+      ]
+    }
+  ],
+  "retained_evidence_hashes": {
+    "software_report": "439a91c2b793f8e6fead0a0c1a2af8e1daaa7aca0681b91afee9e4e54aa55970",
+    "final_delivery_manifest": "c10689a975a436fbc7d299add1ee8c44be82b9a65236982e7727375d4f751851",
+    "independent_delivery_audit": "214c250e7c595a9a6ae3961bdc1af87ed4b993298bbdc566e7c83ea6a3b9c469"
+  }
+}

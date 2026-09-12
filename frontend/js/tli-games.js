@@ -12,6 +12,10 @@ window.TLIGames = (function () {
     activePreset: null,
     streaming:   false,
     autoTimer:   null,
+    controller: null,
+    epoch: 0,
+    configEpoch: 0,
+    locked: false,
   };
 
   // ── DOM helpers ────────────────────────────────────
@@ -161,14 +165,12 @@ window.TLIGames = (function () {
     document.querySelectorAll(".go-preset").forEach(b => {
       b.classList.toggle("active", b.dataset.preset === preset);
     });
-    // Clear question field when selecting a preset
-    const q = _el("go-question");
-    if (q) q.value = "";
+    // Choosing a goal preserves the written question and never starts AI.
   }
 
   // ── Main ask ───────────────────────────────────────
   async function _ask() {
-    if (state.streaming) return;
+    if (state.streaming || state.locked) return;
 
     const gameName = (_el("go-game-input")?.value || "").trim() || "an unspecified game";
     const question = (_el("go-question")?.value || "").trim();
@@ -179,6 +181,15 @@ window.TLIGames = (function () {
       return;
     }
 
+    const previous = state.lastText;
+    const previousTitle = _el('go-output-title')?.textContent || 'Previous advice';
+    const epoch = ++state.epoch;
+    state.controller = new AbortController();
+    const previousBox = _el('go-previous-output'), previousWrap = _el('go-previous-advice');
+    if (previousBox && previousWrap && previous) {
+      previousBox.textContent = previousTitle + '\n\n' + previous;
+      previousWrap.hidden = false;
+    }
     // Header
     const title = _el("go-output-title");
     if (title) {
@@ -189,20 +200,21 @@ window.TLIGames = (function () {
     const src = _el("go-output-source");
     if (src) src.textContent = "";
 
-    _renderOutput(null, false); // clear
-    _renderOutput("", false);   // show empty wrap
-
     const wrap = _el("go-output-wrap");
     if (wrap) wrap.style.display = "";
 
     const box = _el("go-output");
-    if (box) box.innerHTML = '<div class="go-streaming-cursor">Thinking…</div>';
+    if (!previous && box) box.textContent = '';
+    const status = _el('go-request-status');
+    if (status) status.textContent = 'Preparing advice…' + (previous ? ' Previous advice remains below until text arrives.' : '');
+    const stop = _el('go-stop-btn'); if (stop) { stop.hidden = false; stop.disabled = false; }
 
     const askBtn = _el("go-ask-btn");
     if (askBtn) { askBtn.disabled = true; askBtn.textContent = "Thinking…"; }
+    const clearBtn = _el('go-clear-btn'); if (clearBtn) clearBtn.disabled = true;
 
     state.streaming = true;
-    state.lastText  = "";
+    let received = '', completed = false, incomplete = false, source = 'ai-advice';
 
     try {
       const resp = await fetch("/games/ask", {
@@ -213,11 +225,14 @@ window.TLIGames = (function () {
           question,
           preset,
           system:           state.lastSummary || {},
-          current_settings: state.lastConfig?.settings || [],
+          current_settings: state.lastConfig?.requestedName === gameName ? state.lastConfig.settings || [] : [],
+          config_game_name: state.lastConfig?.requestedName === gameName ? gameName : null,
         }),
         cache: "no-store",
+        signal: state.controller.signal,
       });
 
+      if (resp.status === 401) window.dispatchEvent(new CustomEvent("tli-session-locked"));
       if (!resp.ok) throw new Error("HTTP " + resp.status);
       if (!resp.body) throw new Error("No response body");
 
@@ -225,10 +240,9 @@ window.TLIGames = (function () {
       const decoder = new TextDecoder();
       let buf = "";
 
-      if (box) box.innerHTML = ""; // clear "Thinking…"
-
       while (true) {
         const { value, done } = await reader.read();
+        if (epoch !== state.epoch) { await reader.cancel(); return; }
         if (done) break;
         buf += decoder.decode(value, { stream: true });
         const lines = buf.split("\n");
@@ -236,21 +250,35 @@ window.TLIGames = (function () {
         for (const line of lines) {
           if (!line.startsWith("data: ")) continue;
           const payload = line.slice(6);
-          if (payload === "[DONE]") break;
+          if (payload.trim() === "[DONE]") { completed = true; break; }
           try {
-            const { t } = JSON.parse(payload);
-            if (t) _renderOutput(t, true);
+            const { t, meta, error } = JSON.parse(payload);
+            if (meta?.source) source = meta.source;
+            if (error || meta?.incomplete) incomplete = true;
+            if (typeof t === 'string' && t) {
+              received += t; _renderOutput(received, false);
+              if (status) status.textContent = 'Receiving advice…';
+            }
           } catch {}
         }
+        if (completed) { await reader.cancel(); break; }
       }
-
-      if (src) src.textContent = "AI";
+      if (!completed || incomplete || !received.trim()) throw new Error('The response ended before complete advice was received.');
+      if (src) src.textContent = source === "static-guidance" ? "General guidance · AI reply unavailable" : "AI advice · not a measured performance result";
+      if (status) status.textContent = source === 'static-guidance' ? 'General guidance shown because an AI reply was unavailable. It is not tailored performance analysis; no settings changed.' : 'Advice received. No game or computer settings were changed.';
 
     } catch (err) {
-      console.warn("Game Optimizer stream error:", err);
-      if (box) box.innerHTML = '<div class="go-rec-note">AI unavailable — try again or check that an AI model is downloaded.</div>';
+      if (epoch !== state.epoch) return;
+      const stopped = state.controller?.signal.aborted;
+      if (!received) { state.lastText = previous; if (previous && title) title.textContent = previousTitle; }
+      if (status) status.textContent = (stopped ? 'Stopped receiving advice. This does not confirm that the server stopped its work.' : 'Advice could not complete. Check the AI provider and connection, then retry.') + (received ? ' The partial reply remains below and may be incomplete.' : previous ? ' Your previous advice is unchanged.' : ' No advice was received.');
+      if (src) src.textContent = received ? 'Incomplete reply' : previous ? 'Previous advice' : 'AI unavailable';
     } finally {
+      if (epoch !== state.epoch) return;
       state.streaming = false;
+      state.controller = null;
+      if (stop) stop.hidden = true;
+      if (clearBtn) clearBtn.disabled = false;
       if (askBtn) { askBtn.disabled = false; askBtn.textContent = "Get Advice →"; }
     }
   }
@@ -261,26 +289,23 @@ window.TLIGames = (function () {
 
   // ── Config read & render ───────────────────────────
   async function _loadGameConfig(gameName) {
-    if (!gameName) return;
-    const block = _el("go-settings-block");
-    const grid  = _el("go-settings-grid");
-    const badge = _el("go-config-badge");
-    if (block) block.style.display = "none";
-    if (grid)  grid.innerHTML = "";
-    if (badge) { badge.className = "go-config-badge"; badge.textContent = ""; }
-
+    if (!gameName || state.locked) return;
+    const ticket = ++state.configEpoch, epoch = state.epoch;
+    const badge = _el('go-config-badge'), status = _el('go-detect-status');
+    if (status) status.textContent = 'Reading settings for ' + gameName + '…';
     try {
-      const result = await _fetchJson("/games/config_read", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ game_name: gameName }),
-      });
-      state.lastConfig = result;
-    } catch {
-      state.lastConfig = null;
+      const result = await _fetchJson('/games/config_read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ game_name: gameName }) });
+      if (state.locked || ticket !== state.configEpoch || epoch !== state.epoch || _el('go-game-input')?.value.trim() !== gameName) return;
+      if (result.game_name !== gameName) throw new Error('The settings response belongs to a different game.');
+      if (result.error) throw new Error(result.error);
+      state.lastConfig = { ...result, requestedName: gameName };
+      _renderConfigStatus(state.lastConfig); _renderConfigSettings(state.lastConfig);
+      if (status) status.textContent = result.supported ? 'Settings read for ' + gameName + '. Nothing changed.' : 'No settings reader supports this exact game name.';
+    } catch (e) {
+      if (state.locked || ticket !== state.configEpoch || epoch !== state.epoch) return;
+      if (status) status.textContent = 'Settings could not be read: ' + e.message + (state.lastConfig ? ' Previous settings remain labeled for ' + state.lastConfig.requestedName + '.' : '');
+      if (badge && state.lastConfig) badge.textContent = 'Previous read · ' + state.lastConfig.requestedName;
     }
-    _renderConfigStatus(state.lastConfig);
-    _renderConfigSettings(state.lastConfig);
   }
 
   function _renderConfigStatus(result) {
@@ -305,7 +330,7 @@ window.TLIGames = (function () {
     const count = result.settings?.length || 0;
     if (count > 0) {
       badge.classList.add("go-config-badge--supported");
-      badge.textContent = `${count} settings read`;
+      badge.textContent = `${count} settings read · ${result.requestedName || result.game_name}`;
     } else {
       badge.classList.add("go-config-badge--partial");
       badge.textContent = "Partial read";
@@ -341,32 +366,37 @@ window.TLIGames = (function () {
   // ── Fetch data ─────────────────────────────────────
   async function _fetchJson(url, opts) {
     const r = await fetch(url, Object.assign({ cache: "no-store" }, opts || {}));
+    if (r.status === 401) window.dispatchEvent(new CustomEvent("tli-session-locked"));
     if (!r.ok) throw new Error("HTTP " + r.status);
     return r.json();
   }
 
   async function _loadHardware() {
+    const epoch = state.epoch;
     try {
       const s = await _fetchJson("/system/summary");
+      if (state.locked || epoch !== state.epoch) return;
       state.lastSummary = s;
       _renderHWPills(s);
     } catch {
-      _renderHWPills(null);
+      if (!state.locked && epoch === state.epoch) { _renderHWPills(state.lastSummary); const status = _el("go-detect-status"); if (status) status.textContent = "Hardware refresh failed. Previous hardware, if shown, is historical."; }
     }
   }
 
   async function _detectGame() {
+    const epoch = state.epoch;
     const btn = _el("go-detect-btn");
     if (btn) btn.textContent = "…";
     try {
       const det = await _fetchJson("/games/detect_best");
+      if (state.locked || epoch !== state.epoch) return;
       state.lastDetect = det;
       _renderDetectStatus(det);
       const detectedName = det?.game?.name || det?.game?.exe_name || null;
-      if (detectedName) await _loadGameConfig(detectedName);
+      // Reading settings is a separate explicit operation.
     } catch {
       const s = _el("go-detect-status");
-      if (s) s.textContent = "Detection failed.";
+      if (s && !state.locked && epoch === state.epoch) s.textContent = "Detection failed. Your game name is unchanged.";
     } finally {
       if (btn) btn.textContent = "Detect";
     }
@@ -383,14 +413,33 @@ window.TLIGames = (function () {
 
   // ── Setup ──────────────────────────────────────────
   function setup() {
+    if (setup._done) return;
+    setup._done = true;
+    const requestStatus = document.createElement('p'); requestStatus.id = 'go-request-status'; requestStatus.setAttribute('role', 'status');
+    _el('go-output')?.before(requestStatus);
+    const stop = document.createElement('button'); stop.id = 'go-stop-btn'; stop.type = 'button'; stop.className = 'btn-outline'; stop.textContent = 'Stop advice'; stop.hidden = true;
+    _el('go-ask-btn')?.after(stop);
+    stop.addEventListener('click', () => { if (state.streaming) { stop.disabled = true; requestStatus.textContent = 'Stopping…'; state.controller?.abort(); } });
+    const previous = document.createElement('details'); previous.id = 'go-previous-advice'; previous.hidden = true;
+    const summary = document.createElement('summary'); summary.textContent = 'Previous advice';
+    const content = document.createElement('pre'); content.id = 'go-previous-output'; previous.append(summary, content); _el('go-output')?.after(previous);
+    window.addEventListener('tli-session-locked', () => {
+      state.locked = true; state.configEpoch++; state.lastSummary = null; state.lastConfig = null; state.lastDetect = null;
+      _renderHWPills(null); _renderConfigSettings(null); const game = _el('go-game-input'); if (game) game.value = ''; const question = _el('go-question'); if (question) question.value = '';
+      state.controller?.abort(); state.epoch++; state.streaming = false; state.controller = null; state.lastText = '';
+      content.textContent = ''; previous.hidden = true; requestStatus.textContent = ''; stop.hidden = true;
+      const box = _el('go-output'); if (box) box.textContent = '';
+      const ask = _el('go-ask-btn'); if (ask) { ask.disabled = false; ask.textContent = 'Get Advice →'; }
+      const clear = _el('go-clear-btn'); if (clear) clear.disabled = false;
+    });
+    window.addEventListener('tli-session-unlocked', () => { state.locked = false; });
+    window.TLIPerformance?.setup?.();
+    _el('go-read-config-btn')?.addEventListener('click', () => _loadGameConfig(_el('go-game-input')?.value.trim()));
+    _el('go-read-hardware-btn')?.addEventListener('click', _loadHardware);
     // Game input: mark as user-edited if they type; load config on commit
     const inp = _el("go-game-input");
     if (inp) {
-      inp.addEventListener("input", () => { inp.dataset.userEdited = "1"; });
-      inp.addEventListener("change", () => {
-        const name = inp.value.trim();
-        if (name) _loadGameConfig(name);
-      });
+      inp.addEventListener("input", () => { inp.dataset.userEdited = "1"; state.configEpoch++; const badge = _el("go-config-badge"); if (badge && state.lastConfig) badge.textContent = "Previous read · " + state.lastConfig.requestedName; });
     }
 
     // Detect button
@@ -401,7 +450,6 @@ window.TLIGames = (function () {
     document.querySelectorAll(".go-preset[data-preset]").forEach(btn => {
       btn.addEventListener("click", () => {
         _selectPreset(btn.dataset.preset);
-        _ask();
       });
     });
 
@@ -430,7 +478,9 @@ window.TLIGames = (function () {
 
     const clearBtn = _el("go-clear-btn");
     if (clearBtn) clearBtn.addEventListener("click", () => {
+      if (state.streaming) return;
       state.lastText = "";
+      content.textContent = ''; previous.hidden = true; requestStatus.textContent = '';
       const box = _el("go-output");
       if (box) box.innerHTML = "";
       const wrap = _el("go-output-wrap");
@@ -441,7 +491,7 @@ window.TLIGames = (function () {
   }
 
   async function onOpen() {
-    await Promise.all([_loadHardware(), _detectGame()]);
+    await window.TLIPerformance?.onOpen?.();
   }
 
   return { setup, onOpen };

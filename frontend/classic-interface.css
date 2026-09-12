@@ -1,0 +1,375 @@
+/*
+ * Classic composition, adapted from retained v1.3.5-beta (ff6c4e51).
+ * The current controllers, disclosure states and palette remain authoritative.
+ * Load after the workspace styles. No theme/custom-property values are changed.
+ */
+
+/* These are new presentation controls, shared by both interface styles. */
+.interface-controls { display: inline-flex; align-items: center; gap: 7px; margin: 0; color: var(--text-muted); font-size: 11px; }
+#tli-interface-select {
+  max-width: 132px;
+  min-height: 36px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  color: var(--text-main);
+  font: inherit;
+  font-size: 12px;
+}
+.interface-choice-group { border: 0; margin: 0 0 20px; padding: 0; min-width: 0; }
+.interface-choice-group > legend { font-size: 14px; font-weight: 600; color: var(--text-main); padding: 0; }
+.interface-choice-group > p { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.interface-choice-group .interface-choice-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.interface-choice {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  color: var(--text-main);
+  text-align: left;
+  font: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.interface-choice > input { grid-column: 1; grid-row: 2; align-self: center; margin: 0; width: 17px; height: 17px; }
+.interface-choice > strong { grid-column: 2; grid-row: 2; font-size: 13px; }
+.interface-choice > span:not(.interface-preview) { grid-column: 1 / -1; font-size: 12px; color: var(--text-muted); }
+.interface-choice[aria-pressed="true"], .interface-choice:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.interface-choice p, .interface-choice small { color: var(--text-muted); }
+.interface-choice:focus-visible, #tli-interface-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.interface-preview { grid-column: 1 / -1; grid-row: 1; display: grid; gap: 7px; height: 96px; padding: 8px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-main); }
+.interface-preview > span { min-width: 0; border-radius: 4px; }
+.interface-preview .preview-nav { background: var(--accent-soft); border: 1px solid var(--border-subtle); }
+.interface-preview .preview-main { background: var(--bg-elevated); border: 1px solid var(--border-subtle); position: relative; }
+.interface-preview .preview-side { background: var(--bg-panel); border: 1px solid var(--border-subtle); }
+.interface-preview-modern { grid-template-columns: 30px minmax(0, 1fr) 18px; }
+.interface-preview-modern .preview-main::after { content: ''; position: absolute; inset: 18px 8px; border-top: 2px solid var(--border-strong); border-bottom: 2px solid var(--border-subtle); }
+.interface-preview-classic { grid-template-columns: 12px minmax(0, 1fr) 34px; }
+.interface-preview-classic .preview-main { border-radius: 8px; }
+.interface-preview-classic .preview-main::before { content: ''; position: absolute; top: 9px; left: 7px; width: 63%; height: 20px; border: 1px solid var(--border-subtle); background: var(--accent-soft); border-radius: 3px 8px 8px; }
+.interface-preview-classic .preview-main::after { content: ''; position: absolute; bottom: 8px; left: 7px; right: 7px; height: 12px; border: 1px solid var(--border-strong); border-radius: 6px; }
+#tli-interface-status { color: var(--text-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+#tli-interface-notice { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+
+/* The original icon rail gives the workspaces the width of the console. */
+html[data-interface="classic"] body[data-tli-ui] .app-shell > .sidebar {
+  width: 104px;
+  flex-basis: 104px;
+  padding: 12px 6px 10px;
+  gap: 8px;
+}
+html[data-interface="classic"] body[data-tli-ui] .sidebar-logo { width: 42px; height: 42px; margin-bottom: 3px; border-radius: 50%; background: var(--accent); box-shadow: var(--shadow-soft); }
+html[data-interface="classic"] body[data-tli-ui] .sidebar-logo > span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--bg-main); color: var(--text-main); text-transform: uppercase; font-size: 14px; font-weight: 600; letter-spacing: 0; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar-label { margin-top: 3px; font-size: 9px; letter-spacing: .035em; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar-nav { margin-top: 8px; gap: 9px; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar :is(.side-nav-button, .ui-nav-shortcut) {
+  flex-direction: column;
+  gap: 4px;
+  min-height: 58px;
+  padding: 7px 3px;
+  margin: 2px 0;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.25;
+  border-radius: 13px;
+  overflow-wrap: anywhere;
+}
+html[data-interface="classic"] body[data-tli-ui] .sidebar .ui-nav-label { max-width: 100%; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar .ui-icon { width: 23px; height: 23px; flex-basis: 23px; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar .side-nav-button.active { border-color: var(--accent); color: var(--text-main); }
+html[data-interface="classic"] body[data-tli-ui] .ui-nav-group > summary {
+  padding: 8px 3px 6px;
+  font-size: 9px;
+  letter-spacing: .035em;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  cursor: default;
+}
+html[data-interface="classic"] body[data-tli-ui] .ui-nav-group > summary::after { display: none; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar .sidebar-footer { padding: 8px 2px 0; text-align: center; line-height: 1.5; overflow-wrap: anywhere; }
+html[data-interface="classic"] body[data-tli-ui] .sidebar-footer-device { font-size: 10px; }
+html[data-interface="classic"] body[data-tli-ui] .main-region > header {
+  min-height: 58px;
+  padding: 9px 18px;
+  gap: 10px 16px;
+  background: linear-gradient(90deg, var(--bg-header), var(--bg-main));
+}
+html[data-interface="classic"] body[data-tli-ui] .main-region > header :is(.header-left, .header-right) { gap: 8px; }
+html[data-interface="classic"] body[data-tli-ui] .brand-title { font-size: 16px; letter-spacing: 0; }
+html[data-interface="classic"] body[data-tli-ui] :is(.tli-shell-button, .device-chip, #ai-source-pill, .lan-pill, .brand-pill) { border-radius: 999px; }
+html[data-interface="classic"] body[data-tli-ui] #tli-state-bar { padding: 5px 18px; min-height: 27px; }
+html[data-interface="classic"] body[data-tli-ui] .main-scroll { padding: 18px 20px 28px; }
+html[data-interface="classic"] body[data-tli-ui] .panel-container { max-width: none; }
+html[data-interface="classic"] body[data-tli-ui] .main-columns {
+  max-width: none;
+  width: 100%;
+  grid-template-columns: minmax(0, 2.1fr) minmax(280px, .9fr);
+  gap: 16px;
+}
+
+/* Full-width card workspaces and small section titles, rather than page heroes. */
+html[data-interface="classic"] body[data-tli-ui] .card {
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--bg-elevated), var(--bg-elevated-alt));
+  box-shadow: var(--shadow-soft);
+}
+html[data-interface="classic"] body[data-tli-ui] .card:hover { box-shadow: var(--shadow-soft); }
+html[data-interface="classic"] body[data-tli-ui] .card-header-row { gap: 10px; margin-bottom: 12px; }
+html[data-interface="classic"] body[data-tli-ui] .card-title { font-size: 15px; letter-spacing: 0; }
+html[data-interface="classic"] body[data-tli-ui] .card-subtitle { font-size: 12px; margin-top: 3px; }
+html[data-interface="classic"] body[data-tli-ui] .ui-page-header {
+  padding: 14px 16px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  gap: 12px;
+}
+html[data-interface="classic"] body[data-tli-ui] .ui-page-header :is(.page-title, .card-title) { font-size: 19px; line-height: 1.35; letter-spacing: 0; }
+html[data-interface="classic"] body[data-tli-ui] .ui-page-header .page-subtitle { font-size: 12px; margin-top: 4px; max-width: none; }
+html[data-interface="classic"] body[data-tli-ui] .ui-target-line { margin: 6px 0 14px; font-size: 11px; }
+html[data-interface="classic"] body[data-tli-ui] .ui-section-help { margin: 4px 0 12px; font-size: 12px; }
+html[data-interface="classic"] body[data-tli-ui] .main-scroll :is(.btn, .btn-primary, .btn-outline, .btn-ghost, .chip-button, .pill-btn, .ps-btn, .vis4-btn) {
+  border-radius: 999px;
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+/* AI Chat: a bounded conversation well, real message bubbles, row composer. */
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace {
+  grid-template-columns: minmax(0, 2.1fr) minmax(280px, .9fr) !important;
+  width: 100% !important;
+  max-width: none !important;
+  gap: 18px !important;
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace-card { padding: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace-card > .card-header-row {
+  padding: 0 0 12px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace-card .card-title { font-size: 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-header-actions button { border-radius: 999px; min-height: 32px; padding: 5px 10px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-welcome { display: none; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace.is-empty .chat-output { display: flex; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-output {
+  height: clamp(270px, 43dvh, 560px);
+  min-height: 270px;
+  padding: 14px;
+  gap: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-msg { width: fit-content; max-width: 92%; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-msg--ai { align-self: flex-start; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-msg--user { align-self: flex-end; max-width: 86%; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main :is(.chat-msg--ai, .chat-output > .chat-bubble-ai)::before { display: none; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-bubble { font-size: 14px; line-height: 1.65; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-bubble-ai {
+  padding: 11px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px 15px 15px;
+  background: var(--bg-elevated-alt);
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-bubble-user {
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 15px 4px 15px 15px;
+  background: var(--accent-soft);
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-bubble-ai p { line-height: 1.65; margin-bottom: 9px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-meta { padding-top: 3px; font-size: 11px; gap: 7px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-composer-shell { margin: 12px 0 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-context-toolbar { padding-bottom: 7px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row { grid-template-columns: 36px 36px minmax(0, 1fr) auto; gap: 8px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row textarea {
+  grid-column: 3;
+  grid-row: 1;
+  padding: 10px 12px;
+  min-height: 70px;
+  font-size: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+}
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row textarea:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row button { grid-row: 1; min-width: 36px; min-height: 36px; border-radius: 999px; background: var(--accent-soft); color: var(--text-main); }
+html[data-interface="classic"] body[data-tli-ui] #panel-main #chat-send-btn { background: var(--accent); color: var(--on-accent); padding: 8px 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-composer-bottom { margin-top: 12px; padding-top: 9px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-response-status { padding: 10px 0 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-companion-column:not([hidden]) { display: flex !important; gap: 16px !important; min-width: 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-companion-column > .card { padding: 14px; border-radius: 16px; background: linear-gradient(135deg, var(--bg-elevated), var(--bg-elevated-alt)); box-shadow: var(--shadow-soft); }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-companion-column .card-header-actions { width: auto; margin-left: auto; gap: 6px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main #quickstart-chips { justify-content: flex-start; gap: 6px !important; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main #quickstart-chips button { padding: 5px 9px; min-height: 30px; font-size: 11px; border-radius: 999px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-main .recent-chat-btn { padding: 9px 10px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] #panel-main :is(.tli-no-ai-banner, .search-suggest-banner) { margin: 10px 0 0; }
+
+/* Dashboard: compact status cards and two equally weighted work columns. */
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-eyebrow { margin-bottom: 4px; font-size: 10px; letter-spacing: .07em; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-wrap { gap: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-attention { border-radius: 12px; background: var(--bg-elevated-alt); }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-attention::before { width: 3px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-narrator { padding: 16px 20px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-narrator__lead { gap: 16px; margin-top: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-orb-wrap { width: 36px; flex-basis: 36px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-beacon { width: 32px; height: 32px; padding: 2px; border-radius: 50%; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-orb { width: 6px; height: 6px; top: 25px; right: 0; border-width: 2px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-status-label { font-size: 8px; margin-top: 6px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-statement { font-size: 20px; letter-spacing: 0; line-height: 1.45; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-meta-line { font-size: 11px; margin-top: 8px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-action-card { margin: 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-attention-footer { padding: 8px 18px; gap: 8px 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vitals { gap: 10px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vital { padding: 13px 16px; border-radius: 9px; background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vital__label { margin-bottom: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vital__val { font-size: 21px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vital__sub { margin-top: 4px; line-height: 1.55; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-workspace-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; margin-top: 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 :is(.dashboard-primary-column, .dashboard-secondary-column) { gap: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 :is(.activity-catchup, .dashboard-saved-places, .dashboard-explore, .nd-mesh-strip) { padding: 16px; border-radius: 12px; background: var(--bg-elevated-alt); }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-destinations { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-destinations > button { gap: 9px; padding: 10px; border: 1px solid var(--border-subtle); background: var(--bg-elevated); border-radius: 8px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-destinations strong { font-size: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-destinations small { font-size: 10px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-live { border-radius: 10px; padding: 2px 16px; }
+
+/* Settings keeps current groups/search, presented as the original long form. */
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-workspace { grid-template-columns: minmax(0, 2.1fr) minmax(250px, .9fr) !important; max-width: none; gap: 18px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-main-card { grid-row: auto; padding: 14px; border: 1px solid var(--border-subtle); border-radius: 16px; background: linear-gradient(135deg, var(--bg-elevated), var(--bg-elevated-alt)); box-shadow: var(--shadow-soft); }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-main-card > .card-header-row { padding: 0; margin-bottom: 14px; border: 0; background: none; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-main-card > .card-header-row .card-title { font-size: 17px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-main-card > .card-header-row .card-subtitle { font-size: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-search-box { max-width: none; margin-bottom: 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-sidebar { grid-row: auto; position: sticky; top: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-category-nav { padding: 12px; margin-bottom: 16px; gap: 4px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-category-nav button { min-height: 34px; padding: 7px 10px; font-size: 12px; border-radius: 7px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-info-card { padding: 18px; border: 1px solid var(--border-subtle); border-radius: 16px; background: linear-gradient(135deg, var(--bg-elevated), var(--bg-elevated-alt)); box-shadow: var(--shadow-soft); }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-group + .settings-group { margin-top: 24px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-group > h2 { font-size: 14px; letter-spacing: .025em; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-group-description { font-size: 12px; margin-bottom: 10px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings :is(.settings-section, .settings-group > .collapsible-card, .settings-group > details) { border-radius: 12px; margin-bottom: 10px; background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings :is(.settings-section-header, .settings-group > details > summary, .collapsible-header) { padding: 13px 16px; min-height: 50px; font-size: 13px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings :is(.settings-section-body, .data-recovery-body, .native-companion-body, .tli-int-body, .collapsible-body) { padding: 0 16px 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-section-title { font-size: 13px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-row { padding: 10px 0; gap: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-row-title { font-size: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-row-desc { font-size: 11px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-settings .btn-outline.danger { color: var(--danger); border-color: var(--danger); background: var(--bg-elevated); }
+
+/* Newer workspaces adopt the same compact cards without changing their controls. */
+html[data-interface="classic"] body[data-tli-ui] :is(#troubleshooting-workspace, #routine-workspace, #performance-workspace, .perf-workspace) { max-width: none; }
+html[data-interface="classic"] body[data-tli-ui] .main-scroll :is(.card-section, .mcd-card, .sha-card, .hub-pkg-card, .perf-card, .routine-card, .routine-secondary, .troubleshooting-browser, .troubleshooting-editor, .notebook-card, .places-card) {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 14px;
+  background: linear-gradient(135deg, var(--bg-elevated), var(--bg-elevated-alt));
+  box-shadow: var(--shadow-soft);
+}
+html[data-interface="classic"] body[data-tli-ui] :is(.troubleshooting-grid, .routine-grid) { gap: 16px; }
+html[data-interface="classic"] body[data-tli-ui] .troubleshooting-grid { grid-template-columns: minmax(240px, .9fr) minmax(0, 2.1fr); }
+html[data-interface="classic"] body[data-tli-ui] :is(.troubleshooting-field, .routine-editor) { gap: 6px; }
+html[data-interface="classic"] body[data-tli-ui] .troubleshooting-field { margin: 12px 0; }
+html[data-interface="classic"] body[data-tli-ui] :is(.troubleshooting-step, .troubleshooting-link, .routine-step) { padding: 12px; border-radius: 9px; }
+html[data-interface="classic"] body[data-tli-ui] :is(.troubleshooting-intro, .routine-intro) { max-width: none; font-size: 13px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-files .fo-grid { grid-template-columns: minmax(0, 2.1fr) minmax(280px, .9fr); gap: 16px; align-items: start; }
+html[data-interface="classic"] body[data-tli-ui] #panel-files #files-more-tools > .fo-sidebar { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-files .storage-stage { padding: 14px; border-radius: 12px; margin: 10px 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-visualizer .vis4-grid { grid-template-columns: minmax(200px, .8fr) minmax(0, 2.2fr); grid-template-areas: 'folders results' 'insights results'; gap: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-visualizer #storage-results { padding: 12px; }
+html[data-interface="classic"] body[data-tli-ui] :is(#panel-files, #panel-visualizer) .storage-disclosure { border-radius: 10px; background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] :is(#panel-files, #panel-visualizer) .storage-disclosure > summary { padding: 11px 13px; font-size: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-auth-card { grid-template-columns: minmax(0, 1.2fr) minmax(280px, 1fr); }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault :is(.vault-introduction, .vault-access) { padding: 22px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-lock-icon { width: 48px; height: 48px; margin-bottom: 12px; border-radius: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-lock-icon svg { width: 34px; height: 34px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-intro-title { font-size: 21px; max-width: none; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-intro-features { margin-top: 18px; gap: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-auth-card.is-unlocked { padding: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .is-unlocked :is(.vault-introduction, .vault-access) { padding: 0; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault #vault-content-area { margin-top: 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-tab-pane { padding: 16px; border-radius: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-content-toolbar { margin: 14px 0; gap: 10px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault :is(.vault-file-row, .vault-secret-row) { padding: 11px 8px; border-radius: 8px; background: var(--bg-elevated); }
+html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-notes-layout { gap: 16px; margin-top: 16px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-builder :is(.builder-header, .builder-input-area) { padding: 14px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-builder .builder-title { font-size: 18px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-hub .hub-grid { padding: 14px; gap: 12px; }
+html[data-interface="classic"] body[data-tli-ui] #panel-hub :is(.hub-header, .hub-search-row, .hub-tabs) { padding: 12px 16px; }
+html[data-interface="classic"] body[data-tli-ui] :is(.mcp-manual, .ha-bridge) details { padding: 12px; border-radius: 10px; }
+html[data-interface="classic"] body[data-tli-ui] :is(.modal-header, .modal-body, .modal-footer) { padding: 14px 18px; }
+
+/* Retain comfortable touch targets, wrapping, and current disclosure visibility. */
+@media (max-width: 1100px) {
+  html[data-interface="classic"] body[data-tli-ui] .main-region > header .header-left { flex-basis: 100%; }
+  html[data-interface="classic"] body[data-tli-ui] .main-region > header .header-right { width: 100%; margin-left: 0; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-destinations { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 950px) {
+  html[data-interface="classic"] body[data-tli-ui] :is(.main-columns, #panel-main .chat-workspace, #panel-settings .settings-workspace) { grid-template-columns: minmax(0, 1fr) !important; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-companion-column:not([hidden]) { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-sidebar { position: static; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-category-nav { margin: 0; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-files .fo-grid { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-files #files-more-tools > .fo-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-visualizer .vis4-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'results' 'folders' 'insights'; }
+}
+@media (max-width: 768px) {
+  html[data-interface="classic"] body[data-tli-ui] .app-shell > .sidebar { display: none; }
+  html[data-interface="classic"] body[data-tli-ui] .main-scroll { padding: 12px 12px 88px; }
+  html[data-interface="classic"] body[data-tli-ui] .main-region > header { padding: 8px 12px; }
+  html[data-interface="classic"] body[data-tli-ui] #tli-state-bar { padding: 6px 12px; }
+  html[data-interface="classic"] body[data-tli-ui] .main-region > header .header-right { justify-content: flex-start; }
+  html[data-interface="classic"] body[data-tli-ui] .tli-bottom-nav { border-top: 1px solid var(--border-strong); padding: 3px 5px; gap: 4px; background: var(--bg-sidebar); }
+  html[data-interface="classic"] body[data-tli-ui] .tli-bn-item { border: 1px solid transparent; border-radius: 12px; min-height: 54px; }
+  html[data-interface="classic"] body[data-tli-ui] .tli-bn-item.active { border-color: var(--accent); color: var(--text-main); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .dashboard-workspace-grid { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-vitals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html[data-interface="classic"] body[data-tli-ui] :is(.troubleshooting-grid, .routine-grid) { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-auth-card { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-vault .vault-introduction { border-right: 0; border-bottom: 1px solid var(--border-subtle); padding: 16px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-vault .is-unlocked .vault-introduction { border: 0; padding: 0; }
+}
+@media (max-width: 600px) {
+  .interface-choice-group .interface-choice-options { grid-template-columns: minmax(0, 1fr); }
+  #tli-interface-select { min-height: 44px; }
+  html[data-interface="classic"] body[data-tli-ui] .ui-page-header { padding: 12px; }
+  html[data-interface="classic"] body[data-tli-ui] .ui-page-header :is(.page-title, .card-title) { font-size: 18px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-workspace-card { padding: 12px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-companion-column:not([hidden]) { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-header-actions { width: 100%; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-output { min-height: 240px; height: 38dvh; padding: 10px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-msg { max-width: 97%; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row { grid-template-columns: 42px 42px minmax(0, 1fr) auto; gap: 6px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row textarea { grid-column: 1 / -1; min-height: 78px; font-size: 16px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-input-row button { grid-row: 2; min-height: 44px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-main .chat-bubble { font-size: 14px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-sidebar { display: block; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-category-nav { flex-direction: row; flex-wrap: wrap; margin-bottom: 14px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-settings .settings-info-card { margin-top: 14px; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-files #files-more-tools > .fo-sidebar { grid-template-columns: minmax(0, 1fr); }
+  html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-action-card { margin: 0; }
+  html[data-interface="classic"] body[data-tli-ui] #panel-dashboard2 .nd-statement { font-size: 18px; }
+}
+@media (max-width: 600px), (pointer: coarse) {
+  html[data-interface="classic"] body[data-tli-ui] :is(.main-scroll, .sidebar, .main-region > header) :is(button, summary) { min-height: 44px; }
+  html[data-interface="classic"] body[data-tli-ui] .main-scroll :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), select, textarea) { font-size: 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-interface="classic"] body[data-tli-ui] :is(.card, .side-nav-button, .chat-output) { animation: none; transition: none; scroll-behavior: auto; }
+}

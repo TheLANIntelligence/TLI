@@ -1,0 +1,34 @@
+const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const source=fs.readFileSync(path.join(__dirname,'../../js/visualizer.js'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'../../index.html'),'utf8').split('id="panel-visualizer"')[1].split('id="panel-files"')[0];
+function fixture(fetcher=async()=>({drives:[]})){
+ const nodes={},listeners={},docListeners={},calls=[],timers=new Map();let serial=0,document;
+ class El{
+  constructor(tag='div'){this.tagName=tag.toUpperCase();this.children=[];this.dataset={};this.style={};this.attrs={};this.events={};this._text='';this.value='';this.hidden=false;this.disabled=false;this.open=false;this.checked=false;this.classList={add(){},remove(){},toggle(){}};}
+  set id(v){this._id=v;nodes[v]=this;}get id(){return this._id||'';}get options(){return this.children;}get childElementCount(){return this.children.length;}
+  set textContent(v){this._text=String(v??'');this.children=[];}get textContent(){return this._text+this.children.map(n=>n.textContent).join('');}
+  append(...ns){for(let n of ns){if(typeof n==='string'){const x=new El('span');x.textContent=n;n=x;}if(n.parentElement)n.parentElement.children=n.parentElement.children.filter(x=>x!==n);n.parentElement=this;this.children.push(n);}}
+  appendChild(n){this.append(n);return n;}replaceChildren(...ns){this.children=[];this._text='';this.append(...ns);}setAttribute(k,v){this.attrs[k]=String(v);}getAttribute(k){return this.attrs[k]??null;}
+  addEventListener(k,fn){(this.events[k]||=[]).push(fn);}async emit(k,event={}){for(const fn of this.events[k]||[])await fn({target:this,key:'',preventDefault(){},...event});}click(){return this.emit('click');}dispatchEvent(e){this.emit(e.type,e);return true;}
+  querySelectorAll(s){const all=[];const visit=n=>{for(const c of n.children){all.push(c);visit(c);}};visit(this);return all.filter(n=>s==='button'?n.tagName==='BUTTON':s==='summary'?n.tagName==='SUMMARY':s==='input'?n.tagName==='INPUT':s==='option'?n.tagName==='OPTION':s.startsWith('.')?String(n.className||'').split(' ').includes(s.slice(1)):false);}
+  querySelector(s){return this.querySelectorAll(s)[0]||null;}focus(){document.activeElement=this;}scrollIntoView(){}showModal(){this.open=true;}close(){this.open=false;}remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(x=>x!==this);}contains(n){return this===n||this.children.some(c=>c.contains(n));}
+ }
+ for(const match of html.matchAll(/<([a-z0-9]+)\b[^>]*\bid="([^"]+)"[^>]*>/gi)){const n=new El(match[1]);n.id=match[2];}
+ nodes['panel-visualizer']=new El('section');nodes['chat-input']=new El('textarea');nodes['chat-send-btn']=new El('button');nodes['filesRootInput']=new El('input');
+ const tabs=['explore','large_files','duplicates','common_folders','history'].map(tab=>{const n=nodes['fs-tab-'+tab];n.dataset.fsTab=tab;return n;});
+ const modes=['files','folders','map','types'].map(mode=>{const n=new El('button');n.dataset.mode=mode;nodes.visualizerModePills.append(n);return n;});
+ const presets=['downloads','home'].map(p=>{const n=new El('button');n.dataset.visPreset=p;return n;});
+ const sorts=['name','category','size'].map(s=>{const n=new El('th');n.dataset.sort=s;n.append(new El('button'));return n;});
+ nodes['storage-cleanup-review'].append(new El('summary'));nodes['fs-locations'].append(new El('summary'));nodes['fs-profile'].value='quick';nodes.visualizerCategoryFilter.value='all';nodes.visualizerMinSize.value='0';nodes['vis4-largefiles-minmb'].value='100';nodes['fs-drive-sort'].value='name';
+ document={hidden:false,readyState:'loading',activeElement:null,getElementById:id=>nodes[id]||null,createElement:t=>new El(t),querySelectorAll:s=>s==='[data-fs-tab]'?tabs:s==='[data-vis-preset]'?presets:s==='#panel-visualizer th[data-sort]'?sorts:[],addEventListener:(k,fn)=>(docListeners[k]||=[]).push(fn)};
+ const history=[],scopes=[],choices=[],events=[],navigation=[];
+ const window={d3:require('../../assets/d3.v7.min.js'),crypto:{getRandomValues:b=>{b.fill(++serial);return b;}},TLI_PATHS:{home:'C:\\Users\\Fixture',common:{downloads:'C:\\Users\\Fixture\\Downloads'}},matchMedia:()=>({matches:false}),addEventListener:(k,fn)=>(listeners[k]||=[]).push(fn),dispatchEvent:e=>{events.push(e);for(const fn of listeners[e.type]||[])fn(e);},__tli_node_name:'Fixture host',TLIStorageCleanup:{choice:f=>{choices.push(f);return new El('label');},duplicateControls:g=>{const n=new El('div');n.textContent=g.paths.join('\n');return n;},setScope:s=>scopes.push(s)}};
+ const ctx=vm.createContext({window,document,console,Date,Map,Set,Number,Uint8Array,AbortController,CustomEvent:class{constructor(type,{detail}={}){this.type=type;this.detail=detail;}},Event:class{constructor(type){this.type=type;}},setTimeout:(fn,ms)=>{const id=++serial;timers.set(id,{fn,ms});return id;},clearTimeout:id=>timers.delete(id),_tliIsWindows:()=>true,_tliIsMac:()=>false,navigator:{clipboard:{writeText:async()=>{}}},switchPanel:p=>navigation.push(p),fetch:async(url,options)=>{calls.push({url,options,body:options.body?JSON.parse(options.body):null});const r=await fetcher(url,options,calls);return r&&typeof r.json==='function'?r:{ok:true,status:200,json:async()=>r};}});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../../js/storage-map.js'),'utf8'),ctx);vm.runInContext(source,ctx);window.TLIStorageHistory={setup(){},beginScan:v=>history.push(['begin',v]),receiveScan:r=>history.push(['receive',r]),scanFailed:()=>history.push(['failed'])};window.TLIFreeSpace.setup();
+ return{ctx,api:window.TLIFreeSpace,window,document,nodes,tabs,modes,presets,sorts,calls,history,scopes,choices,events,navigation,timers,El,emit:(name,data={})=>window.dispatchEvent({type:name,...data}),async panel(panelId){for(const fn of docListeners['tli-panel-switched']||[])await fn({detail:{panelId}});},async visibility(hidden){document.hidden=hidden;for(const fn of docListeners.visibilitychange||[])await fn();},async tick(){const t=[...timers].find(([,t])=>t.ms===1000);if(t){timers.delete(t[0]);await t[1].fn();}}};
+}
+const root='C:\\Users\\Fixture\\Downloads';
+function job(extra={}){return{host:{id:'fixture-host',name:'Fixture host'},id:'a'.repeat(32),operation:'scan',profile:'quick',path:root,status:'completed',started_at:'2026-09-09T00:00:00Z',updated_at:'2026-09-09T00:00:01Z',finished_at:'2026-09-09T00:00:01Z',progress:{phase:'completed',entries_seen:2,files:1},limits:{},result_available:true,...extra};}
+function envelope(j,result){return{ok:true,protocol:'storage-jobs-v1',job:j,...(result?{result}:{} )};}
+function scan(extra={}){return{tree:{name:'Downloads',path:root,size:12,children:[{name:'a.txt',path:root+'\\a.txt',size:12}]},meta:{partial:false,entries_seen:2,files:1,dirs:1},...extra};}
+module.exports={fixture,job,envelope,scan,root};

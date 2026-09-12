@@ -19,6 +19,7 @@
 
   // Settings panel refs
   const settingsVersion   = document.getElementById("settings-tli-version");
+  const settingsSidebarVersion = document.getElementById("version-pill-settings");
   const settingsState     = document.getElementById("settings-update-state");
   const checkBtn          = document.getElementById("settings-check-update-btn");
   const urlInput          = document.getElementById("settings-update-url");
@@ -28,14 +29,55 @@
   let _dismissed    = false;
   let _pollTimer    = null;
   let _lastState    = null;
+  let _settingsConfirmed = false;
+  let _savedAutoCheck = null;
+  if (urlSave) urlSave.disabled = true;
+  if (autoCheckBox) autoCheckBox.disabled = true;
+
+  let settingsSaveStatus = document.getElementById("settings-update-save-status");
+  if (!settingsSaveStatus && urlSave) {
+    settingsSaveStatus = document.createElement("div");
+    settingsSaveStatus.id = "settings-update-save-status";
+    settingsSaveStatus.className = "small-meta";
+    settingsSaveStatus.setAttribute("role", "status");
+    urlSave.parentElement?.after(settingsSaveStatus);
+  }
+  function _settingsMessage(message) {
+    if (settingsSaveStatus) settingsSaveStatus.textContent = message;
+  }
+  function _showHostVersion(version) {
+    const text = typeof version === "string" && version.trim() ? "v" + version.trim().replace(/^v/, "") : "Unavailable";
+    if (settingsVersion) settingsVersion.textContent = text;
+    if (settingsSidebarVersion) settingsSidebarVersion.textContent = text;
+  }
 
   // ── Load current settings into Settings panel ─────────────────
   async function _loadSettings() {
     try {
-      const d = await fetch("/update/status").then(r => r.json());
-      if (settingsVersion) settingsVersion.textContent = "v" + (d.current_version || "—");
-      if (urlInput && d.update_url) urlInput.value = d.update_url;
-    } catch {}
+      const r = await fetch("/update/status");
+      const d = await r.json();
+      if (!r.ok) throw new Error("The host could not provide saved update preferences.");
+      _showHostVersion(d?.current_version);
+      if (d && typeof d === "object" && !Object.prototype.hasOwnProperty.call(d, "auto_check")) {
+        const error = new Error("The host does not report its saved automatic-update preference.");
+        error.code = "missing_saved_preference";
+        throw error;
+      }
+      if (typeof d?.auto_check !== "boolean" || typeof d?.update_url !== "string") throw new Error("The host did not report valid saved update preferences.");
+      if (urlInput) urlInput.value = d.update_url;
+      _savedAutoCheck = d.auto_check;
+      if (autoCheckBox) { autoCheckBox.checked = d.auto_check; autoCheckBox.disabled = false; }
+      _settingsConfirmed = true;
+      if (urlSave) urlSave.disabled = false;
+      _settingsMessage("Saved update preferences loaded from this host.");
+    } catch (error) {
+      _settingsConfirmed = false;
+      if (urlSave) urlSave.disabled = true;
+      if (autoCheckBox) autoCheckBox.disabled = true;
+      _settingsMessage(error.code === "missing_saved_preference"
+        ? "This host does not report saved automatic-update preferences. Use matching TLI app and host files; if host files were updated, restart TLI normally, then refresh. Saving is disabled to preserve your choice."
+        : "Saved update preferences are unavailable. Reconnect to the host, then refresh TLI to recheck before changing them.");
+    }
   }
 
   // ── Apply banner state from status ────────────────────────────
@@ -43,7 +85,7 @@
     const state = d.state;
 
     // Settings panel version display
-    if (settingsVersion) settingsVersion.textContent = "v" + (d.current_version || "—");
+    _showHostVersion(d.current_version);
     if (settingsState) {
       const labels = {
         idle:        "",
@@ -181,18 +223,24 @@
 
   // ── Save update URL ───────────────────────────────────────────
   async function _saveUpdateUrl() {
+    if (!_settingsConfirmed || urlSave?.disabled) return;
     const url    = urlInput?.value?.trim() || "";
-    const auto   = autoCheckBox?.checked ?? true;
+    const auto   = autoCheckBox?.checked ?? _savedAutoCheck;
     if (urlSave) { urlSave.disabled = true; urlSave.textContent = "Saving…"; }
     try {
-      await fetch("/update/settings", {
+      const response = await fetch("/update/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ update_url: url, auto_check: auto }),
       });
+      const data = await response.json();
+      if (!response.ok || data.ok !== true) throw new Error(typeof data.detail === "string" ? data.detail : "The host did not confirm the save.");
+      _settingsMessage("Update preferences saved on this host. Startup checks use this choice the next time TLI starts.");
       if (urlSave) { urlSave.textContent = "Saved ✓"; setTimeout(() => { urlSave.textContent = "Save"; }, 2000); }
-    } catch {
+    } catch (error) {
       if (urlSave) { urlSave.textContent = "Save"; }
+      _settingsMessage("Update preferences could not be saved. Your changes are still available to retry.");
+      if (typeof showToast === "function") showToast("Could not save update settings: " + error.message, "error");
     } finally {
       if (urlSave) urlSave.disabled = false;
     }

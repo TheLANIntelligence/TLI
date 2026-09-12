@@ -74,7 +74,7 @@ def _check_disk() -> None:
                         import event_bus as _eb
                         _eb.emit_event("system", "alert",
                                        f"Disk critically full: {pct}% used ({free_gb} GB free) — {label}",
-                                       f"C:\\ is almost full. Free space now to avoid data loss.")
+                                       f"{label} is almost full. Open Free Space to review this drive; no files have been changed.")
                     except Exception:
                         pass
                 S.resolve_alert(kind_warn)
@@ -87,7 +87,7 @@ def _check_disk() -> None:
                         import event_bus as _eb
                         _eb.emit_event("system", "warn",
                                        f"Disk filling up: {pct}% used ({free_gb} GB free) — {label}",
-                                       "Consider freeing space soon.")
+                                       f"Consider reviewing free space on {label} soon.")
                     except Exception:
                         pass
                 S.resolve_alert(kind_crit)

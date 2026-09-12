@@ -1,4 +1,21 @@
 // ---------- tools panel ----------
+const TLI_BUILTIN_TOOL_FORMS = {
+  sys_snapshot: 'Read a system snapshot from the TLI host.',
+  sys_top_processes: 'List processes by memory use on the TLI host.',
+  disk_overview: 'Read drive usage on the TLI host.',
+  net_snapshot: 'Read the TLI host’s network interfaces.',
+  net_connectivity_diag: 'Ping the listed addresses from the TLI host. Public addresses contact the internet.',
+  model_health: 'Read the configured LM Studio model list. This does not prove that a model can generate a reply.',
+  tli_env_check: 'Read TLI runtime paths and configuration on the host.',
+};
+function toolOutcome(data) {
+  const raw = typeof data.output === 'string' ? data.output : JSON.stringify(data, null, 2);
+  let value; try { value = JSON.parse(raw); } catch {}
+  if (data.ok === false || (typeof data.exit_code === 'number' && data.exit_code !== 0) || value?.ok === false || value?.error) return { state: 'error', text: 'The tool reported a failure. Review the output below.', raw };
+  if (Array.isArray(value?.tests) && value.tests.some(item => item.ok !== true)) return { state: 'warning', text: 'The check completed; one or more addresses did not respond. Review each result below.', raw };
+  if (data.ok === true || data.exit_code === 0) return { state: 'success', text: 'The tool completed. Its output is shown below; AI interpretation is optional.', raw };
+  return { state: 'unknown', text: 'Output received. Execution success was not reported.', raw };
+}
 async function refreshToolsList() {
   const select = $("tools-select");
   if (!select) return;
@@ -60,7 +77,8 @@ async function explainToolOutput(toolLabel, rawOutput) {
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
     const reply = data.reply || data.answer || "";
-    summaryBox.textContent = reply || "Could not interpret the output.";
+    if (!reply || data.ok === false) throw new Error(data.detail || 'The provider did not return an explanation.');
+    summaryBox.textContent = reply;
     debugLog("info", "POST /chat (tool explain) OK");
   } catch (err) {
     summaryBox.textContent =
@@ -70,33 +88,79 @@ async function explainToolOutput(toolLabel, rawOutput) {
 }
 
 function setupToolsPanel() {
+  if (setupToolsPanel._done) return;
   const runBtn = $("tools-run-btn");
   if (!runBtn) return;
+  setupToolsPanel._done = true;
+  let busy = false, lastResult = null;
+  const select = $('tools-select'), params = $('tools-params');
+  const fields = document.createElement('div'); fields.id = 'tools-guided-fields';
+  const description = document.createElement('p'); description.id = 'tools-description';
+  const advanced = document.createElement('details'); advanced.id = 'tools-advanced-arguments';
+  const heading = document.createElement('summary'); heading.textContent = 'Advanced arguments'; advanced.append(heading);
+  const advancedChoice = document.createElement('label'), useAdvanced = document.createElement('input'); useAdvanced.type = 'checkbox'; useAdvanced.id = 'tools-use-advanced';
+  advancedChoice.append(useAdvanced, document.createTextNode(' Use the arguments below instead of the guided fields')); advanced.append(advancedChoice);
+  const oldParamsLabel = params.previousElementSibling;
+  params.before(description, fields, advanced);
+  if (oldParamsLabel?.classList.contains('field-label')) { oldParamsLabel.textContent = 'Arguments (JSON object or raw text)'; advanced.append(oldParamsLabel); }
+  advanced.append(params);
+  params.setAttribute('aria-label', 'Advanced tool arguments (JSON or raw arguments)');
+  function field(id, label, value, type = 'text') {
+    const wrap = document.createElement('label'), control = document.createElement('input'); wrap.textContent = label;
+    control.id = id; control.type = type; control.value = value; wrap.append(control); fields.append(wrap); return control;
+  }
+  function configure() {
+    fields.replaceChildren(); useAdvanced.checked = false;
+    const id = select.value;
+    description.textContent = TLI_BUILTIN_TOOL_FORMS[id] || (id ? 'This is an installed script. Running it executes its code on the TLI host. Review the script before running.' : 'Choose a tool to see what it does.');
+    if (id === 'sys_top_processes') { const limit = field('tools-process-limit', 'Number of processes', '10', 'number'); limit.min = '1'; limit.max = '100'; }
+    if (id === 'net_connectivity_diag') field('tools-ping-hosts', 'Addresses to check (comma separated)', '127.0.0.1, 8.8.8.8, 1.1.1.1');
+    runBtn.disabled = !id || busy;
+  }
+  select.addEventListener('change', configure); configure();
+  const explain = document.createElement('button'); explain.id = 'tools-explain-btn'; explain.type = 'button'; explain.className = 'btn-outline'; explain.textContent = 'Ask AI to explain this output'; explain.disabled = true;
+  $('tools-explain-box')?.after(explain);
+  explain.addEventListener('click', async () => {
+    if (busy || !lastResult) return;
+    busy = true; explain.disabled = true; runBtn.disabled = true;
+    try { await explainToolOutput(lastResult.label, lastResult.raw); }
+    finally { busy = false; explain.disabled = !lastResult; runBtn.disabled = !select.value; }
+  });
 
   // Set default explainer text
   const summaryBox = $("tools-explain-box");
   if (summaryBox) {
     summaryBox.textContent =
-      "Run a tool to see a short explanation of the results here. The JSON below is the raw output for advanced users.";
+      'Run a tool to see its result. You can then ask AI to explain the output.';
   }
 
   runBtn.addEventListener("click", async () => {
+    if (busy) return;
     const id = $("tools-select").value;
     if (!id) return;
     const paramsText = $("tools-params").value.trim();
     let params = {};
-    if (paramsText) {
+    if (useAdvanced.checked && paramsText) {
       try { params = JSON.parse(paramsText); }
       catch { params = { raw: paramsText }; }
+      if (!params || typeof params !== 'object' || Array.isArray(params)) { summaryBox.textContent = 'Advanced arguments must be a JSON object or raw text.'; return; }
+    } else if (!useAdvanced.checked && id === 'sys_top_processes') {
+      const limit = Number($('tools-process-limit')?.value);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 100) { summaryBox.textContent = 'Choose from 1 to 100 processes.'; return; }
+      params = { limit };
+    } else if (!useAdvanced.checked && id === 'net_connectivity_diag') {
+      const hosts = ($('tools-ping-hosts')?.value || '').split(',').map(v => v.trim()).filter(Boolean);
+      if (!hosts.length || hosts.length > 10 || hosts.some(host => !/^[a-zA-Z0-9][a-zA-Z0-9.:-]{0,252}$/.test(host))) { summaryBox.textContent = 'Enter up to 10 hostnames or IP addresses, separated by commas.'; return; }
+      params = { hosts };
     }
 
     const outputCard = $("tools-output");
     const pre = outputCard ? outputCard.querySelector("pre") : null;
     const summaryBoxLocal = $("tools-explain-box");
 
-    if (pre) pre.textContent = "Running tool…";
+    busy = true; runBtn.disabled = true; explain.disabled = true;
     if (summaryBoxLocal) {
-      summaryBoxLocal.textContent = "Running tool and preparing a plain-language summary…";
+      summaryBoxLocal.textContent = 'Running tool…' + (lastResult ? ' Previous output remains below until a result arrives.' : '');
     }
 
     // Grab the human-friendly label for the tool, if available
@@ -118,20 +182,20 @@ function setupToolsPanel() {
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
 
-      const outputText = data.output || JSON.stringify(data, null, 2);
-      if (pre) pre.textContent = outputText;
+      const outcome = toolOutcome(data);
+      if (pre) pre.textContent = outcome.raw;
+      lastResult = { label: toolLabel, raw: outcome.raw };
+      if (summaryBoxLocal) { summaryBoxLocal.textContent = outcome.text; summaryBoxLocal.dataset.state = outcome.state; }
 
       debugLog("info", "POST /tools/run OK for " + id);
 
-      // Now ask /chat to interpret the result
-      await explainToolOutput(toolLabel, outputText);
     } catch (err) {
-      if (pre) pre.textContent = "Error: " + err.message;
       if (summaryBoxLocal) {
-        summaryBoxLocal.textContent = "The tool failed to run, so there is nothing to interpret.";
+        summaryBoxLocal.textContent = 'The tool request failed: ' + err.message + (lastResult ? ' Previous output remains below; it does not describe this attempt.' : ' No output was received.');
+        summaryBoxLocal.dataset.state = 'error';
       }
       debugLog("error", "POST /tools/run failed: " + err.message);
-    }
+    } finally { busy = false; runBtn.disabled = !select.value; explain.disabled = !lastResult; }
   });
 }
 
@@ -354,12 +418,12 @@ function setupScriptsPanel() {
     banner.id = "scripts-danger-banner";
     banner.style.cssText = `
       margin-bottom: 10px; padding: 12px 14px;
-      background: rgba(239,68,68,0.08); border: 1.5px solid #ef4444;
+      background: var(--danger-soft, var(--bg-elevated)); border: 1.5px solid var(--danger);
       border-radius: var(--radius-md); font-size: 13px;
     `;
     const isCritical = flags.some(f => /format|wipe|erase|system32|admin|bulk process/i.test(f));
     banner.innerHTML =
-      `<div style="font-weight:700; color:#ef4444; margin-bottom:6px;">` +
+      `<div style="font-weight:700; color:var(--danger); margin-bottom:6px;">` +
       (isCritical ? "⛔ HIGH RISK — Read before running" : "⚠️ Review before running") +
       `</div>` +
       `<ul style="margin:0; padding-left:18px; color:var(--text-main); line-height:1.7;">` +

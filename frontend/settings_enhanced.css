@@ -274,7 +274,7 @@
 /* ---- Danger zone (collapsible details) ---- */
 .settings-danger-details {
   margin-top: 6px;
-  border: 1px solid rgba(var(--danger-rgb, 239, 68, 68), 0.25);
+  border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
   overflow: hidden;
 }
@@ -282,25 +282,25 @@
   padding: 8px 12px;
   font-size: 12px;
   font-weight: 600;
-  color: #ef4444;
+  color: var(--danger);
   cursor: pointer;
   user-select: none;
   list-style: none;
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(239, 68, 68, 0.04);
+  background: var(--danger-soft, var(--bg-elevated));
 }
 .settings-danger-details summary::before {
   content: "⚠";
   font-size: 12px;
 }
 .settings-danger-details[open] summary {
-  border-bottom: 1px solid rgba(239, 68, 68, 0.18);
+  border-bottom: 1px solid var(--danger);
 }
 .settings-danger-body {
   padding: 10px 12px 12px;
-  background: rgba(239, 68, 68, 0.03);
+  background: var(--danger-soft, var(--bg-elevated));
 }
 
 /* ---- Identity block (fingerprint / pubkey) ---- */
@@ -348,9 +348,9 @@
   border-color: rgba(var(--accent-rgb), 0.20);
 }
 .settings-status-dot.error {
-  color: #ef4444;
-  background: rgba(239, 68, 68, 0.07);
-  border-color: rgba(239, 68, 68, 0.20);
+  color: var(--danger);
+  background: var(--danger-soft, var(--bg-elevated));
+  border-color: var(--danger);
 }
 
 /* ---- Right-column info card ---- */

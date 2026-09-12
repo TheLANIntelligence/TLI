@@ -11,6 +11,7 @@ window.TLIBuilder = (function () {
 
   const state = {
     statusLoaded: false,
+    mode: "build",
     projectMap: null,
     selectedProject: "",
     permissionLevel: "ask",
@@ -27,6 +28,7 @@ window.TLIBuilder = (function () {
     collapsed: new Set(),
     regenerateOpen: new Set(),
     followupOpen: new Set(),
+    epoch: 0, locked: false, operation: null, mutations: new Set(), uploads: 0, drafts: new Map(),
   };
 
   // ---------------------------------------------------------------------------
@@ -35,19 +37,81 @@ window.TLIBuilder = (function () {
 
   function el(id) { return document.getElementById(id); }
 
-  function api(path, options) {
-    return fetch(path, {
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      ...(options || {}),
-    }).then(async (res) => {
+  async function api(path, options) {
+    if (state.locked) throw new Error('Unlock TLI before using Builder.');
+    const epoch = state.epoch, mutation = options?.method && options.method !== 'GET' ? {} : null;
+    if (mutation) state.mutations.add(mutation);
+    try {
+      const res = await fetch(path, {
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        ...(options || {}),
+      });
+      if (res.status === 401) clearPrivate();
       const data = await res.json().catch(() => ({}));
+      if (epoch !== state.epoch || state.locked) throw new Error('The Builder workspace changed. This response was ignored.');
       if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
+      if (data.ok === false) throw new Error(data.detail || data.error || 'Builder did not complete the request.');
       return data;
-    });
+    } finally { if (mutation) state.mutations.delete(mutation); }
+  }
+
+  const draftFields = ['builder-chat-input', 'builder-diff-file', 'builder-find-text', 'builder-replace-text',
+    'builder-command-input', 'builder-command-cwd', 'builder-rollback-id'];
+  function unavailable(projectChange = false) {
+    return state.locked || !!state.operation || state.mutations.size > 0 || (projectChange && state.uploads > 0);
+  }
+  function beginOperation(kind) {
+    if (unavailable(kind === 'project')) { toast('Wait for the current Builder request before starting another or changing projects.', 'warning'); return null; }
+    const token = {kind, epoch:state.epoch}; state.operation = token; return token;
+  }
+  function endOperation(token) { if (state.operation === token) state.operation = null; }
+  function rememberProjectDraft() {
+    state.drafts.set(state.selectedProject, {fields:Object.fromEntries(draftFields.map(id => [id, el(id)?.value || ''])),
+      attachments:state.pendingAttachments.slice(), replaceAll:!!el('builder-replace-all')?.checked});
+  }
+  function changeProject(project) {
+    if (project === state.selectedProject) return;
+    const previous = state.selectedProject;
+    rememberProjectDraft(); state.epoch++; state.selectedProject = project;
+    const draft = state.drafts.get(project) || (!previous ? state.drafts.get('') : null);
+    for (const id of draftFields) if (el(id)) el(id).value = draft?.fields[id] || '';
+    state.pendingAttachments = draft?.attachments.slice() || [];
+    if (el('builder-replace-all')) el('builder-replace-all').checked = draft?.replaceAll || false;
+    for (const id of ['builder-apply-approved', 'builder-rollback-approved', 'builder-command-approved']) if (el(id)) el(id).checked = false;
+    state.lastDiff = null; state.lastPlan = null; state.selectedTaskId = null;
+    state.tasks = []; state.receipts = []; state.snapshots = [];
+    renderStream(); renderReceipts([]); renderSnapshots([]);
+    for (const id of ['builder-diff-output', 'builder-before-output', 'builder-after-output', 'builder-apply-output', 'builder-plan-output', 'builder-command-output', 'builder-rollback-output']) setHtml(id, '');
+    setHtml('builder-diff-output', 'Generate a fresh diff for this project before approving changes.');
+    if (el('builder-copy-diff-btn')) el('builder-copy-diff-btn').disabled = true;
+    updateApplyButton(); renderAttachmentTray();
+    if (draft && previous) toast('Unfinished project draft restored. Review a fresh diff before approving changes.');
+  }
+  function clearPrivate() {
+    state.locked = true; state.epoch++; state.statusLoaded = false; state.operation = null;
+    state.selectedProject = ''; state.projectMap = null; state.tasks = []; state.receipts = []; state.snapshots = [];
+    state.pendingAttachments = []; state.lastDiff = null; state.lastPlan = null; state.selectedTaskId = null;
+    state.advancing = {}; state.drafts.clear(); state.collapsed.clear(); state.regenerateOpen.clear(); state.followupOpen.clear();
+    if (backendPollTimer) clearInterval(backendPollTimer); backendPollTimer = null;
+    for (const field of document.querySelectorAll('#panel-builder input, #panel-builder textarea')) { field.value = ''; if (field.type === 'checkbox') field.checked = false; }
+    for (const id of [...draftFields, 'builder-chat-project-path', 'builder-project-path', 'builder-new-parent', 'builder-new-name']) if (el(id)) el(id).value = '';
+    for (const id of ['builder-apply-approved', 'builder-rollback-approved', 'builder-command-approved']) if (el(id)) el(id).checked = false;
+    for (const id of ['builder-stream', 'builder-stream-count', 'builder-attachment-tray', 'builder-project-summary-mini', 'builder-project-summary', 'builder-project-map', 'builder-risk-files', 'builder-analysis-output', 'builder-relevant-files', 'builder-diff-output', 'builder-before-output', 'builder-after-output', 'builder-apply-output', 'builder-plan-output', 'builder-command-output', 'builder-rollback-output', 'builder-receipts', 'builder-snapshots', 'builder-file-options', 'builder-task-detail', 'builder-task-list', 'builder-task-output']) if (el(id)) el(id).textContent = '';
+    if (el('builder-project-name')) el('builder-project-name').textContent = 'Unlock TLI';
+    if (el('builder-readiness')) el('builder-readiness').textContent = 'Unlock TLI to open Builder. Unsaved drafts were cleared.';
+    updateApplyButton();
+  }
+  function consumeSubmitted(raw, attachments) {
+    const input = el('builder-chat-input'); if (input?.value === raw) input.value = '';
+    const ids = new Set(attachments.map(item => item.id));
+    state.pendingAttachments = state.pendingAttachments.filter(item => !ids.has(item.id));
+    renderAttachmentTray();
   }
 
   async function uploadAttachments(files) {
+    if (state.locked) throw new Error('Unlock TLI before attaching files.');
+    const epoch = state.epoch;
     const form = new FormData();
     for (const file of files) form.append("files", file);
     const res = await fetch("/api/builder/attachments", {
@@ -55,12 +119,16 @@ window.TLIBuilder = (function () {
       cache: "no-store",
       body: form,
     });
+    if (res.status === 401) clearPrivate();
     const data = await res.json().catch(() => ({}));
+    if (epoch !== state.epoch || state.locked) throw new Error('The Builder workspace changed. Uploaded results were not added.');
     if (!res.ok) throw new Error(data.detail || ("HTTP " + res.status));
-    return data.attachments || [];
+    if (!Array.isArray(data.attachments) || data.attachments.some(item => !item || typeof item.id !== 'string')) throw new Error('Builder did not confirm the uploaded attachments.');
+    return data.attachments;
   }
 
   function toast(msg, type) {
+    if (state.locked) return;
     if (typeof showToast === "function") showToast(msg, type || "success");
   }
 
@@ -69,16 +137,18 @@ window.TLIBuilder = (function () {
   function setBusy(id, busy, text) {
     const node = el(id);
     if (!node) return;
-    node.disabled = !!busy;
+    node.disabled = !!busy || state.locked;
     if (text != null) node.textContent = text;
   }
 
   function setHtml(id, html) {
+    if (state.locked) return;
     const node = el(id);
     if (node) node.innerHTML = html;
   }
 
   function renderError(id, message) {
+    if (state.locked) return;
     const node = el(id);
     if (!node) return;
     node.textContent = "";
@@ -121,20 +191,72 @@ window.TLIBuilder = (function () {
     return list.concat([task]);
   }
 
+  function normalizeMode(mode) {
+    return INTENT_TARGET[mode] != null ? mode : "build";
+  }
+
+  function targetIndexForIntent(intent) {
+    return INTENT_TARGET[normalizeMode(intent)];
+  }
+
+  function modeLabel(mode) {
+    return ({ build: "Build", plan: "Plan", inspect: "Inspect" })[normalizeMode(mode)];
+  }
+
+  function setMode(mode) {
+    state.mode = normalizeMode(mode);
+    renderModeControls();
+    renderReadiness();
+  }
+
+  function renderModeControls() {
+    document.querySelectorAll("[data-builder-mode]").forEach(btn => {
+      const active = btn.getAttribute("data-builder-mode") === state.mode;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+
+  function renderReadiness() {
+    const host = el("builder-readiness");
+    if (!host) return;
+    if (state.locked) { host.textContent = 'Unlock TLI to open Builder. Unsaved drafts were cleared.'; return; }
+    const backend = state.backend || {};
+    const mode = normalizeMode(state.mode);
+    const parts = [];
+    if (!state.selectedProject) {
+      parts.push("Open a repo to start the local code-agent loop.");
+    } else {
+      parts.push(`${modeLabel(mode)} mode is ready for ${projectShortName(state.selectedProject)}.`);
+    }
+    if (backend.backend === "offline") {
+      parts.push(mode === "build"
+        ? "AI offline: Inspect and Plan still work; Build will pause before a diff until a local model is available."
+        : "AI offline: this mode uses the deterministic project engine.");
+    }
+    host.textContent = parts.join(" ");
+    host.dataset.state = backend.backend === "offline" ? "warn" : "ready";
+  }
+
   // ---------------------------------------------------------------------------
   // backend pill
   // ---------------------------------------------------------------------------
 
   async function backendPillRefresh() {
+    if (state.locked) return;
+    const epoch = state.epoch;
     const pill = el("builder-backend-pill");
     if (pill) pill.dataset.busy = "true";
     try {
       const data = await api("/api/builder/backend-status");
       state.backend = data;
       applyBackendPill(data);
+      renderReadiness();
     } catch (err) {
+      if (epoch !== state.epoch || state.locked) return;
       state.backend = { backend: "offline", label: "AI offline", error: err.message };
       applyBackendPill(state.backend);
+      renderReadiness();
     } finally {
       if (pill) pill.dataset.busy = "false";
     }
@@ -206,10 +328,12 @@ window.TLIBuilder = (function () {
   // ---------------------------------------------------------------------------
 
   async function loadStatus() {
+    if (unavailable()) return;
     try {
       const status = await api("/api/builder/status");
+      if (state.operation) return;
       state.statusLoaded = true;
-      state.selectedProject = status.selected_project || "";
+      changeProject(status.selected_project || "");
       state.permissionLevel = status.permission_level || "ask";
       state.goldenGuard = !!status.golden_build_guard;
       applyProjectLabel();
@@ -227,16 +351,20 @@ window.TLIBuilder = (function () {
       if (golden) golden.checked = state.goldenGuard;
       if (state.selectedProject) await loadProjectMap(false);
       await Promise.all([loadTasks(), loadReceipts(), loadSnapshots()]);
+      renderReadiness();
     } catch (err) {
       toast("Builder status load failed: " + err.message, "warning");
+      renderReadiness();
     }
   }
 
   async function scanProject() {
+    if (unavailable(true)) { toast('Wait for the current Builder request before opening another project.', 'warning'); return false; }
     const path = (el("builder-chat-project-path")?.value
               || el("builder-project-path")?.value
               || "").trim();
     if (!path) { toast("Enter a project folder path first.", "warning"); return; }
+    const operation = beginOperation('project'); if (!operation) return false;
     setBusy("builder-chat-scan-btn", true, "Opening…");
     try {
       const data = await api("/api/builder/select-project", {
@@ -249,8 +377,9 @@ window.TLIBuilder = (function () {
             : !!el("builder-golden").checked,
         }),
       });
+      if (!data.project_map || typeof data.project_map.root !== 'string') throw new Error('Builder did not confirm the selected project.');
+      changeProject(data.project_map.root);
       state.projectMap = data.project_map;
-      state.selectedProject = data.project_map?.root || path;
       applyProjectLabel();
       renderProjectMenuSummary(data.project_map);
       if (el("builder-project-path")) el("builder-project-path").value = state.selectedProject;
@@ -258,11 +387,15 @@ window.TLIBuilder = (function () {
       renderProjectMap(data.project_map);
       await Promise.all([loadTasks(), loadReceipts(), loadSnapshots()]);
       openProjectMenu(false);
+      renderReadiness();
       toast("Project opened.");
+      return true;
     } catch (err) {
       toast("Open failed: " + err.message, "warning");
+      return false;
     } finally {
       setBusy("builder-chat-scan-btn", false, "Open");
+      endOperation(operation);
     }
   }
 
@@ -279,10 +412,12 @@ window.TLIBuilder = (function () {
   }
 
   async function createNewProject() {
+    if (unavailable(true)) { toast('Wait for the current Builder request before creating a project.', 'warning'); return; }
     const parent = (el("builder-new-parent")?.value || "").trim();
     const name = (el("builder-new-name")?.value || "").trim();
     const template = el("builder-new-template")?.value || "blank";
     if (!parent || !name) { toast("Enter a parent folder and project name.", "warning"); return; }
+    const operation = beginOperation('project'); if (!operation) return;
     setBusy("builder-create-project-btn", true, "Creating…");
     try {
       const data = await api("/api/builder/create-project", {
@@ -297,24 +432,29 @@ window.TLIBuilder = (function () {
           golden_build_guard: el("builder-golden")?.checked == null ? true : !!el("builder-golden").checked,
         }),
       });
-      state.projectMap = data.project_map;
-      state.selectedProject = data.project_map?.root || data.created?.root || "";
+      const root = data.project_map?.root || data.created?.root;
+      if (typeof root !== 'string' || !root) throw new Error('Builder did not confirm the new project.');
+      changeProject(root); state.projectMap = data.project_map;
       applyProjectLabel();
       renderProjectMenuSummary(data.project_map);
       renderProjectMap(data.project_map);
       await Promise.all([loadTasks(), loadReceipts(), loadSnapshots()]);
       openProjectMenu(false);
+      renderReadiness();
       toast(`Created ${data.created?.project_name || name}.`);
     } catch (err) {
       toast("Project create failed: " + err.message, "warning");
     } finally {
       setBusy("builder-create-project-btn", false, "Create and open");
+      endOperation(operation);
     }
   }
 
   async function handleAttachmentFiles(fileList) {
+    if (state.locked || state.operation?.kind === 'project') return;
     const files = Array.from(fileList || []).filter(Boolean);
     if (!files.length) return;
+    state.uploads++;
     const dropzone = el("builder-attach-dropzone");
     if (dropzone) dropzone.dataset.active = "true";
     try {
@@ -325,6 +465,7 @@ window.TLIBuilder = (function () {
     } catch (err) {
       toast("Attachment failed: " + err.message, "warning");
     } finally {
+      state.uploads--;
       if (dropzone) dropzone.dataset.active = "false";
       const input = el("builder-attach-input");
       if (input) input.value = "";
@@ -381,15 +522,14 @@ window.TLIBuilder = (function () {
   // ---------------------------------------------------------------------------
 
   async function loadTasks() {
+    const epoch = state.epoch, operation = state.operation;
     try {
       const data = await api("/api/builder/tasks?limit=50");
+      if (epoch !== state.epoch || operation !== state.operation) return;
       state.tasks = data.tasks || [];
       renderStream();
-      renderLegacyTaskList(state.tasks);
     } catch (err) {
-      state.tasks = [];
-      renderStream();
-      renderLegacyTaskList([]);
+      // Keep the last completed view on a failed refresh; a lock clears it explicitly.
     }
   }
 
@@ -399,10 +539,10 @@ window.TLIBuilder = (function () {
     if (task.status === "cancelled") return "cancelled";
     if (task.status === "blocked")   return "blocked";
     const proposal = task.artifacts && task.artifacts.patch_proposal;
-    if (proposal && proposal.applied) return "applied";
-    if (proposal && task.next_agent_index >= 3) return "awaiting";
     if (state.advancing[task.id])    return "running";
     if (task.status === "running")   return "running";
+    if (proposal && proposal.applied) return "applied";
+    if (proposal && task.next_agent_index >= 3) return "awaiting";
     if (task.status === "completed") {
       return proposal ? "applied" : "completed";
     }
@@ -424,76 +564,78 @@ window.TLIBuilder = (function () {
   }
 
   async function sendChat() {
-    const text = (el("builder-chat-input")?.value || "").trim();
+    if (unavailable()) return;
+    const raw = el("builder-chat-input")?.value || '', text = raw.trim();
     if (!text) { toast("Type a message first.", "warning"); return; }
+    const operation = beginOperation('submit'); if (!operation) return;
     setBusy("builder-chat-send-btn", true, "Asking…");
+    setBusy("builder-start-btn", true, "Start paused");
     try {
       const attachments = state.pendingAttachments.slice();
       const data = await api("/api/builder/chat", {
         method: "POST",
         body: JSON.stringify({ message: text, attachments }),
       });
+      if (!data.message || typeof data.message.id !== 'string') throw new Error('Builder did not confirm the saved reply. Your draft is retained.');
       state.tasks = upsertTask(state.tasks, data.message);
-      const input = el("builder-chat-input");
-      if (input) input.value = "";
-      state.pendingAttachments = [];
-      renderAttachmentTray();
+      if (data.message.backend === 'offline') {
+        renderStream(); toast('AI was unavailable. Your message and attachments are retained for explicit retry.', 'warning'); return;
+      }
+      consumeSubmitted(raw, attachments);
       renderStream();
       backendPillRefresh();
     } catch (err) {
       toast("Builder chat failed: " + err.message, "warning");
     } finally {
-      setBusy("builder-chat-send-btn", false, "Send");
+      setBusy("builder-chat-send-btn", false, "Ask");
+      setBusy("builder-start-btn", false, "Start");
+      endOperation(operation);
     }
   }
 
   function sendBuilderMessage() {
-    const text = (el("builder-chat-input")?.value || "").trim();
-    if (!text) { toast("Type a message first.", "warning"); return; }
-    if (looksLikeProjectTask(text)) startBuild("build");
-    else sendChat();
+    return sendChat();
   }
 
-  function looksLikeProjectTask(text) {
-    const lower = text.toLowerCase();
-    if (lower.length < 12) return false;
-    if (/^(hi|hello|hey|testing|test|thanks|thank you|ok|okay)\b/.test(lower)) return false;
-    return /\b(add|build|create|implement|fix|debug|refactor|rename|update|remove|delete|run|test|install|wire|connect|make|change|edit|move|review|commit)\b/.test(lower);
+  function startSelectedMode() {
+    return startBuild(state.mode);
   }
 
   function startBuild(intent) {
-    const targetIndex = INTENT_TARGET[intent] != null ? INTENT_TARGET[intent] : 3;
-    const text = (el("builder-chat-input")?.value || "").trim();
+    if (unavailable()) return;
+    const mode = normalizeMode(intent);
+    const targetIndex = targetIndexForIntent(mode);
+    const raw = el("builder-chat-input")?.value || '', text = raw.trim();
     if (!text) { toast("Describe what you want the agent to do first.", "warning"); return; }
     if (!state.selectedProject) {
       const pathInput = el("builder-chat-project-path");
       if (pathInput && pathInput.value.trim()) {
-        scanProject().then(() => state.selectedProject && startBuildInner(text, targetIndex, intent));
-        return;
+        const attachments = state.pendingAttachments.slice();
+        return scanProject().then(opened => opened && !state.locked && startBuildInner(text, targetIndex, mode, raw, attachments));
       }
       toast("Open a project first.", "warning");
       openProjectMenu(true);
       return;
     }
-    startBuildInner(text, targetIndex, intent);
+    return startBuildInner(text, targetIndex, mode, raw);
   }
 
-  async function startBuildInner(text, targetIndex, intent) {
-    setBusy("builder-code-change-btn", true, "Working…");
-    setBusy("builder-chat-send-btn", true, "Working…");
+  async function startBuildInner(text, targetIndex, intent, raw = el('builder-chat-input')?.value || '', submittedAttachments = null) {
+    const operation = beginOperation('submit'); if (!operation) return;
+    const mode = normalizeMode(intent);
+    setBusy("builder-start-btn", true, "Working...");
+    setBusy("builder-chat-send-btn", true, "Ask paused");
     try {
-      const attachments = state.pendingAttachments.slice();
+      const attachments = submittedAttachments || state.pendingAttachments.slice();
       const data = await api("/api/builder/tasks", {
         method: "POST",
-        body: JSON.stringify({ task: text, attachments }),
+        body: JSON.stringify({ task: text, intent: mode, attachments }),
       });
       const task = data.task;
-      task._intent = intent;
+      if (!task || typeof task.id !== 'string') throw new Error('Builder did not confirm the task. Your draft is retained.');
+      task._intent = mode;
       state.tasks = upsertTask(state.tasks, task);
-      const input = el("builder-chat-input");
-      if (input) input.value = "";
-      state.pendingAttachments = [];
-      renderAttachmentTray();
+      consumeSubmitted(raw, attachments);
       renderStream();
       backendPillRefresh();
       await autoplayToTarget(task.id, targetIndex);
@@ -501,13 +643,16 @@ window.TLIBuilder = (function () {
     } catch (err) {
       toast("Agent task failed to start: " + err.message, "warning");
     } finally {
-      setBusy("builder-code-change-btn", false, "Run agent task");
-      setBusy("builder-chat-send-btn", false, "Send");
+      setBusy("builder-start-btn", false, "Start");
+      setBusy("builder-chat-send-btn", false, "Ask");
+      endOperation(operation);
     }
   }
 
   async function autoplayToTarget(taskId, targetIndex) {
+    const epoch = state.epoch;
     for (let attempt = 0; attempt < 12; attempt++) {
+      if (state.locked || epoch !== state.epoch) return;
       const t = state.tasks.find(x => x.id === taskId);
       if (!t) return;
       if (t.next_agent_index >= targetIndex) return;
@@ -537,16 +682,18 @@ window.TLIBuilder = (function () {
   }
 
   async function approveTask(taskId) {
+    if (unavailable()) return;
     const task = state.tasks.find(x => x.id === taskId);
     const proposal = task && task.artifacts && task.artifacts.patch_proposal;
     if (!proposal || !proposal.id) { toast("No diff to approve.", "warning"); return; }
     state.advancing[taskId] = "apply";
     renderStream();
     try {
-      await api("/api/builder/apply-patch", {
+      const data = await api("/api/builder/apply-patch", {
         method: "POST",
-        body: JSON.stringify({ patch_id: proposal.id, approved: true }),
+        body: JSON.stringify({ patch_id: proposal.id, task_id: taskId, approved: true }),
       });
+      if (data.task) state.tasks = upsertTask(state.tasks, data.task);
       toast("Patch applied. Snapshot saved.");
     } catch (err) {
       toast("Apply failed: " + err.message, "warning");
@@ -572,6 +719,7 @@ window.TLIBuilder = (function () {
   }
 
   async function discardTask(taskId) {
+    if (unavailable()) return;
     try {
       const data = await api(`/api/builder/tasks/${encodeURIComponent(taskId)}/status`, {
         method: "POST",
@@ -596,6 +744,7 @@ window.TLIBuilder = (function () {
   }
 
   async function regenerateTask(taskId, intent) {
+    if (unavailable()) return;
     const input = document.getElementById(`builder-regen-input-${taskId}`);
     const text = (input?.value || "").trim();
     if (!text) { toast("Describe the regeneration first.", "warning"); return; }
@@ -603,7 +752,8 @@ window.TLIBuilder = (function () {
     try { await discardTask(taskId); } catch (_) {}
     const inputMain = el("builder-chat-input");
     if (inputMain) inputMain.value = text;
-    await startBuildInner(text, INTENT_TARGET[intent || "build"], intent || "build");
+    const mode = normalizeMode(intent);
+    await startBuildInner(text, targetIndexForIntent(mode), mode);
   }
 
   function toggleFollowup(parentId) {
@@ -617,18 +767,20 @@ window.TLIBuilder = (function () {
   }
 
   async function submitFollowup(parentId, intent) {
+    if (unavailable()) return;
     const input = document.getElementById(`builder-followup-input-${parentId}`);
     const text = (input?.value || "").trim();
     if (!text) { toast("Describe the follow-up first.", "warning"); return; }
     state.followupOpen.delete(parentId);
-    const targetIndex = INTENT_TARGET[intent || "build"] != null ? INTENT_TARGET[intent || "build"] : 3;
+    const mode = normalizeMode(intent);
+    const targetIndex = targetIndexForIntent(mode);
     try {
       const data = await api("/api/builder/tasks", {
         method: "POST",
-        body: JSON.stringify({ task: text, parent_id: parentId }),
+        body: JSON.stringify({ task: text, intent: mode, parent_id: parentId }),
       });
       const task = data.task;
-      task._intent = intent || "build";
+      task._intent = mode;
       state.tasks = upsertTask(state.tasks, task);
       renderStream();
       backendPillRefresh();
@@ -640,6 +792,7 @@ window.TLIBuilder = (function () {
   }
 
   async function turnChatIntoBuild(chatId) {
+    if (unavailable()) return;
     const input = document.getElementById(`builder-followup-input-${chatId}`);
     const text = (input?.value || "").trim();
     if (!text) { toast("Describe what to build from this chat.", "warning"); return; }
@@ -647,7 +800,7 @@ window.TLIBuilder = (function () {
     try {
       const data = await api("/api/builder/tasks", {
         method: "POST",
-        body: JSON.stringify({ task: text, parent_id: chatId }),
+        body: JSON.stringify({ task: text, intent: "build", parent_id: chatId }),
       });
       const task = data.task;
       task._intent = "build";
@@ -662,6 +815,7 @@ window.TLIBuilder = (function () {
   }
 
   async function rollbackPatch(snapshotId) {
+    if (unavailable()) return;
     if (!snapshotId) return;
     if (!window.confirm("Roll back to snapshot " + snapshotId + "?")) return;
     try {
@@ -687,6 +841,7 @@ window.TLIBuilder = (function () {
   // ---------------------------------------------------------------------------
 
   function renderStream() {
+    if (state.locked) return;
     const host = el("builder-stream");
     if (!host) return;
     host.textContent = "";
@@ -722,9 +877,19 @@ window.TLIBuilder = (function () {
     if (!tasks.length) {
       const empty = document.createElement("div");
       empty.className = "builder-stream-empty";
-      empty.textContent = state.selectedProject
-        ? "Tell Builder what you want to do in this project."
-        : "Open or create a project, attach anything useful, then ask Builder what to do.";
+      if (state.selectedProject) {
+        empty.textContent = "Describe work above, then Start the local code-agent loop.";
+      } else {
+        const title = document.createElement("div");
+        title.className = "builder-stream-empty-title";
+        title.textContent = "Open a repo first.";
+        const copy = document.createElement("div");
+        copy.textContent = "Builder needs a project root before it can inspect, plan, or prepare code changes.";
+        const button = makeButton("Open repo", "btn-primary", () => openProjectMenu(true));
+        empty.appendChild(title);
+        empty.appendChild(copy);
+        empty.appendChild(button);
+      }
       host.appendChild(empty);
       return;
     }
@@ -895,6 +1060,16 @@ window.TLIBuilder = (function () {
       for (let i = 1; i < more.length; i++) body.appendChild(renderDiffBlock(more[i]));
     }
 
+    if (status === "awaiting") {
+      const note = document.createElement("div");
+      note.className = "builder-card-note builder-card-note-warn";
+      const detail = document.createElement("div");
+      detail.className = "builder-card-note-message";
+      detail.textContent = "Awaiting approval. TLI will snapshot before writing, then continue checks and summary.";
+      note.appendChild(detail);
+      body.appendChild(note);
+    }
+
     const skipped = Array.isArray(artifacts.skipped_edits) ? artifacts.skipped_edits : [];
     const hasError = !!(artifacts.model_error || task.blocked_reason);
     if (hasError || skipped.length) {
@@ -1002,13 +1177,13 @@ window.TLIBuilder = (function () {
 
   function agentLabel(agent) {
     return {
-      explorer: "Inspecting project",
-      planner: "Planning task",
-      patch: "Preparing work",
+      explorer: "Inspecting repo",
+      planner: "Planning change",
+      patch: "Preparing diff",
       test: "Checking result",
-      reviewer: "Reviewing",
-      receipt: "Summarizing",
-      apply: "Applying approved work",
+      reviewer: "Reviewing changes",
+      receipt: "Summary",
+      apply: "Applying approved patch",
     }[agent] || agent;
   }
 
@@ -1037,22 +1212,22 @@ window.TLIBuilder = (function () {
         const extra = files.length > 3 ? ` (+${files.length - 3} more)` : "";
         return { label: `Inspected ${files.length} file${files.length === 1 ? "" : "s"}`, detail: `${names}${extra}` };
       }
-      return { label: "Inspected project", detail: "no strong file match" };
+      return { label: "Inspected repo", detail: "no strong file match" };
     }
     if (agent === "planner" && step.status === "complete") {
       const plan = artifacts.plan || {};
       const risk = plan.risk || "";
-      return { label: "Planned the task", detail: risk ? `risk: ${risk}` : "" };
+      return { label: "Planned the change", detail: risk ? `risk: ${risk}` : "" };
     }
     if (agent === "patch") {
       if (step.status === "complete") {
         const proposal = artifacts.patch_proposal || {};
         const file = shortFile(proposal.file_path);
-        if (file) return { label: "Prepared work", detail: `in ${file}` };
-        return { label: "Prepared work", detail: "" };
+        if (file) return { label: "Prepared diff", detail: `in ${file}` };
+        return { label: "Prepared diff", detail: "" };
       }
       if (step.status === "blocked") {
-        return { label: "Could not prepare work", detail: friendlyModelError(step.message || "") };
+        return { label: "Could not prepare diff", detail: friendlyModelError(step.message || "") };
       }
     }
     if (agent === "test" && step.status === "complete") {
@@ -1114,7 +1289,7 @@ window.TLIBuilder = (function () {
   function renderCardActions(task, status) {
     const wrap = document.createElement("div");
     wrap.className = "builder-card-actions";
-    const intent = task._intent || "build";
+    const intent = normalizeMode(task.intent || task._intent || "build");
     const proposal = task.artifacts && task.artifacts.patch_proposal;
     const buttons = [];
 
@@ -1135,7 +1310,8 @@ window.TLIBuilder = (function () {
     } else if (status === "running") {
       // No actions while a step is in flight
     } else if (status === "queued") {
-      buttons.push(makeButton("Resume", "btn-primary", () => autoplayToTarget(task.id, INTENT_TARGET[intent] || 3)));
+      const target = Number(task.target_agent_index || targetIndexForIntent(intent));
+      buttons.push(makeButton("Resume", "btn-primary", () => autoplayToTarget(task.id, target)));
       buttons.push(makeButton("Discard", "btn-outline", () => discardTask(task.id)));
     }
 
@@ -1192,7 +1368,8 @@ window.TLIBuilder = (function () {
   }
 
   // ---------------------------------------------------------------------------
-  // legacy advanced workbench renderers (developer tools)
+  // Power tools plus quarantined legacy workbench helpers. Only the Power tools
+  // bindings are registered in setup().
   // ---------------------------------------------------------------------------
 
   function escapeHtml(value) {
@@ -1204,7 +1381,7 @@ window.TLIBuilder = (function () {
   }
 
   async function analyze() {
-    const task = (el("builder-task")?.value || "").trim();
+    const task = (el("builder-chat-input")?.value || "").trim();
     if (!task) { toast("Ask Builder a question first.", "warning"); return; }
     setBusy("builder-analyze-btn", true, "Analyzing…");
     setHtml("builder-analysis-output", '<div class="builder-empty">Reading project map…</div>');
@@ -1247,11 +1424,13 @@ window.TLIBuilder = (function () {
   }
 
   async function generateDiff() {
+    if (unavailable()) return;
     const filePath = (el("builder-diff-file")?.value || "").trim();
     const findText = el("builder-find-text")?.value || "";
     const replaceText = el("builder-replace-text")?.value || "";
-    const task = (el("builder-task")?.value || "").trim();
+    const task = (el("builder-chat-input")?.value || "").trim();
     if (!filePath || !findText) { toast("Choose a file and paste exact find text first.", "warning"); return; }
+    const operation = beginOperation('preview'); if (!operation) return;
     setBusy("builder-generate-diff-btn", true, "Generating…");
     try {
       const data = await api("/api/builder/generate-diff", {
@@ -1261,14 +1440,19 @@ window.TLIBuilder = (function () {
           replace_all: !!el("builder-replace-all")?.checked,
         }),
       });
+      if (!data.proposal || typeof data.proposal.id !== 'string' || typeof data.proposal.diff !== 'string') throw new Error('Builder did not confirm a readable diff.');
       state.lastDiff = data.proposal;
+      if (el('builder-apply-approved')) el('builder-apply-approved').checked = false;
       renderDiff(data.proposal);
       toast("Diff preview generated.");
     } catch (err) {
-      renderError("builder-diff-output", err.message);
-      toast("Diff preview failed.", "warning");
+      if (el('builder-apply-approved')) el('builder-apply-approved').checked = false;
+      updateApplyButton();
+      if (!state.lastDiff) renderError("builder-diff-output", err.message);
+      toast('Diff preview failed: ' + err.message + (state.lastDiff ? ' The previous preview is retained; review it again before applying.' : ''), 'warning');
     } finally {
       setBusy("builder-generate-diff-btn", false, "Generate diff");
+      endOperation(operation);
     }
   }
 
@@ -1287,6 +1471,7 @@ window.TLIBuilder = (function () {
   }
 
   async function applyPatch() {
+    if (unavailable()) return;
     if (!state.lastDiff?.id) { toast("Generate a diff preview before applying.", "warning"); return; }
     if (!el("builder-apply-approved")?.checked) { toast("Confirm approval before applying.", "warning"); return; }
     setBusy("builder-apply-patch-btn", true, "Applying…");
@@ -1317,6 +1502,7 @@ window.TLIBuilder = (function () {
   }
 
   async function rollbackSnapshot() {
+    if (unavailable()) return;
     const snapshotId = (el("builder-rollback-id")?.value || "").trim();
     if (!snapshotId) { toast("Enter a snapshot ID first.", "warning"); return; }
     if (!el("builder-rollback-approved")?.checked) { toast("Confirm rollback approval first.", "warning"); return; }
@@ -1351,6 +1537,7 @@ window.TLIBuilder = (function () {
   }
 
   async function runCommand() {
+    if (unavailable()) return;
     const command = (el("builder-command-input")?.value || "").trim();
     if (!command) { toast("Enter a command first.", "warning"); return; }
     if (!el("builder-command-approved")?.checked) { toast("Confirm command approval first.", "warning"); return; }
@@ -1679,7 +1866,7 @@ window.TLIBuilder = (function () {
   function updateApplyButton() {
     const btn = el("builder-apply-patch-btn");
     if (!btn) return;
-    btn.disabled = !(state.lastDiff?.id && !state.lastDiff?.applied && el("builder-apply-approved")?.checked);
+    btn.disabled = state.locked || !(state.lastDiff?.id && !state.lastDiff?.applied && el("builder-apply-approved")?.checked);
   }
 
   function populateFileOptions(extraFiles) {
@@ -1746,6 +1933,7 @@ window.TLIBuilder = (function () {
   }
 
   function setup() {
+    if (state.bound) return; state.bound = true;
     // Project picker
     el("builder-backend-pill")?.addEventListener("click", () => {
       warmBackend();
@@ -1787,9 +1975,7 @@ window.TLIBuilder = (function () {
     el("builder-new-project-open-btn")?.addEventListener("click", (event) => {
       event.stopPropagation();
       openProjectMenu(true);
-      const details = document.querySelector(".builder-new-project");
-      if (details) details.open = true;
-      setTimeout(() => el("builder-new-parent")?.focus(), 0);
+      setTimeout(() => el("builder-chat-project-path")?.focus(), 0);
     });
     el("builder-attach-btn")?.addEventListener("click", () => el("builder-attach-input")?.click());
     el("builder-attach-input")?.addEventListener("change", (event) => handleAttachmentFiles(event.target.files));
@@ -1815,21 +2001,23 @@ window.TLIBuilder = (function () {
         }
       });
     }
+    document.querySelectorAll("[data-builder-mode]").forEach(btn => {
+      btn.addEventListener("click", () => setMode(btn.getAttribute("data-builder-mode")));
+    });
+    el("builder-start-btn")?.addEventListener("click", startSelectedMode);
     el("builder-chat-send-btn")?.addEventListener("click", sendBuilderMessage);
-    el("builder-code-change-btn")?.addEventListener("click", () => startBuild("build"));
-    el("builder-chat-plan-btn")?.addEventListener("click", () => startBuild("plan"));
-    el("builder-chat-task-btn")?.addEventListener("click", () => startBuild("inspect"));
     el("builder-chat-input")?.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        sendBuilderMessage();
+        startSelectedMode();
       }
     });
     document.querySelectorAll("[data-builder-prompt]").forEach(btn => {
       btn.addEventListener("click", () => {
         const input = el("builder-chat-input");
-        if (input) {
-          input.value = btn.getAttribute("data-builder-prompt") || "";
+        if (input && !state.locked) {
+          const prompt = btn.getAttribute("data-builder-prompt") || '';
+          input.value = input.value.trim() ? input.value + '\n\n' + prompt : prompt;
           input.focus();
         }
       });
@@ -1843,18 +2031,7 @@ window.TLIBuilder = (function () {
       state.goldenGuard = !!event.target.checked;
     });
 
-    // Advanced workbench bindings (kept intact)
-    document.querySelectorAll(".builder-tab[data-builder-tab]").forEach(btn => {
-      btn.addEventListener("click", () => switchBuilderView(btn.dataset.builderTab));
-    });
-    el("builder-scan-btn")?.addEventListener("click", () => {
-      const dup = el("builder-project-path")?.value || "";
-      const target = el("builder-chat-project-path");
-      if (target && dup) target.value = dup;
-      scanProject();
-    });
-    el("builder-analyze-btn")?.addEventListener("click", analyze);
-    el("builder-plan-btn")?.addEventListener("click", createPlan);
+    // Power tools bindings. The removed tabbed workbench is intentionally not wired here.
     el("builder-generate-diff-btn")?.addEventListener("click", generateDiff);
     el("builder-copy-diff-btn")?.addEventListener("click", copyDiff);
     el("builder-apply-patch-btn")?.addEventListener("click", applyPatch);
@@ -1862,17 +2039,21 @@ window.TLIBuilder = (function () {
     el("builder-load-snapshots-btn")?.addEventListener("click", loadSnapshots);
     el("builder-rollback-btn")?.addEventListener("click", rollbackSnapshot);
     el("builder-run-command-btn")?.addEventListener("click", runCommand);
-    el("builder-create-task-btn")?.addEventListener("click", createAgentTask);
-    el("builder-refresh-tasks-btn")?.addEventListener("click", loadTasks);
-    el("builder-advance-task-btn")?.addEventListener("click", advanceSelectedTask);
-    el("builder-pause-task-btn")?.addEventListener("click", () => updateSelectedTaskStatus("paused"));
-    el("builder-cancel-task-btn")?.addEventListener("click", () => updateSelectedTaskStatus("cancelled"));
-    el("builder-refresh-map-btn")?.addEventListener("click", () => loadProjectMap(true));
 
     // Panel switch trigger
     document.addEventListener("tli-panel-switched", (event) => {
       if (event.detail?.panelId === "panel-builder") onOpen();
+      else if (backendPollTimer) { clearInterval(backendPollTimer); backendPollTimer = null; }
     });
+    window.addEventListener('tli-session-locked', clearPrivate);
+    window.addEventListener('pagehide', clearPrivate);
+    window.addEventListener('tli-session-unlocked', () => {
+      state.locked = false;
+      setBusy('builder-chat-send-btn', false, 'Ask'); setBusy('builder-start-btn', false, 'Start');
+      if (el('panel-builder') && !el('panel-builder').hidden) onOpen();
+    });
+    renderModeControls();
+    renderReadiness();
     if (document.getElementById("panel-builder") && !document.getElementById("panel-builder").hidden) {
       onOpen();
     }
@@ -1881,6 +2062,7 @@ window.TLIBuilder = (function () {
   let backendPollTimer = null;
 
   function onOpen() {
+    if (unavailable()) return;
     if (!state.statusLoaded) loadStatus();
     else {
       loadTasks();
@@ -1888,7 +2070,7 @@ window.TLIBuilder = (function () {
       loadSnapshots();
     }
     backendPillRefresh();
-    warmBackend();
+    // Opening a workspace only reads status. Explicit task/start controls own inference.
     if (backendPollTimer) clearInterval(backendPollTimer);
     backendPollTimer = setInterval(backendPillRefresh, BACKEND_POLL_MS);
   }

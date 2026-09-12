@@ -1,0 +1,13 @@
+.storage-history { margin: 12px 0; padding: 16px; min-width: 0; overflow-wrap: anywhere; }
+.storage-history h3 { margin: 0 0 8px; color: var(--text-main); font-size: 16px; }
+.storage-history p { margin: 8px 0; line-height: 1.5; font-size: 13px; }
+.storage-history-controls { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.storage-history label { display: block; margin: 12px 0 8px; font-size: 13px; }
+.storage-history select { display: block; width: 100%; max-width: 100%; margin: 6px 0; padding: 8px; border-radius: 8px;
+  color: var(--text-main); background: var(--bg-elevated); border: 1px solid var(--border-subtle); }
+.storage-history button { max-width: 100%; white-space: normal; }
+#storage-history-remove, #storage-history-remove-review button { margin: 4px 6px 4px 0; }
+#storage-history-result { min-width: 0; font-size: 13px; line-height: 1.5; }
+#storage-history-result ol { max-height: 360px; overflow-y: auto; padding-left: 22px; }
+#storage-history-result li { margin: 8px 0; }
+#storage-history-current, #storage-history-status { color: var(--text-soft); }

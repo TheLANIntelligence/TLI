@@ -5,13 +5,14 @@ import json
 import os
 import re
 import shutil
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, Request
 from pydantic import BaseModel
 import platform
 import subprocess
@@ -27,6 +28,7 @@ except Exception:
 from routers.system_routes import require_session
 
 router = APIRouter(tags=["files"])
+FILE_MUTATION_LOCK = threading.RLock()
 
 
 # ============================================
@@ -38,9 +40,16 @@ class FileOrganizeRequest(BaseModel):
     path: str
     actions: Dict[str, List[str]]
     confirm: bool = False
+    preview_id: Optional[str] = None
 class FileRenameRequest(BaseModel):
     path: str
     prefix: str
+    confirm: bool = True  # Old direct callers still receive complete backend preflight.
+    preview_id: Optional[str] = None
+class FileUndoRequest(BaseModel):
+    confirm: bool = True
+    preview_id: Optional[str] = None
+    operation_id: Optional[str] = None
 class FilesScanRequest(BaseModel):
     root: str
 class FilesApplyRulesRequest(BaseModel):
@@ -322,11 +331,12 @@ def _is_protected_path(p):
 # ============================================
 
 @router.get("/scan_directory")
-def scan_directory(path: str = Query(...), max_depth: int = 6):
-    root = _resolve_scan_path(path)
-    tree = _build_directory_tree(root, max_depth=max_depth)
-    tree["path"] = str(root)
-    return tree
+def scan_directory(request: Request, response: Response, path: str = Query(...), max_depth: int = Query(6, ge=1, le=30),
+                   _session=Depends(require_session)):
+    import storage_jobs
+    response.headers["Cache-Control"] = "no-store"
+    return storage_jobs.sync(storage_jobs.access(request, _session), "scan", path,
+                             limits={"max_seconds": 15, "max_entries": 50_000, "max_depth": max_depth})["tree"]
 
 
 @router.post("/open_path")
@@ -377,11 +387,16 @@ def open_reveal(payload: dict, _session=Depends(require_session)):
 
 @router.post("/fs/delete")
 def delete_path(payload: dict, _session=Depends(require_session)):
+    with FILE_MUTATION_LOCK:
+        return _delete_path_locked(payload)
+
+
+def _delete_path_locked(payload):
     """
     Safe delete — always moves to Recycle Bin / Trash via send2trash.
     Directories are NEVER permanently deleted through this endpoint.
-    Use /visualizer/delete with permanent=true for explicit permanent file deletion
-    (still gated by _is_protected_path and only allowed for individual files).
+    Free Space cleanup uses a separate explicit review; its legacy direct-delete
+    shortcut is nonexecuting. This File Organizer endpoint remains Trash-only.
     """
     raw = payload.get("path")
     if not raw or not isinstance(raw, str):
@@ -428,106 +443,32 @@ def file_scan(req: FileScanRequest):
     return {"path": str(p), "total_files": total_files, "buckets": buckets}
 
 
+@router.get("/file/operations/capabilities")
+def file_operation_capabilities(response: Response, _session=Depends(require_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True, "protocol": "reviewed-file-operations-v1"}
+
+
 @router.post("/file/organize")
-def file_organize(req: FileOrganizeRequest, _session=Depends(require_session)):
-    base_path = expand_base_path(req.path)
-    p = Path(base_path)
-    if not p.exists() or not p.is_dir():
-        raise HTTPException(status_code=400, detail="Base path must be an existing directory")
-    plan: Dict[str, List[str]] = {}
-    for dest_name, filenames in (req.actions or {}).items():
-        if not dest_name:
-            continue
-        dest_dir = p / dest_name.strip()
-        safe_files = [os.path.basename(fname) for fname in filenames if os.path.basename(fname)]
-        if safe_files:
-            plan[str(dest_dir)] = safe_files
-    if not plan:
-        return {"path": str(p), "plan": {}, "moved_count": 0, "preview": not req.confirm}
-    if not req.confirm:
-        return {"path": str(p), "plan": plan, "moved_count": 0, "preview": True}
-    moves = []
-    moved_count = 0
-    for dest_dir_str, files in plan.items():
-        dest_dir = Path(dest_dir_str)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        for fname in files:
-            src = p / fname
-            if not src.is_file():
-                continue
-            dst = dest_dir / fname
-            try:
-                shutil.move(str(src), str(dst))
-                moves.append({"src": str(src), "dst": str(dst)})
-                moved_count += 1
-            except Exception:
-                continue
-    if moved_count > 0:
-        S.save_last_file_operation({"type": "organize", "timestamp": datetime.utcnow().isoformat(),
-                                     "moves": moves, "renames": []})
-    return {"path": str(p), "plan": plan, "moved_count": moved_count, "preview": False}
+def file_organize(req: FileOrganizeRequest, user=Depends(require_session)):
+    import file_operations
+    return file_operations.request("organize", user, {"path": req.path, "actions": req.actions},
+                                   confirm=req.confirm, preview_id=req.preview_id)
 
 
 @router.post("/file/rename")
-def file_rename(req: FileRenameRequest, _session=Depends(require_session)):
-    base_path = expand_base_path(req.path)
-    p = Path(base_path)
-    if not p.exists() or not p.is_dir():
-        raise HTTPException(status_code=400, detail="Path must be an existing directory")
-    prefix = req.prefix.strip()
-    if not prefix:
-        raise HTTPException(status_code=400, detail="Prefix cannot be empty")
-    files = sorted([f for f in p.iterdir() if f.is_file()])
-    if not files:
-        return {"count": 0, "renamed": []}
-    width = len(str(len(files)))
-    renames = []
-    count = 0
-    for idx, f in enumerate(files, start=1):
-        ext = f.suffix
-        new_name = f"{prefix}_{str(idx).zfill(width)}{ext}"
-        new_path = p / new_name
-        try:
-            f.rename(new_path)
-            renames.append({"old": str(f), "new": str(new_path)})
-            count += 1
-        except Exception:
-            continue
-    if count > 0:
-        S.save_last_file_operation({"type": "rename", "timestamp": datetime.utcnow().isoformat(),
-                                     "moves": [], "renames": renames})
-    return {"count": count, "renamed": renames}
+def file_rename(req: FileRenameRequest, user=Depends(require_session)):
+    import file_operations
+    return file_operations.request("rename", user, {"path": req.path, "prefix": req.prefix},
+                                   confirm=req.confirm, preview_id=req.preview_id)
 
 
 @router.post("/file/undo")
-def file_undo():
-    op = S.load_last_file_operation()
-    if not op:
-        return {"message": "No previous file operation to undo.", "undone": 0}
-    undone = 0
-    for mv in op.get("moves", []):
-        src = Path(mv.get("dst", ""))
-        dst = Path(mv.get("src", ""))
-        if not src.is_file():
-            continue
-        try:
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(src), str(dst))
-            undone += 1
-        except Exception:
-            continue
-    for rn in op.get("renames", []):
-        new_path = Path(rn.get("new", ""))
-        old_path = Path(rn.get("old", ""))
-        if not new_path.exists():
-            continue
-        try:
-            old_path.parent.mkdir(parents=True, exist_ok=True)
-            new_path.rename(old_path)
-            undone += 1
-        except Exception:
-            continue
-    return {"message": f"Reverted last '{op.get('type', 'unknown')}' operation.", "undone": undone}
+def file_undo(req: Optional[FileUndoRequest] = None, user=Depends(require_session)):
+    import file_operations
+    req = req or FileUndoRequest()
+    return file_operations.request("undo", user, {"operation_id": req.operation_id},
+                                   confirm=req.confirm, preview_id=req.preview_id)
 
 
 @router.post("/files/scan")
@@ -700,61 +641,36 @@ def files_insight(req: FilesScanRequest):
 # ============================================
 
 @router.get("/visualizer/treemap")
-def visualizer_treemap(path: str = Query(...), width: int = Query(1200, ge=200, le=8000),
-                        height: int = Query(700, ge=200, le=8000), max_children: int = Query(1200, ge=50, le=5000)):
-    root = _resolve_scan_path(path)
-    tree = _build_directory_tree(root, max_depth=1)
-    items = []
-    for ch in (tree.get("children") or []):
-        name = ch.get("name")
-        if not name:
-            continue
-        cp = root / name
-        kind = "dir" if cp.is_dir() else "file"
-        items.append({"name": name, "path": str(cp), "size": int(ch.get("size", 0) or 0), "kind": kind})
+def visualizer_treemap(request: Request, response: Response, path: str = Query(...), width: int = Query(1200, ge=200, le=8000),
+                        height: int = Query(700, ge=200, le=8000), max_children: int = Query(1200, ge=50, le=5000),
+                        _session=Depends(require_session)):
+    import storage_jobs
+    response.headers["Cache-Control"] = "no-store"
+    tree = storage_jobs.sync(storage_jobs.access(request, _session), "scan", path,
+                             limits={"max_seconds": 15, "max_entries": 50_000, "max_depth": 1})["tree"]
+    root = tree["path"]
+    items = [{"name": ch["name"], "path": ch["path"], "size": ch["size"],
+              "kind": "virtual" if ch.get("synthetic") else "dir" if "children" in ch else "file",
+              "deletable": False, "delete_reason": "Use an explicitly reviewed Free Space selection"}
+             for ch in tree.get("children", [])]
     items.sort(key=lambda x: x["size"], reverse=True)
     if len(items) > max_children:
-        keep = items[:max_children - 1]
         tail = items[max_children - 1:]
-        tail_size = sum(int(x.get("size", 0) or 0) for x in tail)
-        keep.append({"name": "Other", "path": str(root), "size": int(tail_size), "kind": "virtual"})
-        items = keep
-    enriched = []
-    for it in items:
-        it2 = dict(it)
-        if it2.get("kind") == "virtual":
-            it2["deletable"] = False; it2["delete_reason"] = "Virtual bucket"
-        else:
-            reason = _is_protected_path(Path(it2["path"]))
-            it2["deletable"] = not bool(reason); it2["delete_reason"] = reason or ""
-        enriched.append(it2)
-    nodes = _squarify(enriched, 0.0, 0.0, float(width), float(height))
-    return {"ok": True, "root_path": str(root), "width": width, "height": height, "nodes": nodes}
+        items = items[:max_children - 1] + [{"name": "Other", "path": root, "size": sum(x["size"] for x in tail),
+                    "kind": "virtual", "deletable": False, "delete_reason": "Virtual bucket"}]
+    return {"ok": True, "root_path": root, "width": width, "height": height,
+            "nodes": _squarify(items, 0.0, 0.0, float(width), float(height))}
 
 
 @router.post("/visualizer/delete")
 def visualizer_delete(req: VisualizerDeleteRequest, _session=Depends(require_session)):
-    """
-    Visualizer delete. Default (permanent=false) moves to Recycle Bin / Trash.
-    permanent=true is only allowed for individual files, never directories.
-    """
-    p = Path(req.path).expanduser()
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="Path not found")
-    reason = _is_protected_path(p)
-    if reason:
-        raise HTTPException(status_code=403, detail=reason)
-    # Permanent deletion of directories is always refused — too dangerous
-    if req.permanent and p.is_dir():
-        raise HTTPException(
-            status_code=400,
-            detail="Permanent deletion of directories is not allowed. Use trash (permanent=false) instead."
-        )
-    if not req.permanent:
-        if send2trash is None:
-            raise HTTPException(status_code=501, detail="send2trash not installed")
-        send2trash(str(p.resolve()))
-        return {"ok": True, "trashed": True}
-    # permanent=true, individual file only
-    p.unlink()
-    return {"ok": True, "trashed": False}
+    return _visualizer_delete_locked(req)
+
+
+def _visualizer_delete_locked(req):
+    """Retained compatibility endpoint: never inspects or changes a path."""
+    raise HTTPException(409, detail={
+        "code": "review_required", "review_required": True,
+        "navigate_to": "panel-visualizer",
+        "message": "Open Free Space, select individual files, and review them before moving anything to Trash. This legacy shortcut does not move or delete files.",
+    })

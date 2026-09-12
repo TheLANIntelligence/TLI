@@ -1,630 +1,322 @@
 // ---------- VISUALIZER (Treemap + filters) ----------
-// Open a file/folder on the host OS
-async function openPathOnHost(fullPath) {
-  if (!fullPath) return;
-  try {
-    const resp = await fetch("/open_path", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: fullPath })
-    });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      throw new Error("HTTP " + resp.status + (txt ? " · " + txt : ""));
-    }
-    try { if (typeof showToast === "function") showToast("Revealed in file manager:\n" + fullPath); } catch {}
-    console.log("[VIS] Opened path on host:", fullPath);
-    try { if (typeof showToast === "function") showToast("Opened on host:\n" + fullPath); } catch {}
-  } catch (err) {
-    console.error("[VIS] Failed to open path:", err);
-    showToast("Could not open this path in Explorer/Finder:\n" + err.message);
+// ---------- Explicit saved storage observations ----------
+(function () {
+  const protocol = "storage-history-v1";
+  let current = null, saved = [], busy = false, epoch = 0, initialized = false, pendingRemove = null;
+  const $ = id => document.getElementById(id);
+  const node = (tag, text, id) => { const el = document.createElement(tag); if (text) el.textContent = text; if (id) el.id = id; return el; };
+  const integer = value => Number.isSafeInteger(value) && value >= 0;
+  const validSummary = value => value && /^[a-f0-9]{32}$/.test(value.id) && value.version === 1 &&
+    typeof value.root === "string" && typeof value.scanned_at === "string" && Number.isFinite(Date.parse(value.scanned_at)) &&
+    typeof value.host?.id === "string" && typeof value.host.name === "string" &&
+    ["known", "unknown", "changed"].includes(value.drive?.status) &&
+    (value.drive.status !== "known" || /^[a-f0-9]{64}$/.test(value.drive.fingerprint)) &&
+    typeof value.coverage?.complete === "boolean" && Array.isArray(value.coverage.reasons) && value.coverage.reasons.every(r => typeof r === "string") &&
+    integer(value.total_bytes) && integer(value.direct_file_bytes) &&
+    integer(value.filters?.max_depth) && integer(value.filters.max_entries) && integer(value.filters.max_seconds) &&
+    value.filters.follow_links === false && Array.isArray(value.filters.excluded_names) && value.filters.excluded_names.every(n => typeof n === "string");
+  const validScan = value => value?.protocol === protocol && value.available === true && value.version === 1 &&
+    /^[a-f0-9]{32}$/.test(value.scan_id) && validSummary(value.summary) && value.summary.id === value.scan_id &&
+    typeof value.expires_at === "number" && Number.isFinite(value.expires_at);
+  const bytes = value => {
+    const sign = value < 0 ? "−" : ""; let amount = Math.abs(value), unit = 0;
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; }
+    return sign + amount.toLocaleString(undefined, {maximumFractionDigits: unit ? 1 : 0}) + " " + units[unit];
+  };
+  const delta = value => (value > 0 ? "+" : "") + bytes(value);
+  const date = value => new Date(value).toLocaleString();
+  function status(message) { if ($("storage-history-status")) $("storage-history-status").textContent = message; }
+  function controls() {
+    if (!initialized) return;
+    const available = current && current.expires_at * 1000 > Date.now();
+    $("storage-history-save").disabled = busy || !available || saved.some(s => s.id === current.scan_id);
+    $("storage-history-load").disabled = busy;
+    $("storage-history-baseline").disabled = busy || !saved.length;
+    $("storage-history-remove").disabled = busy || !$("storage-history-baseline").value;
+    const removeConfirm = $("storage-history-remove-confirm"); if (removeConfirm) removeConfirm.disabled = busy;
+    $("storage-history-compare").disabled = busy || !available || !$("storage-history-baseline").value || $("storage-history-baseline").value === current?.scan_id;
   }
+  function list() {
+    const select = $("storage-history-baseline"), selected = select.value;
+    select.replaceChildren(node("option", "Choose a saved scan")); select.children[0].value = "";
+    for (const summary of saved) {
+      const option = node("option", `${date(summary.scanned_at)} · ${summary.root} · ${summary.coverage.complete ? "Complete coverage" : "Partial coverage"}`);
+      option.value = summary.id; select.appendChild(option);
+    }
+    select.value = saved.some(row => row.id === selected) ? selected : saved.find(row => row.id !== current?.scan_id)?.id || "";
+    controls();
+  }
+  function describe(summary, label) {
+    const line = node("p", `${label}: ${summary.root} · ${date(summary.scanned_at)} · ${summary.host.name} · ${bytes(summary.total_bytes)} inspected file bytes.`);
+    line.appendChild(node("span", summary.coverage.complete ? " Coverage complete within the recorded scan policy." :
+      " Partial coverage: " + summary.coverage.reasons.join("; ") + "."));
+    if (summary.drive.status !== "known") line.appendChild(node("span", " Drive/folder identity unavailable or changed; comparison is blocked."));
+    return line;
+  }
+  async function request(url, payload, method) {
+    const res = await fetch(url, method === "DELETE" ? {method} : payload ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)} :
+      {method: "GET", cache: "no-store"});
+    let data; try { data = await res.json(); } catch { throw new Error("The host returned an unreadable result."); }
+    if (!res.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Request failed (${res.status}).`);
+    if (data?.ok !== true || data.protocol !== protocol) throw new Error("This running TLI host does not confirm saved-scan support. Restart the updated backend and scan again.");
+    return data;
+  }
+  async function act(fn) {
+    if (busy) return;
+    busy = true; controls(); const revision = epoch;
+    try { await fn(revision); } catch (error) { if (revision === epoch) status(error.message + " No scan or retry ran automatically."); }
+    finally { if (revision === epoch) { busy = false; controls(); } }
+  }
+  function save() {
+    if (!validScan(current) || current.expires_at * 1000 <= Date.now()) { status("Scan the folder again before saving; this observation is unavailable or expired."); return; }
+    const scan = current;
+    return act(async revision => {
+      const data = await request("/visualizer/history/save", {scan_id: scan.scan_id, version: 1});
+      if (revision !== epoch) return;
+      if (data.saved !== true || !validSummary(data.snapshot) || data.snapshot.id !== scan.scan_id ||
+          data.snapshot.root !== scan.summary.root || data.snapshot.scanned_at !== scan.summary.scanned_at ||
+          data.snapshot.total_bytes !== scan.summary.total_bytes) throw new Error("Saving this scan was not confirmed. Reload saved scans before trying again.");
+      saved = [data.snapshot, ...saved.filter(s => s.id !== data.snapshot.id)]; list();
+      status("Scan summary saved for this account. No files or file contents were copied. Partial observations cannot establish growth.");
+    });
+  }
+  function load() {
+    return act(async revision => {
+      const data = await request("/visualizer/history");
+      if (revision !== epoch) return;
+      if (!Array.isArray(data.snapshots) || data.snapshots.length > 20 || !data.snapshots.every(validSummary) ||
+          new Set(data.snapshots.map(s => s.id)).size !== data.snapshots.length) throw new Error("Saved scan history has an invalid format; it was not displayed.");
+      saved = data.snapshots; list(); status(`${saved.length} of 20 saved summaries loaded. Select an earlier scan to compare.`);
+    });
+  }
+  function cancelRemove() {
+    pendingRemove = null; $("storage-history-remove-review")?.replaceChildren();
+  }
+  function reviewRemove() {
+    if (busy) return;
+    const selected = saved.find(row => row.id === $("storage-history-baseline").value);
+    if (!selected) return;
+    pendingRemove = selected.id;
+    const box = $("storage-history-remove-review");
+    box.replaceChildren(node("p", `Remove the saved summary for ${selected.root}, observed ${date(selected.scanned_at)}? Only this summary will be removed. The folder and its files will not be touched.`));
+    const confirm = node("button", "Remove this saved summary", "storage-history-remove-confirm"); confirm.className = "pill-btn ghost";
+    confirm.addEventListener("click", () => {
+      if (pendingRemove !== selected.id || $("storage-history-baseline").value !== selected.id) return;
+      return act(async revision => {
+        const data = await request("/visualizer/history/" + selected.id, null, "DELETE");
+        if (revision !== epoch) return;
+        if (data.deleted !== true || data.snapshot_id !== selected.id) throw new Error("Removal of the saved summary was not confirmed. Reload saved scans before trying again.");
+        saved = saved.filter(row => row.id !== selected.id); cancelRemove(); list();
+        $("storage-history-result").replaceChildren(); status("Saved summary removed. The folder and its files were not changed.");
+      });
+    });
+    const cancel = node("button", "Cancel"); cancel.className = "pill-btn ghost"; cancel.addEventListener("click", cancelRemove);
+    box.append(confirm, cancel);
+  }
+  function compare() {
+    const baselineId = $("storage-history-baseline").value, scan = current;
+    if (!validScan(scan) || scan.expires_at * 1000 <= Date.now() || !saved.some(s => s.id === baselineId)) {
+      status("Select a saved baseline and scan the folder again if the current observation expired."); return;
+    }
+    return act(async revision => {
+      const data = await request("/visualizer/history/compare", {baseline_id: baselineId, scan_id: scan.scan_id, version: 1});
+      if (revision !== epoch) return;
+      if (typeof data.comparable !== "boolean" || data.point_in_time !== true || !validSummary(data.baseline) || !validSummary(data.current) ||
+          data.baseline.id !== baselineId || data.current.id !== scan.scan_id || !Array.isArray(data.reasons) ||
+          data.reasons.some(r => typeof r !== "string") || !Array.isArray(data.folders) || data.folders.length > 200) throw new Error("The comparison result could not be validated.");
+      if (data.comparable && (!data.baseline.coverage.complete || !data.current.coverage.complete || data.reasons.length ||
+          data.baseline.root !== data.current.root || data.baseline.host.id === "unknown" || data.baseline.host.id !== data.current.host.id ||
+          data.baseline.drive.status !== "known" || data.current.drive.status !== "known" || data.baseline.drive.fingerprint !== data.current.drive.fingerprint ||
+          Date.parse(data.baseline.scanned_at) >= Date.parse(data.current.scanned_at) ||
+          ["max_depth", "max_entries", "max_seconds"].some(k => data.baseline.filters[k] !== data.current.filters[k]) ||
+          data.baseline.filters.excluded_names.join("\0") !== data.current.filters.excluded_names.join("\0") ||
+          !integer(data.totals?.before_bytes) || !integer(data.totals.after_bytes) || !Number.isSafeInteger(data.totals.delta_bytes) ||
+          !Number.isSafeInteger(data.totals.direct_file_delta_bytes) || data.totals.delta_bytes !== data.totals.after_bytes - data.totals.before_bytes ||
+          data.totals.before_bytes !== data.baseline.total_bytes || data.totals.after_bytes !== data.current.total_bytes ||
+          data.totals.direct_file_delta_bytes !== data.current.direct_file_bytes - data.baseline.direct_file_bytes ||
+          data.folders.some(row => !row || typeof row.name !== "string" || !["grew", "shrank", "newly_observed", "not_observed"].includes(row.status) ||
+            (row.before_bytes !== null && !integer(row.before_bytes)) || (row.after_bytes !== null && !integer(row.after_bytes)) ||
+            (row.status === "newly_observed" ? row.before_bytes !== null || !integer(row.after_bytes) || row.delta_bytes !== null :
+              row.status === "not_observed" ? row.after_bytes !== null || !integer(row.before_bytes) || row.delta_bytes !== null :
+                !integer(row.before_bytes) || !integer(row.after_bytes) || !Number.isSafeInteger(row.delta_bytes) ||
+                row.delta_bytes !== row.after_bytes - row.before_bytes || (row.status === "grew" ? row.delta_bytes <= 0 : row.delta_bytes >= 0))))) throw new Error("Growth was not confirmed by a consistent comparison result.");
+      if (!data.comparable && (data.totals !== null || data.folders.length || !data.reasons.length)) throw new Error("An incomplete comparison returned unsupported growth claims.");
+      const box = $("storage-history-result"); box.replaceChildren(describe(data.baseline, "Saved baseline"), describe(data.current, "Current observation"));
+      if (!data.comparable) {
+        box.appendChild(node("p", "Comparison unavailable: " + data.reasons.join(" ")));
+      } else {
+        box.appendChild(node("strong", `Inspected file bytes changed by ${delta(data.totals.delta_bytes)} (${bytes(data.totals.before_bytes)} → ${bytes(data.totals.after_bytes)}).`));
+        box.appendChild(node("p", `Files directly in this folder changed by ${delta(data.totals.direct_file_delta_bytes)}.`));
+        const rows = node("ol");
+        for (const item of data.folders) {
+          const change = item.status === "newly_observed" ? `Newly observed · ${bytes(item.after_bytes)}` :
+            item.status === "not_observed" ? `Not observed in the later scan · previously ${bytes(item.before_bytes)}` :
+            `${item.status === "grew" ? "Grew" : "Shrank"} ${delta(item.delta_bytes)} · ${bytes(item.before_bytes)} → ${bytes(item.after_bytes)}`;
+          rows.appendChild(node("li", `${item.name}: ${change}`));
+        }
+        box.appendChild(rows);
+        if (!data.folders.length) box.appendChild(node("p", "No immediate-folder size changes were observed."));
+        if (data.folders_limited) box.appendChild(node("p", "Only the largest 200 changed folder entries are shown."));
+        box.appendChild(node("p", "Newly observed and not observed names may reflect renames or moves; they do not prove creation or deletion."));
+      }
+      box.appendChild(node("p", "Point-in-time observations only. This did not check whether the drive is currently connected. File sizes can differ from space used on disk. No files were changed."));
+      status(data.comparable ? "Comparison ready." : "Comparison unavailable; no growth or shrinkage is claimed.");
+    });
+  }
+  function beginScan(preservePrevious = false) {
+    epoch++; busy = preservePrevious;
+    if (!preservePrevious) current = null;
+    if (initialized) {
+      cancelRemove();
+      if (!preservePrevious) { $("storage-history-current").replaceChildren(); $("storage-history-result").replaceChildren(); }
+      status(preservePrevious ? "A new scan is running. The previous observation stays visible until it succeeds." : "Finish a new scan to save or compare its observation."); controls();
+    }
+  }
+  function scanFailed() {
+    busy = false;
+    if (initialized) { status(current ? "The new scan failed. The previous observation is retained with its original scan time and expiry." : "No new observation was saved. Retry the scan when the folder is available."); controls(); }
+  }
+  function receiveScan(data) {
+    beginScan();
+    if (!initialized) return;
+    const scan = data?.meta?.saved_scan;
+    if (!validScan(scan)) { status("Saving and comparison require a scan from the updated TLI backend. Existing scan results remain available."); return; }
+    current = scan;
+    const info = $("storage-history-current"); info.appendChild(describe(scan.summary, "Latest scan"));
+    const filters = scan.summary.filters;
+    info.appendChild(node("p", `Policy: depth ${filters.max_depth}, up to ${filters.max_entries.toLocaleString()} entries, ${filters.max_seconds} seconds; links excluded. Excluded names: ${filters.excluded_names.join(", ") || "none"}.`));
+    status("Save this observation explicitly, or compare it with an earlier saved scan. The current summary expires after 30 minutes."); controls();
+  }
+  function setup() {
+    if (initialized || !$("vis4-summary")) return;
+    initialized = true;
+    const box = node("section", "", "storage-history"); box.className = "storage-history card-section"; box.setAttribute("aria-labelledby", "storage-history-title");
+    box.append(node("h3", "What grew?", "storage-history-title"),
+      node("p", "Explicitly save a folder scan, then compare a later scan. History is private to this account. These summaries use the full scanned scope; map and display filters do not change saved totals."),
+      node("div", "", "storage-history-current"));
+    const buttons = node("div"); buttons.className = "storage-history-controls";
+    for (const [id, label, action] of [["storage-history-save", "Save scan", save], ["storage-history-load", "Load saved scans", load]]) {
+      const button = node("button", label, id); button.className = "pill-btn ghost"; button.addEventListener("click", action); buttons.appendChild(button);
+    }
+    const label = node("label", "Compare against saved scan ");
+    const select = node("select", "", "storage-history-baseline"); select.addEventListener("change", () => { cancelRemove(); controls(); }); label.appendChild(select);
+    const button = node("button", "Compare", "storage-history-compare"); button.className = "pill-btn primary"; button.addEventListener("click", compare);
+    const remove = node("button", "Remove selected saved scan", "storage-history-remove"); remove.className = "pill-btn ghost"; remove.addEventListener("click", reviewRemove);
+    const message = node("p", "Scan a folder to begin.", "storage-history-status"); message.setAttribute("role", "status");
+    box.append(buttons, label, button, remove, node("div", "", "storage-history-remove-review"), message, node("div", "", "storage-history-result"));
+    if ($("fs-view-history")) $("fs-view-history").append(box); else $("vis4-summary").after(box); list(); controls();
+    const clear = () => { beginScan(); saved = []; list(); status(""); };
+    window.addEventListener("tli-session-locked", clear); window.addEventListener("pagehide", event => { if (!event.persisted) clear(); });
+  }
+  window.TLIStorageHistory = {setup, beginScan, receiveScan, scanFailed};
+})();
+// ---------- End saved storage observations ----------
+function visEscape(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[c]);
 }
 
-async function revealPathOnHost(fullPath) {
-  if (!fullPath) return;
-  try {
-    const resp = await fetch("/open_reveal", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: fullPath })
-    });
-    if (!resp.ok) {
-      const txt = await resp.text().catch(() => "");
-      throw new Error("HTTP " + resp.status + (txt ? " · " + txt : ""));
-    }
-  } catch (err) {
-    console.error("[VIS] Reveal failed:", err);
-    showToast("Could not reveal this path:\n" + (err?.message || err));
-  }
+async function visFetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Request failed (${response.status}).`);
+  return response.json();
 }
 
-// Delete a file/folder on the host OS
-// deletePathOnHost — defined once below
+function visScanFailure(error, received = false) {
+  if (received) return "The scan returned, but its results could not be displayed. Refresh TLI and try again.";
+  if (error.status === 401) return "Your TLI session expired. Unlock TLI, then try again.";
+  if (error.status === 403) return "TLI denied access to this scan. Check your session and access permissions.";
+  if (error.status === 404) return "The folder or scan endpoint was not found. Check the path on the TLI host; if you just updated TLI, restart its backend.";
+  if (error.status === 400) return "The scan path was rejected. Choose an existing folder on the TLI host.";
+  if (error.status === 422) return "The backend rejected the scan request. If you just updated TLI, restart its backend and refresh this page.";
+  if (error.status >= 500) return `The TLI backend could not complete the scan (HTTP ${error.status}). If you just updated TLI, restart its backend and retry.`;
+  return "The scan connection failed or returned an invalid response. Check that TLI is running, then retry.";
+}
+
+// Review candidates are not a claim that these bytes can safely be reclaimed.
+function visReview(tree) {
+  const files = [];
+  let protectedBytes = 0;
+  const visit = (node, inherited = false) => {
+    if (!node || node.synthetic) return;
+    const protectedPath = inherited || node.protected || isProtectedSystemPathClient(node.path || "");
+    if (Array.isArray(node.children)) {
+      node.children.forEach(child => visit(child, protectedPath));
+    } else if (protectedPath) {
+      protectedBytes += Number(node.size) || 0;
+    } else if (node.size > 0) {
+      files.push(node);
+    }
+  };
+  visit(tree);
+  files.sort((a, b) => b.size - a.size);
+  return { files: files.slice(0, 3), protectedBytes };
+}
+
+function visCoverage(meta) {
+  if (!meta || typeof meta.partial !== "boolean") return "Scan coverage is unknown. Sizes represent only files inspected.";
+  const reasons = [];
+  if (meta.denied) reasons.push(`${meta.denied} unreadable ${meta.denied === 1 ? "entry" : "entries"}`);
+  if (meta.skipped) reasons.push(`${meta.skipped} excluded folders or links`);
+  if (meta.depth_limited) reasons.push("folder depth limit reached");
+  if (meta.entry_limited) reasons.push("entry limit reached");
+  if (meta.time_limited) reasons.push("time limit reached");
+  if (meta.cancelled) reasons.push("stopped before all entries were inspected");
+  const representation = meta.representation_limited ? " The returned tree is limited; some inspected paths are grouped or omitted. Select a smaller location and scan explicitly to inspect them." : "";
+  return (meta.partial
+    ? `Partial scan: ${reasons.join("; ") || "some entries were not inspected"}. Scan a specific folder for more detail.`
+    : "Scan finished within its limits. File sizes can differ from space used on disk.") + representation;
+}
+
+function visCleanupCoverage(target) {
+  if (target.size_partial === false) return "File sizes inspected; this is not a promise of reclaimable space.";
+  if (target.size_partial !== true) return "Estimate coverage is unknown. Review the folder before acting.";
+  const meta = target.size_meta || {};
+  const reasons = [];
+  if (meta.denied) reasons.push("some entries could not be read");
+  if (meta.skipped) reasons.push("links were skipped");
+  if (meta.time_limited) reasons.push("time limit reached");
+  if (meta.entry_limited) reasons.push("entry limit reached");
+  if (meta.byte_limited) reasons.push("size limit reached");
+  return `Partial estimate: ${reasons.join("; ") || "some entries were not inspected"}. Scan this folder for more detail.`;
+}
+
+function visDuplicateCoverage(meta) {
+  if (meta?.verification !== "full_sha256") return "These matches have not been verified by a full-content check. Restart the updated TLI backend and scan again before relying on them.";
+  const notes = ["Files of 4 KB or more; matching files were checked in full. Copies may be needed by separate apps or backups. Extra-copy bytes are not guaranteed recoverable space."];
+  if (meta.partial) {
+    const reasons = [];
+    if (meta.time_limited) reasons.push("time limit reached");
+    if (meta.entry_limited) reasons.push("entry limit reached");
+    if (meta.denied) reasons.push("some files could not be read");
+    if (meta.skipped) reasons.push("protected locations, excluded folders or links skipped");
+    if (meta.changed) reasons.push("files changed during the check");
+    notes.push(`Partial scan: ${reasons.join("; ") || "some files were not checked"}. Scan a smaller folder to continue reviewing.`);
+  }
+  if (meta.hardlinks_skipped) notes.push("Additional hard-link names were excluded from duplicate counts.");
+  if (meta.results_limited) notes.push("Only the largest 100 groups were returned.");
+  return notes.join(" ");
+}
+
 
 function getParentFolderPath(fullPath) {
   if (!fullPath) return fullPath;
+  if (/^[a-z]:[\\/]?$/i.test(fullPath)) return fullPath.slice(0, 2) + (fullPath.includes('/') ? '/' : '\\');
+  if (/^\/+$/u.test(fullPath)) return '/';
 
   // Strip trailing slashes first
   const norm = fullPath.replace(/[\\\/]+$/, "");
   const lastSlash = Math.max(norm.lastIndexOf("\\"), norm.lastIndexOf("/"));
 
   // If there's no parent, just return the normalized path
-  if (lastSlash <= 0) return norm;
+  if (lastSlash < 0) return norm;
+  if (lastSlash === 0) return norm.slice(0, 1);
+  if (lastSlash === 2 && /^[a-z]:/i.test(norm)) return norm.slice(0, 3);
 
   return norm.slice(0, lastSlash);
 }
 
-let lastVisualizerData = null;
-let treemapContextMenu = null;
-let treemapContextPath = null;
-let treemapContextIsDir = false;
-let treemapContextDeletable = true;  // false for system/protected paths
 
-// Windows drive-root system files — Delete must be hidden for these.
-const _WIN_SYSTEM_FILENAMES = new Set([
-  "hiberfil.sys", "pagefile.sys", "swapfile.sys",
-  "bootmgr", "bootnxt", "boot", "recovery",
-  "system volume information", "$recycle.bin",
-  "$windows.~bt", "$windows.~ws", "$winreagent",
-  "config.sys", "autoexec.bat",
-]);
-
-function _isSystemPath(fullPath) {
-  if (!fullPath) return false;
-  const norm  = fullPath.replace(/\\/g, "/");
-  const parts = norm.replace(/\/+$/, "").split("/");
-  const name  = (parts[parts.length - 1] || "").toLowerCase();
-  // Drive-root file: path has exactly one component after the drive (e.g. "C:/hiberfil.sys")
-  const isDriveRoot = parts.length <= 2 || (parts.length === 3 && parts[0].match(/^[a-z]:$/i) && parts[1] === "");
-  if (isDriveRoot && _WIN_SYSTEM_FILENAMES.has(name)) return true;
-  // Any path whose parent IS the drive root
-  const parentIsRoot = norm.replace(/\/+$/, "").split("/").length === 2;
-  if (parentIsRoot && _WIN_SYSTEM_FILENAMES.has(name)) return true;
-  return false;
-}
-
-const visualizerState = {
-  hideTiny: false,
-  hideNoisy: false,
-};
-// Delete a file/folder on the host OS.
-// Always moves to Recycle Bin / Trash — never permanently deletes.
-async function deletePathOnHost(fullPath, isDir) {
-  if (!fullPath) return;
-
-  // Stronger confirmation for directories
-  let message;
-  if (isDir) {
-    message = `Move this folder to the Recycle Bin?\n\n${fullPath}\n\nThe entire folder and its contents will be moved to the Recycle Bin.`;
-  } else {
-    message = `Move to Recycle Bin?\n\n${fullPath}`;
-  }
-  if (!confirm(message)) return;
-
-  try {
-    const resp = await fetch("/visualizer/delete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: fullPath, permanent: false })
-    });
-
-    if (!resp.ok) {
-      const data = await resp.json().catch(() => ({}));
-      throw new Error(data.detail || "HTTP " + resp.status);
-    }
-
-    showToast("Moved to Recycle Bin.", "success");
-    const scanBtn = document.getElementById("visualizerScanBtn");
-    if (scanBtn) scanBtn.click();
-  } catch (err) {
-    console.error("[VIS] Delete failed:", err);
-    showToast("Could not delete: " + err.message, "error");
-  }
-}
-
-// Per-category colors (soft WinDirStat vibe)
-const TREEMAP_COLORS = {
-  documents: "#2b8cff",
-  images:    "#ff7a45",
-  audio:     "#ffb347",
-  video:     "#c472faff",
-  code:      "#9b6dff",
-  archives:  "#3dd68c",
-  system:    "#580f0fff",
-  other:     "#4fb3ff"
-};
-
-
-function getParentDirFromFullPath(p) {
-  // Works with both Windows (\) and Unix (/) separators
-  const lastSep = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
-  return lastSep >= 0 ? p.slice(0, lastSep) : p;
-}
-
-function openInFilesPanel(fullPath, isDir = false) {
-  if (!fullPath) return;
-  try {
-    const dir = isDir ? fullPath : getParentDirFromFullPath(fullPath);
-    if (typeof switchPanel === "function") switchPanel("panel-files");
-    const input = document.getElementById("filesRootInput");
-    if (input) input.value = dir;
-    const btn = document.getElementById("filesScanButton");
-    if (btn) btn.click();
-    try { if (typeof showToast === "function") showToast("Opened in Files panel:\n" + dir); } catch {}
-  } catch (err) {
-    console.error("[VIS] Open in Files failed:", err);
-  }
-}
-
-// Show the Visualizer context menu (V4 tables/tree) at the cursor, clamped to viewport.
-function showVisContextMenu(evt, fullPath, isDir = false, deletable = true) {
-  if (!treemapContextMenu || !fullPath) return;
-  evt.preventDefault();
-  evt.stopPropagation();
-  treemapContextPath = fullPath;
-  treemapContextIsDir = !!isDir;
-  // Determine deletability: caller may pass explicit flag, or fall back to system-path check.
-  treemapContextDeletable = deletable && !_isSystemPath(fullPath);
-
-  // Show/hide Delete based on whether path is safe to delete.
-  const deleteBtn = treemapContextMenu.querySelector("[data-action='delete']");
-  if (deleteBtn) {
-    deleteBtn.style.display = treemapContextDeletable ? "" : "none";
-  }
-
-  // Position (clamp inside viewport)
-  const vw = window.innerWidth || 0;
-  const vh = window.innerHeight || 0;
-
-  treemapContextMenu.style.display = "block";
-  treemapContextMenu.style.left = "0px";
-  treemapContextMenu.style.top = "0px";
-
-  // Measure after display
-  const rect = treemapContextMenu.getBoundingClientRect();
-  const mw = rect.width || 220;
-  const mh = rect.height || 160;
-
-  let x = (evt.pageX ?? evt.clientX ?? 0);
-  let y = (evt.pageY ?? evt.clientY ?? 0);
-
-  x = Math.max(8, Math.min(x, (vw - mw - 8)));
-  y = Math.max(8, Math.min(y, (vh - mh - 8)));
-
-  treemapContextMenu.style.left = x + "px";
-  treemapContextMenu.style.top = y + "px";
-}
-
-// ── Drive tiles — "This PC" style ────────────────────────────────────────
-// Drive type → icon + label
-const _DRIVE_META = {
-  fixed:     { icon: "💾", label: "Local Disk"   },
-  removable: { icon: "🔌", label: "Removable"    },
-  network:   { icon: "🌐", label: "Network Drive" },
-  cdrom:     { icon: "💿", label: "Optical Drive" },
-  ram:       { icon: "⚡", label: "RAM Disk"      },
-  unknown:   { icon: "📀", label: "Drive"         },
-};
-
-async function loadVisualizerDrives() {
-  const container = document.getElementById("vis4-drives");
-  if (!container) return;
-  // Allow forced reload (don't cache forever)
-  if (container._loaded && !container._forceReload) return;
-  container._forceReload = false;
-
-  container.innerHTML = `<div class="vis4-drives-loading">Detecting drives…</div>`;
-
-  try {
-    const data = await _fetchJson("/visualizer/drives");
-    const drives = (data && data.drives) || [];
-
-    if (!drives.length) {
-      container.innerHTML = `<div class="vis4-drives-loading">No drives detected.</div>`;
-      return;
-    }
-
-    container.innerHTML = "";
-
-    // Section header
-    const hdr = document.createElement("div");
-    hdr.className = "vis4-drives-header";
-    hdr.textContent = "This Device";
-    container.appendChild(hdr);
-
-    const grid = document.createElement("div");
-    grid.className = "vis4-drives-grid";
-    container.appendChild(grid);
-
-    drives.forEach(d => {
-      const pct      = Math.round(d.percent_used || 0);
-      const isCrit   = pct >= 90;
-      const isWarn   = pct >= 75;
-      const mount    = d.mountpoint || d.device || "?";
-      const meta     = _DRIVE_META[d.drive_type] || _DRIVE_META.unknown;
-
-      // Build display name: volume label + mount letter, or just mount
-      const mountShort = mount.replace(/[\\\/]+$/, "").split(/[\\\/]/).pop() || mount;
-      const driveId    = window.TLI_SERVER_OS === "Windows"
-        ? mount.replace(/[\\\/]/g, "").toUpperCase()   // "C:"
-        : mountShort || mount;                          // "/" or "sda1"
-
-      const displayName = d.label ? `${d.label}` : (meta.label + (driveId ? ` (${driveId})` : ""));
-      const subtitle    = d.label ? driveId : "";
-
-      const tile = document.createElement("button");
-      tile.className = "vis4-drive-tile"
-        + (isCrit ? " crit" : isWarn ? " warn" : "")
-        + (d.drive_type === "network" ? " is-network" : "")
-        + (d.drive_type === "removable" ? " is-removable" : "");
-      tile.title = `${mount}\n${d.used_human} used of ${d.total_human} (${pct}% full)`;
-      tile.setAttribute("data-mount", mount);
-
-      tile.innerHTML = `
-        <div class="vis4-drive-icon">${meta.icon}</div>
-        <div class="vis4-drive-name">
-          <div class="vis4-drive-label">${escapeHtml(displayName)}</div>
-          ${subtitle ? `<div class="vis4-drive-sub">${escapeHtml(subtitle)}</div>` : ""}
-        </div>
-        <div class="vis4-drive-usage">
-          <div class="vis4-drive-bar"><div class="vis4-drive-fill" style="width:${pct}%"></div></div>
-          <span class="vis4-drive-pct">${pct}%</span>
-        </div>
-        <div class="vis4-drive-stats">
-          <span class="vis4-drive-free">${d.free_human} free</span>
-          <span class="vis4-drive-total">of ${d.total_human}</span>
-        </div>
-      `;
-
-      tile.addEventListener("click", () => {
-        // Mark this tile active
-        grid.querySelectorAll(".vis4-drive-tile").forEach(t => t.classList.remove("active"));
-        tile.classList.add("active");
-        // Fill input and scan
-        const inp = document.getElementById("visualizerPathInput");
-        if (inp) inp.value = mount;
-        const btn = document.getElementById("visualizerScanBtn");
-        if (btn) btn.click();
-      });
-
-      grid.appendChild(tile);
-    });
-
-    container._loaded = true;
-  } catch (e) {
-    container.innerHTML = `<div class="vis4-drives-loading">Could not load drives.</div>`;
-  }
-}
-
-function setupVisualizer() {
-  const input   = document.getElementById("visualizerPathInput");
-  const scanBtn = document.getElementById("visualizerScanBtn");
-  const jsonPre = document.getElementById("visualizer-json");
-  treemapContextMenu = document.getElementById("treemap-context-menu");
-
-// Ensure context menu exists even if the HTML doesn't include it.
-if (!treemapContextMenu) {
-  treemapContextMenu = document.createElement("div");
-  treemapContextMenu.id = "treemap-context-menu";
-  treemapContextMenu.className = "treemap-context-menu";
-  treemapContextMenu.style.display = "none";
-  treemapContextMenu.innerHTML = `
-    <button data-action="open_files">Open in Files</button>
-    <button data-action="reveal">Reveal in Explorer/Finder</button>
-    <button data-action="open">Open</button>
-    <button data-action="copy">Copy path</button>
-    <button data-action="delete">Delete</button>
-  `;
-  document.body.appendChild(treemapContextMenu);
-}
-
-  treemapContextPath = null;
-
-  const hideTinyCheckbox  = document.getElementById("visualizerHideTiny");
-  const hideNoisyCheckbox = document.getElementById("visualizerHideNoisy");
-  const resetBtn          = document.getElementById("visualizerResetViewBtn");
-
-  if (!input || !scanBtn || !jsonPre) {
-    console.log("[VIS] Missing core element(s)", { input, scanBtn, jsonPre });
-    return;
-  }
-
-  // Make sure debug text is readable
-  jsonPre.style.color = "#ffffff";
-  jsonPre.style.whiteSpace = "pre";
-
-  async function runScan(event) {
-    if (event && event.preventDefault) event.preventDefault();
-
-    const path = (input.value || "").trim();
-
-    jsonPre.textContent = `DEBUG: Scan clicked for path:\n${path || "(empty)"}`;
-    console.log("[VIS] Scan clicked for path:", path);
-
-    if (!path) {
-      jsonPre.textContent += "\n\nEnter a folder path to scan.";
-      return;
-    }
-
-    try {
-      jsonPre.textContent += "\n\nScanning…";
-      const url  = "/scan_directory?path=" + encodeURIComponent(path) + "&max_depth=2";
-      const resp = await fetch(url);
-
-      console.log("[VIS] Response status:", resp.status);
-
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error("HTTP " + resp.status + (txt ? " · " + txt : ""));
-      }
-
-      const data = await resp.json();
-      // Mirror the response into the Visualizer JSON debug pane (if present)
-      const jsonEl = document.getElementById('visualizer-json');
-      if (jsonEl) {
-        try { jsonEl.textContent = JSON.stringify(data, null, 2); } catch(e) { jsonEl.textContent = String(data); }
-      }
-
-      const jsonText = JSON.stringify(data, null, 2);
-
-      lastVisualizerData = data;
-      jsonPre.textContent = jsonText;
-      console.log("[VIS] Scan complete, bytes:", jsonText.length);
-
-      renderStorageExplorer(data);
-    } catch (err) {
-      console.error("Visualizer scan error:", err);
-      jsonPre.textContent = "Scan failed:\n" + err.message;
-    }
-  }
-
-  scanBtn.addEventListener("click", runScan);
-
-  // Quick folder buttons — wire after paths are loaded
-  function _wireVisQuickFolders() {
-    document.querySelectorAll("[data-vis-preset]").forEach(btn => {
-      btn.addEventListener("click", () => {
-        const kind = btn.getAttribute("data-vis-preset");
-        const path = typeof _tliPathPreset === "function" ? _tliPathPreset(kind) : kind;
-        if (path && path !== "~") {
-          input.value = path;
-          runScan();
-        }
-      });
-    });
-  }
-  _wireVisQuickFolders();
-  // Re-wire once real paths arrive (TLI_PATHS may not be set yet at DOM ready)
-  document.addEventListener("tli:paths-loaded", _wireVisQuickFolders, { once: true });
-
-  // Public API — lets other panels trigger a scan programmatically
-  window.TLIVisualizer = window.TLIVisualizer || {};
-  window.TLIVisualizer.scanPath = function(path) {
-    if (path) input.value = path;
-    runScan();
-  };
-
-  // Checkbox wiring
-  if (hideTinyCheckbox) {
-    hideTinyCheckbox.addEventListener("change", () => {
-      visualizerState.hideTiny = !!hideTinyCheckbox.checked;
-      console.log("[VIS] hideTiny ->", visualizerState.hideTiny);
-      if (lastVisualizerData) renderStorageExplorer(lastVisualizerData);
-    });
-  }
-
-  if (hideNoisyCheckbox) {
-    hideNoisyCheckbox.addEventListener("change", () => {
-      visualizerState.hideNoisy = !!hideNoisyCheckbox.checked;
-      console.log("[VIS] hideNoisy ->", visualizerState.hideNoisy);
-      if (lastVisualizerData) renderStorageExplorer(lastVisualizerData);
-    });
-  }
-
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      visualizerState.hideTiny  = false;
-      visualizerState.hideNoisy = false;
-      if (hideTinyCheckbox)  hideTinyCheckbox.checked = false;
-      if (hideNoisyCheckbox) hideNoisyCheckbox.checked = false;
-      console.log("[VIS] view reset");
-      if (lastVisualizerData) renderStorageExplorer(lastVisualizerData);
-    });
-  }
-  // Close context menu on any regular click
-  document.addEventListener("click", () => {
-    if (treemapContextMenu) treemapContextMenu.style.display = "none";
-  });
-
-  // Handle clicks inside the Visualizer context menu
-if (treemapContextMenu) {
-  treemapContextMenu.addEventListener("click", async (e) => {
-    const btn = e.target.closest("button[data-action]");
-    if (!btn) return;
-
-    const action = btn.getAttribute("data-action");
-
-    if (action === "open_files" && treemapContextPath) {
-  openInFilesPanel(treemapContextPath, treemapContextIsDir);
-
-} else if (action === "reveal" && treemapContextPath) {
-  await revealPathOnHost(treemapContextPath);
-
-} else if (action === "open" && treemapContextPath) {
-  await openPathOnHost(treemapContextPath);
-
-} else if (action === "copy" && treemapContextPath) {
-  try {
-    await navigator.clipboard.writeText(treemapContextPath);
-    showToast("Copied path:\n" + treemapContextPath);
-  } catch (err) {
-    console.error("Clipboard failed:", err);
-    showToast("Could not copy to clipboard.");
-  }
-
-} else if (action === "delete" && treemapContextPath) {
-  await deletePathOnHost(treemapContextPath, treemapContextIsDir);
-}
-
-treemapContextMenu.style.display = "none";
-  });
-}
-
-  console.log("[VIS] setupVisualizer wired");
-}
-
-// We still want this global formatter for sizes
-function formatBytes(bytes) {
-  if (!bytes || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const value = bytes / Math.pow(1024, i);
-  return value.toFixed(value >= 10 ? 0 : 1) + " " + units[i];
-}
-/* ============================================================
-   VISUALIZER COLORS — CUSTOM FILE TYPE MAPPING
-   ============================================================ */
-
-// 🎨 Central color mapping for file types
-// Edit these hex values to whatever colors you want.
-const FILE_TYPE_COLORS = {
-  ".mp4": "#c084fc",      // purple
-  ".mov": "#e879f9",      // pink-purple
-  ".7z":  "#22c55e",      // green
-  ".zip": "#16a34a",      // darker green
-  ".exe": "#38bdf8",      // light blue
-  ".msi": "#0ea5e9",      // medium blue
-  ".wav": "#facc15",      // yellow
-  ".mp3": "#f97316",      // orange
-  ".m4a": "#fb923c",      // softer orange
-  ".bin": "#64748b",      // gray
-
-  folder:  "#4ade80",     // folder blocks
-  default: "#60a5fa",     // anything not matched above
-};
-
-// Extract ".ext" from a filename
-function getFileExtension(name) {
-  if (!name) return "";
-  const lastDot = name.lastIndexOf(".");
-  if (lastDot <= 0 || lastDot === name.length - 1) return "";
-  return name.slice(lastDot).toLowerCase();
-}
-
-// NEW colorForNode that uses FILE_TYPE_COLORS
-function colorForNode(d) {
-  if (!d || !d.data) return FILE_TYPE_COLORS.default;
-
-  // Folders (nodes that have children)
-  if (d.data.children && d.data.children.length) {
-    return FILE_TYPE_COLORS.folder;
-  }
-
-  const ext = getFileExtension(d.data.name || "");
-  return FILE_TYPE_COLORS[ext] || FILE_TYPE_COLORS.default;
-}
-
-// Categorize files by extension for colors
-function getFileCategory(name) {
-  if (!name) return "other";
-  const lower = name.toLowerCase();
-
-  const docs = [".txt", ".md", ".rtf", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"];
-  const images = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic"];
-  const audio = [".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a"];
-  const video = [".mp4", ".mov", ".mkv", ".avi", ".webm"];
-  const archives = [".zip", ".rar", ".7z", ".tar", ".gz", ".tgz"];
-  const code = [
-    ".js", ".ts", ".jsx", ".tsx",
-    ".py", ".json", ".html", ".css",
-    ".c", ".cpp", ".h", ".hpp",
-    ".cs", ".java", ".php", ".rb", ".rs", ".go", ".sh", ".bat", ".ps1", ".sql"
-  ];
-
-  const matchExt = (list) => list.some(ext => lower.endsWith(ext));
-
-  if (matchExt(docs))     return "documents";
-  if (matchExt(images))   return "images";
-  if (matchExt(audio))    return "audio";
-  if (matchExt(video))    return "video";
-  if (matchExt(archives)) return "archives";
-  if (matchExt(code))     return "code";
-
-  // Very rough system-ish folder hint
-  if (
-    lower.includes("windows") ||
-    lower.includes("program files") ||
-    lower.includes("appdata") ||
-    lower.includes("node_modules") ||
-    lower.startsWith(".")
-  ) {
-    return "system";
-  }
-
-  return "other";
-}
-
-function colorForNode(d) {
-  const name = (d.data && d.data.name) || "";
-  const category = getFileCategory(name);
-  return TREEMAP_COLORS[category] || TREEMAP_COLORS.other;
-}
-
-// Simple “is this a noisy folder?” helper
-function isNoisyName(name) {
-  if (!name) return false;
-  const lower = String(name).toLowerCase();
-  const noisy = [
-    "appdata",
-    "node_modules",
-    "temp",
-    "tmp",
-    "cache",
-    "logs",
-    "venv",
-    "__pycache__"
-  ];
-  return noisy.some(n => lower === n || lower.includes(n));
-}
-
-// Clone + filter tree so tiny/noisy items are removed before layout
-function filterTree(node, rootSize, opts) {
-  if (!node) return null;
-
-  const MIN_FRACTION = 0.003; // 0.3% of total; tweak if you want
-  const minBytes = rootSize * MIN_FRACTION;
-
-  // If this is a “noisy” folder and we’re hiding noisy stuff, drop the whole subtree
-  if (opts.hideNoisy && isNoisyName(node.name)) {
-    return null;
-  }
-
-  let children = null;
-  if (Array.isArray(node.children) && node.children.length > 0) {
-    children = node.children
-      .map(child => filterTree(child, rootSize, opts))
-      .filter(Boolean);
-  }
-
-  // Base size: either explicit size or sum of children
-  let size = typeof node.size === "number" ? node.size : 0;
-  if (children && children.length > 0) {
-    size = children.reduce((acc, c) => acc + (c.size || 0), 0);
-  }
-
-  // Leaf-level tiny filter
-  if (opts.hideTiny && (!children || children.length === 0) && size < minBytes) {
-    return null;
-  }
-
-  return {
-    name: node.name,
-    size,
-    children: children && children.length ? children : undefined
-  };
-}
-  // Best-effort client-side mirror of backend Safe Mode rules
   function isProtectedSystemPathClient(fullPath) {
     if (!fullPath) return false;
     const lower = fullPath.replace(/\\/g, "/").toLowerCase();
@@ -698,1040 +390,292 @@ function filterTree(node, rootSize, opts) {
     );
   }
 
-function renderStorageExplorer(data) {
-  // ✅ AAA Visualizer V4: Table-first Storage Intelligence Explorer (no treemap).
-  const treeEl   = document.getElementById("visualizerFolderTree");
-  const tbody    = document.getElementById("visualizerTableBody");
-  const breadcrumbEl = document.getElementById("visualizerBreadcrumb");
-  const statusEl = document.getElementById("visualizerStatusLine");
-  const selEl    = document.getElementById("visualizerSelectionLine");
-  const centerTitle = document.getElementById("visualizerCenterTitle");
-  const centerSub   = document.getElementById("visualizerCenterSubtitle");
-  const insightsSub = document.getElementById("visualizerInsightsSubtitle");
-  const typeBarsEl  = document.getElementById("visualizerTypeBars");
-  const topFoldersEl= document.getElementById("visualizerTopFolders");
-  const cleanupEl   = document.getElementById("visualizerCleanupHints");
-  const detailsBar  = document.getElementById("visualizerDetailsBar");
-  const dName       = document.getElementById("visualizerDetailsName");
-  const dPath       = document.getElementById("visualizerDetailsPath");
-  const dSize       = document.getElementById("visualizerDetailsSize");
-  const copyBtn     = document.getElementById("visualizerCopyPathBtn");
-  const openBtn     = document.getElementById("visualizerSendToFilesBtn");
-  const searchInput = document.getElementById("visualizerSearchInput");
-  const catSel      = document.getElementById("visualizerCategoryFilter");
-  const extInput    = document.getElementById("visualizerExtFilter");
-  const minSizeSel  = document.getElementById("visualizerMinSize");
-  const clearBtn    = document.getElementById("visualizerClearFiltersBtn");
-  const pillsWrap   = document.getElementById("visualizerModePills");
-  const backBtn     = document.getElementById("visualizerBackBtn");
 
-  const jsonEl      = document.getElementById("visualizer-json");
-  const debugToggle = document.getElementById("visualizerDebugToggle");
-
-  if (!treeEl || !tbody) return;
-
-  // Debug JSON
-  if (debugToggle && !debugToggle._v4Bound) {
-    debugToggle._v4Bound = true;
-    debugToggle.addEventListener("click", () => {
-      if (!jsonEl) return;
-      const showing = jsonEl.style.display !== "none";
-      jsonEl.style.display = showing ? "none" : "block";
-    });
+/* Free Space owns one in-memory observation lifecycle. No scans on navigation. */
+(function () {
+  'use strict';
+  const protocol = 'storage-jobs-v1', PAGE_SIZE = 50;
+  const terminal = new Set(['completed', 'partial', 'cancelled', 'failed']);
+  const operations = ['scan', 'large_files', 'duplicates', 'common_folders'];
+  const labels = {scan:'Folder scan', large_files:'Large file search', duplicates:'Duplicate check', common_folders:'Common folder check'};
+  const state = {initialized:false, locked:false, paused:false, panelActive:true, epoch:0, sequence:0, drives:[], drivesLoaded:false, driveBusy:false,
+    job:null, pendingStart:null, busy:false, timer:null, requests:new Set(), observation:null, tools:{}, tab:'explore',
+    focus:'', mode:'map', surface:'map', mapGroup:null, mapView:null, sort:'size', direction:-1, page:0, selected:null, handoff:null};
+  let mapObserver = null, mapMarks = [], tableMarks = [];
+  const $ = id => document.getElementById(id);
+  const make = (tag, text, className) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
+  const button = (text, fn, className = 'fs-button') => { const n = make('button', text, className); n.type = 'button'; n.addEventListener('click', fn); return n; };
+  const text = (id, value) => { if ($(id)) $(id).textContent = value; };
+  const finite = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+  const pathOK = value => typeof value === 'string' && value.length > 0 && value.length <= 4096 && !/[\x00-\x1f]/.test(value);
+  const normalized = value => /^[A-Za-z]:[\\/]/.test(value) ? value.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase() : value.replace(/\/+$/,'') || '/';
+  const samePath = (a,b) => pathOK(a) && pathOK(b) && normalized(a) === normalized(b);
+  const below = (path, root) => samePath(path,root) || normalized(path).startsWith(normalized(root).replace(/\/$/,'') + '/');
+  const bytes = value => { if (!finite(value)) return 'Size unknown'; const units=['B','KiB','MiB','GiB','TiB','PiB']; let i=0; while(value>=1024 && i<units.length-1){value/=1024;i++;} return value.toLocaleString(undefined,{maximumFractionDigits:i?1:0})+' '+units[i]; };
+  const date = value => { const d = new Date(typeof value === 'number' ? value*1000 : value); return Number.isFinite(d.getTime()) ? d.toLocaleString() : 'Observation time unavailable'; };
+  const current = epoch => !state.locked && !state.paused && !document.hidden && epoch === state.epoch;
+  const itemBytes = item => item?.size===null || item?.size_known===false || item?.size_unavailable===true ? 'Size unknown' : (item?.size_partial===true?'At least ':'')+bytes(item?.size);
+  const status = message => text('visualizerStatus', message);
+  const hostName = () => window.__tli_node_name || window.__tli_hostname || 'TLI host';
+  const category = name => { const ext=(name.match(/\.([^.]*)$/)?.[1]||'').toLowerCase(); for(const [name,exts] of Object.entries({Images:['jpg','jpeg','png','webp','gif','heic','svg'],Video:['mp4','mov','mkv','avi','webm'],Audio:['mp3','flac','wav','m4a'],Documents:['pdf','doc','docx','txt','md','xlsx','csv','pptx'],Archives:['zip','7z','rar','tar','gz'],Installers:['exe','msi','dmg','pkg','deb','apk'],Models:['gguf','safetensors','onnx','pt']})) if(exts.includes(ext))return name; return 'Other'; };
+  function requestId() { const c=window.crypto; if(c?.randomUUID)return c.randomUUID(); if(!c?.getRandomValues)throw Error('Secure request identifiers are unavailable in this browser.'); const b=new Uint8Array(16); c.getRandomValues(b); return Array.from(b,n=>n.toString(16).padStart(2,'0')).join(''); }
+  async function api(url, payload, epoch=state.epoch) {
+    const abort = new AbortController(); state.requests.add(abort); const timeout=setTimeout(()=>abort.abort(),20000);
+    try {
+      const response=await fetch(url,{method:payload?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:abort.signal,...(payload?{headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{})});
+      if(!current(epoch))throw Error('View changed.');
+      let data; try{data=await response.json();}catch{throw Error('The host returned an unreadable response.');}
+      if(!current(epoch))throw Error('View changed.');
+      if(!response.ok){const detail=data?.detail;const e=Error(typeof detail==='string'?detail:typeof detail?.message==='string'?detail.message:`Request failed (${response.status}).`);e.status=response.status; if(response.status===401){window.dispatchEvent(new CustomEvent('tli-session-locked'));} throw e;}
+      return data;
+    } finally {clearTimeout(timeout);state.requests.delete(abort);}
   }
-  if (jsonEl) {
-    try { jsonEl.textContent = JSON.stringify(data, null, 2); } catch {}
+  function validateJob(data, expected) {
+    const j=data?.job;
+    if(data?.ok!==true || data.protocol!==protocol || !j || typeof j.id!=='string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(j.id) || !operations.includes(j.operation) || !['quick','deep'].includes(j.profile) || !['queued','running','cancelling',...terminal].includes(j.status) || typeof j.result_available!=='boolean')throw Error('The host did not confirm a valid storage job.');
+    if(expected && ((expected.id && j.id!==expected.id) || j.operation!==expected.operation || j.profile!==expected.profile || (j.operation!=='common_folders'&&!samePath(j.path,expected.path)) || (typeof j.include_excluded==='boolean' && typeof expected.include_excluded==='boolean' && j.include_excluded!==expected.include_excluded)))throw Error('The response belongs to a different storage job, location or inclusion policy.');
+    return j;
   }
-
-  // --- State ---
-  if (!window.visualizerV4) window.visualizerV4 = {};
-  const st = window.visualizerV4;
-
-  st.root = data && (data.tree || data.root || data.data || data);
-  st.scanPath = data && (data.path || data.scan_path || data.root_path || "");
-  st.totalBytes = (st.root && (st.root.size || st.root.total_size)) || 0;
-
-  // Reset cleanup panel so it re-fetches on next render
-  if (cleanupEl) cleanupEl._fetched = false;
-
-  // Mode pills
-  if (!st.mode) st.mode = "map"; // map | offenders | folders | types
-  // Folder focus
-  if (!st.focusPath) st.focusPath = (st.root && st.root.path) || st.scanPath || "";
-  if (!st.history) st.history = [st.focusPath];
-
-  // Sorting
-  if (!st.sort) st.sort = { key: "size", dir: "desc" };
-
-  // Filters
-  if (!st.filters) st.filters = { q: "", cat: "", ext: "", minMb: 0 };
-
-  // --- Helpers ---
-  function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : 0; }
-  function fmtBytes(bytes){
-    const b = toNumber(bytes);
-    const u = ["B","KB","MB","GB","TB"];
-    let v=b, i=0;
-    while(v>=1024 && i<u.length-1){ v/=1024; i++; }
-    const d = (i===0)?0:(i===1?1:2);
-    return v.toFixed(d) + " " + u[i];
-  }
-  function esc(s){
-    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
-  }
-  function extOf(name){
-    const s = String(name||"");
-    const i = s.lastIndexOf(".");
-    if (i <= 0 || i === s.length-1) return "";
-    return s.slice(i).toLowerCase();
-  }
-  function categoryOf(name, isDir){
-    if (isDir) return "Folder";
-    const ext = extOf(name);
-    const map = [
-      ["Models", [".gguf",".safetensors",".pt",".pth",".onnx",".bin",".ckpt",".tflite",".mlmodel",".h5"]],
-      ["Video",  [".mp4",".mkv",".mov",".avi",".wmv",".webm",".m4v"]],
-      ["Archives",[ ".zip",".rar",".7z",".tar",".gz",".bz2",".xz",".iso",".dmg"]],
-      ["Images", [".jpg",".jpeg",".png",".gif",".webp",".tif",".tiff",".bmp",".heic",".raw",".cr2",".nef"]],
-      ["Audio",  [".wav",".mp3",".flac",".aiff",".aac",".m4a",".ogg"]],
-      ["Dev",    [".js",".ts",".jsx",".tsx",".py",".ipynb",".go",".rs",".java",".cs",".cpp",".c",".h",".json",".yml",".yaml",".toml",".ini",".env",".sql"]],
-      ["Docs",   [".pdf",".doc",".docx",".ppt",".pptx",".xls",".xlsx",".txt",".md",".rtf"]]
-    ];
-    for (const [cat, exts] of map){
-      if (exts.includes(ext)) return cat;
-    }
-    return "Other";
-  }
-
-  function walk(node, fn){
-    if (!node) return;
-    fn(node);
-    const ch = Array.isArray(node.children) ? node.children : [];
-    for (const c of ch) walk(c, fn);
-  }
-
-  // Build index maps (once per scan)
-  if (st._indexedAt !== st.root) {
-    st._indexedAt = st.root;
-    st.nodesByPath = new Map();
-    st.files = [];
-    st.folders = [];
-
-    walk(st.root, (n) => {
-      const path = n.path || n.full_path || n.name || "";
-      if (path) st.nodesByPath.set(path, n);
-
-      const isDir = !!n.is_dir || (Array.isArray(n.children) && n.children.length > 0);
-      const size  = toNumber(n.size);
-      const name  = n.name || (path ? path.split(/[\\/]/).pop() : "(unnamed)");
-      const item = { name, path, size, isDir, category: categoryOf(name, isDir) };
-
-      if (isDir) st.folders.push(item);
-      else st.files.push(item);
-    });
-  }
-
-  function getNode(path){
-    return st.nodesByPath.get(path) || st.root;
-  }
-
-  function focus(path){
-    st.focusPath = path || st.focusPath;
-    if (!st.history.length || st.history[st.history.length-1] !== st.focusPath) st.history.push(st.focusPath);
-    st.selectedPath = null;
-    renderAll();
-  }
-
-  function goBack(){
-    if (st.history.length <= 1) return;
-    st.history.pop();
-    st.focusPath = st.history[st.history.length-1];
-    st.selectedPath = null;
-    renderAll();
-  }
-
-  // Bind back button once
-  if (backBtn && !backBtn._v4Bound) {
-    backBtn._v4Bound = true;
-    backBtn.addEventListener("click", goBack);
-  }
-
-  // Bind mode pills
-  if (pillsWrap && !pillsWrap._v4Bound) {
-    pillsWrap._v4Bound = true;
-    pillsWrap.addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-mode]");
-      if (!btn) return;
-      st.mode = (btn.getAttribute("data-mode") || "offenders");
-      [...pillsWrap.querySelectorAll("button[data-mode]")].forEach(b => b.classList.toggle("active", b===btn));
-      renderAll();
-    });
-  }
-
-  // Bind filters once
-  function syncFilterUI(){
-    if (searchInput) searchInput.value = st.filters.q || "";
-    if (catSel) catSel.value = st.filters.cat || "";
-    if (extInput) extInput.value = st.filters.ext || "";
-    if (minSizeSel) minSizeSel.value = String(st.filters.minMb || 0);
-  }
-  syncFilterUI();
-
-  if (searchInput && !searchInput._v4Bound){
-    searchInput._v4Bound = true;
-    searchInput.addEventListener("input", () => { st.filters.q = searchInput.value.trim(); renderTable(); });
-  }
-  if (catSel && !catSel._v4Bound){
-    catSel._v4Bound = true;
-    catSel.addEventListener("change", () => { st.filters.cat = catSel.value; renderTable(); });
-  }
-  if (extInput && !extInput._v4Bound){
-    extInput._v4Bound = true;
-    extInput.addEventListener("input", () => { st.filters.ext = extInput.value.trim().toLowerCase(); renderTable(); });
-  }
-  if (minSizeSel && !minSizeSel._v4Bound){
-    minSizeSel._v4Bound = true;
-    minSizeSel.addEventListener("change", () => { st.filters.minMb = Number(minSizeSel.value||0); renderTable(); });
-  }
-  if (clearBtn && !clearBtn._v4Bound){
-    clearBtn._v4Bound = true;
-    clearBtn.addEventListener("click", () => {
-      st.filters = { q:"", cat:"", ext:"", minMb:0 };
-      syncFilterUI();
-      renderTable();
-    });
-  }
-
-  // Copy path
-  if (copyBtn && !copyBtn._v4Bound){
-    copyBtn._v4Bound = true;
-    copyBtn.addEventListener("click", async () => {
-      if (!st.selectedPath) return;
-      try {
-        await navigator.clipboard.writeText(st.selectedPath);
-        showToast("Copied path.", "success");
-      } catch {
-        const ta = document.createElement("textarea");
-        ta.value = st.selectedPath;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        document.body.removeChild(ta);
-        showToast("Copied path.", "success");
+  function validateResult(data, job) {
+    if(!data || typeof data!=='object' || (job.operation!=='common_folders' && (!data.meta || typeof data.meta!=='object')))throw Error('The observation is incomplete or malformed. Previous results are retained.');
+    const validHost=h=>h&&typeof h.id==='string'&&h.id.length>0&&h.id.length<=256&&typeof h.name==='string'&&h.name.length>0&&h.name.length<=256;
+    const savedHost=data.meta?.saved_scan?.summary?.host;
+    if(validHost(job.host)&&validHost(savedHost)&&job.host.id!==savedHost.id)throw Error('The saved observation belongs to a different host.');
+    const host=validHost(job.host)?{id:job.host.id,name:job.host.name}:validHost(savedHost)?{id:savedHost.id,name:savedHost.name}:{id:null,name:'Host identity unavailable'};
+    if(job.operation==='scan') {
+      if(!data.tree || !samePath(data.tree.path,job.path) || (data.path && !samePath(data.path,job.path)))throw Error('The returned scan root does not match the requested location.');
+      const stack=[{node:data.tree,protected:false,parentPath:null}], seen=new Set(), files=[],folders=[],index=new Map();let count=0;
+      while(stack.length){const entry=stack.pop(),n=entry.node;if(!n || ++count>25000 || typeof n.name!=='string' || n.name.length>4096 || !pathOK(n.path) || !below(n.path,job.path) || (entry.parentPath&&!samePath(getParentFolderPath(n.path),entry.parentPath)) || seen.has(normalized(n.path)) || (n.size!==null && n.size!==undefined && !finite(n.size)) || (n.children!==undefined && !Array.isArray(n.children)) || ['collapsed_entries','omitted_entries','unknown_entries'].some(k=>n[k]!==undefined&&(!Number.isSafeInteger(n[k])||n[k]<0||n[k]>500000)))throw Error('The scan contains invalid or repeated file entries.');seen.add(normalized(n.path));
+        const isDir=n.is_dir===true || Array.isArray(n.children), protectedPath=entry.protected||n.protected===true||isProtectedSystemPathClient(n.path);
+        const item={name:n.name,path:n.path,parentPath:entry.parentPath,size:n.size_known===false||n.size_unavailable===true?null:finite(n.size)?n.size:null,size_partial:n.size_partial===true,isDir,protected:protectedPath,synthetic:n.synthetic===true,collapsed_entries:n.collapsed_entries,omitted_entries:n.omitted_entries,unknown_entries:n.unknown_entries,category:isDir?'Folder':category(n.name),children:n.children?.map(c=>c.path)||[]};index.set(n.path,item);
+        if(!item.synthetic){if(isDir)folders.push(item);else files.push(item);}for(const child of n.children||[])stack.push({node:child,protected:protectedPath,parentPath:n.path});
       }
-    });
+      if(!window.TLIStorageMap)throw Error('The storage map component is unavailable. Refresh TLI; the previous observation is retained.');
+      const map=window.TLIStorageMap.build(index,data.tree.path);
+      return {raw:data,job,files,folders,index,map,root:data.tree.path,recordedAt:data.meta.saved_scan?.summary?.scanned_at||job.finished_at||job.updated_at,host};
+    }
+    if(job.operation==='large_files') {
+      if(!Array.isArray(data.files)||data.files.length>10000||data.files.some(f=>!pathOK(f.path)||!below(f.path,job.path)||typeof f.name!=='string'||(f.size!==null&&f.size!==undefined&&!finite(f.size))))throw Error('The large-file results did not match this location.');
+    } else if(job.operation==='duplicates') {
+      if(!Array.isArray(data.groups)||data.groups.length>100||data.groups.some(g=>!finite(g.size)||!Array.isArray(g.paths)||g.paths.length<2||g.paths.length>500000||new Set(g.paths).size!==g.paths.length||g.paths.some(p=>!pathOK(p)||!below(p,job.path)))||data.groups.reduce((n,g)=>n+g.paths.length,0)>500000)throw Error('The duplicate result contains invalid paths or groups.');
+    } else if(!Array.isArray(data.targets)||data.targets.length>100||data.targets.some(t=>typeof t.label!=='string'||!pathOK(t.path)||(t.size_bytes!==null&&t.size_bytes!==undefined&&!finite(t.size_bytes))))throw Error('The common-folder result is invalid.');
+    return {raw:data,job,root:job.path,recordedAt:job.finished_at||job.updated_at,host};
+  }
+  function controls() {
+    if(!state.initialized)return;
+    const waiting=!!state.job&&!terminal.has(state.job.status), blocked=state.busy||waiting||!!state.pendingStart||state.locked||state.paused;
+    for(const id of ['visualizerScanBtn','fs-start-large_files','fs-start-duplicates','fs-start-common_folders'])$(id).disabled=blocked;
+    $('fs-job-stop').disabled=state.busy||state.paused||!waiting||state.job?.status==='cancelling';
+    $('fs-job-stop').hidden=!waiting;
+    $('fs-job-check').disabled=state.busy;
+    $('fs-job').hidden=(!state.job&&!state.pendingStart)||(state.job&&['completed','partial'].includes(state.job.status)&&$('fs-job-check').hidden);
+    $('fs-ask-chat').disabled=!state.observation||state.locked;
+  }
+  function showJob(job) {
+    text('fs-job-title',`${labels[job.operation]} · ${job.status}`);
+    const p=job.progress||{}, parts=[];
+    for(const [key,label] of [['entries_seen','entries inspected'],['files','files inspected'],['found','matches found'],['files_hashed','files checked in full']])if(finite(p[key]))parts.push(p[key].toLocaleString()+' '+label);
+    const phases={queued:'Waiting to start',starting:'Starting',scanning:'Inspecting entries',enumerating:'Inspecting entries',hashing:'Checking file contents',finishing:'Preparing result',completed:'Finished',cancelled:'Stopped'};
+    const startTime=new Date(typeof job.started_at==='number'?job.started_at*1000:job.started_at).getTime();
+    if(Number.isFinite(startTime))parts.push(Math.max(0,Math.floor((Date.now()-startTime)/1000))+'s since start');
+    text('fs-job-progress',`${job.operation==='common_folders'?'Common folders on the TLI host':job.path} · ${job.profile} · ${phases[p.phase]||'Waiting for host progress'}. `+(parts.join(' · ') || (job.status==='cancelling'?'Stop requested; waiting for host confirmation.':'No progress counters received yet.')));
+    controls();
+  }
+  function schedule(epoch) {clearTimeout(state.timer);if(current(epoch)&&state.job&&!terminal.has(state.job.status))state.timer=setTimeout(()=>poll(),1000);}
+  async function finish(job, epoch, reviewPartial=false) {
+    if(!current(epoch))return;
+    if(job.status==='cancelled'&&job.result_available&&!reviewPartial){window.TLIStorageHistory?.scanFailed();status('The host confirmed cancellation. A partial observation is available for review; the previous observation is still displayed.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='View partial results';controls();return;}
+    if(job.result_available){const data=await api(`/visualizer/jobs/${encodeURIComponent(job.id)}/results`,null,epoch);const resultJob=validateJob(data,job);if(resultJob.status!==job.status||!resultJob.result_available)throw Error('The host did not confirm this completed observation.');const observation=validateResult(data.result,job);if(!current(epoch))return;
+      if(job.operation==='scan'){state.observation=observation;state.focus=observation.root;state.selected=null;state.mapGroup=null;state.mapView=null;state.page=0;$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup')?.replaceChildren();window.visualizerV4={scanPath:observation.root,meta:observation.raw.meta,root:observation.raw.tree};window.TLIStorageHistory?.receiveScan(data.result);if(state.tab==='explore')applyScope(observation);window.dispatchEvent(new CustomEvent('tli:storage-observation-change',{detail:{id:job.id,path:job.path}}));renderObservation();}
+      else {state.tools[job.operation]=observation;if(state.tab===job.operation)applyScope(observation);renderTool(job.operation);}
+      status(`${labels[job.operation]} ${job.status}. ${job.status==='cancelled'?'The host confirmed cancellation; the inspected portion is shown. ':''}Nothing was moved or deleted.`);
+    }else{window.TLIStorageHistory?.scanFailed();status(`${labels[job.operation]} ${job.status}. ${typeof job.error?.message==='string'?job.error.message:typeof job.error==='string'?job.error:''} No replacement observation was returned. Previous results are unchanged.`);}
+    $('fs-job-check').hidden=true;controls();
+  }
+  async function start(operation='scan', overridePath) {
+    setup();if(state.busy||state.paused||state.pendingStart||(state.job&&!terminal.has(state.job.status))||state.locked||document.hidden)return false;
+    const path=overridePath||$('visualizerPathInput').value.trim();if(operation!=='common_folders'&&!pathOK(path)){status('Choose a folder or drive on the TLI host first.');return false;}
+    const profile=$('fs-profile').value;if(!['quick','deep'].includes(profile))return false;
+    let request_id;try{request_id=requestId();}catch(e){status(e.message);return false;}
+    const payload={operation,profile,path:operation==='common_folders'?undefined:path,include_excluded:profile==='deep'&&$('fs-include-excluded').checked===true,request_id};
+    if(operation==='large_files'){const mb=Number($('vis4-largefiles-minmb').value);if(!Number.isFinite(mb)||mb<1||mb>50000){status('Choose a minimum from 1 to 50,000 MiB.');return false;}payload.min_mb=mb;payload.limit=500;}
+    state.pendingStart=payload;state.job=null;if(operation==='scan'){setTab('explore');window.TLIStorageHistory?.beginScan(true);}return submitStart();
+  }
+  async function submitStart(){if(state.busy||!state.pendingStart)return false;const epoch=state.epoch,payload=state.pendingStart;state.busy=true;controls();text('fs-job-title','Starting '+labels[payload.operation].toLowerCase());text('fs-job-progress','The prior observation stays available while this request is checked.');$('fs-job-check').hidden=true;
+    try{if(window.TLIRelease)await window.TLIRelease.requireCapability('storage_jobs_v1');if(!current(epoch))return false;const data=await api('/visualizer/jobs',payload,epoch);const job=validateJob(data,payload);if(!current(epoch))return false;state.job=job;state.pendingStart=null;showJob(job);if(terminal.has(job.status))await finish(job,epoch);else schedule(epoch);return true;}
+    catch(e){if(current(epoch)){if(e.status){state.pendingStart=null;status(e.message+' The request was rejected. Previous observations are unchanged; nothing retries automatically.');window.TLIStorageHistory?.scanFailed();}else{status(e.message+' Start was not confirmed. An explicit retry uses the same request ID, but can start the job if the first request never arrived.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Retry this start request';}}}
+    finally{if(current(epoch)){state.busy=false;controls();}}
+    return false;
+  }
+  async function poll(){if(state.busy||!state.job||state.locked||document.hidden)return;const epoch=state.epoch,job=state.job;state.busy=true;controls();
+    try{const data=await api(`/visualizer/jobs/${encodeURIComponent(job.id)}`,null,epoch);const updated=validateJob(data,job);if(!current(epoch))return;state.job=updated;showJob(updated);if(terminal.has(updated.status))await finish(updated,epoch);else schedule(epoch);}
+    catch(e){if(current(epoch)){if([404,410].includes(e.status)){state.job=null;window.TLIStorageHistory?.scanFailed();status(e.message+' This job is no longer available. Previous observations are retained. Start a new scan explicitly if needed.');}else{status(e.message+' Watching paused. Previous observations are unchanged. Check status explicitly to continue.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Check status';}}}
+    finally{if(current(epoch)){state.busy=false;controls();}}
+  }
+  async function stop(){if(state.busy||!state.job||terminal.has(state.job.status))return;const epoch=state.epoch,job=state.job;clearTimeout(state.timer);state.busy=true;controls();
+    try{const data=await api(`/visualizer/jobs/${encodeURIComponent(job.id)}/cancel`,{},epoch);const updated=validateJob(data,job);if(!current(epoch))return;state.job=updated;showJob(updated);if(terminal.has(updated.status))await finish(updated,epoch);else schedule(epoch);}
+    catch(e){if(current(epoch)){status(e.message+' Cancellation was not confirmed. The host may still be scanning; check status before starting again.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Check status';}}
+    finally{if(current(epoch)){state.busy=false;controls();}}
+  }
+  function prepare(path){setup();if(state.locked||!pathOK(path))return false;$('visualizerPathInput').value=path;locationChanged();status('Location selected. Choose Scan to start; no scan has run from this navigation.');return true;}
+  function locationChanged(){const path=$('visualizerPathInput').value.trim();text('fs-location-title',path||'Choose where to look');text('fs-location-summary-hint',path||'Choose a drive or folder');const drive=state.drives.find(d=>samePath(d.mountpoint,path));text('fs-location-capacity',drive?`${drive.label||drive.mountpoint} · ${bytes(drive.free)} free of ${bytes(drive.total)}. Capacity is a recorded drive reading.`:'This is a folder on the TLI host. Selecting it does not scan or change files.');for(const n of $('vis4-drives').querySelectorAll('button'))n.setAttribute('aria-pressed',String(samePath(n.dataset.mount,path)));if(state.observation&&!samePath(state.observation.root,path))status(`Showing the retained observation of ${state.observation.root}. Scan the selected location to replace it.`);}
+  async function drives(force=false){setup();if(state.driveBusy||state.locked||state.paused||document.hidden||(!force&&state.drivesLoaded))return;if(state.pendingStart||state.job&&!terminal.has(state.job.status)){text('fs-drives-status','A storage job is active. Refresh capacity explicitly after it finishes. Previous readings are retained.');return;}const epoch=state.epoch;state.driveBusy=true;$('fs-drives-refresh').disabled=true;text('fs-drives-status','Reading drive capacity…');
+    try{if(!window.TLI_PATHS&&typeof window._tliLoadCommonPaths==='function'){await window._tliLoadCommonPaths();if(!current(epoch))return;}const data=await api('/visualizer/drives',null,epoch);if(!Array.isArray(data.drives)||data.drives.length>256||data.drives.some(d=>!pathOK(d.mountpoint||d.mount||d.path)))throw Error('Drive information has an invalid format.');if(!current(epoch))return;state.drives=data.drives.map(d=>({...d,mountpoint:d.mountpoint||d.mount||d.path,free:d.free_bytes??d.free,total:d.total_bytes??d.total}));state.drivesLoaded=true;renderDrives();text('fs-drives-status',`${state.drives.length} drives · capacity read ${new Date().toLocaleTimeString()}`);}
+    catch(e){if(current(epoch))text('fs-drives-status','Drive information is unavailable. Previous readings are retained; you can enter a folder or refresh explicitly.');}
+    finally{if(current(epoch)){state.driveBusy=false;$('fs-drives-refresh').disabled=false;}}
+  }
+  function renderDrives(){const query=$('fs-drive-search').value.toLowerCase(),sort=$('fs-drive-sort').value,rows=state.drives.filter(d=>(String(d.label||'')+' '+d.mountpoint).toLowerCase().includes(query)).sort((a,b)=>sort==='free'?(finite(a.free)?a.free:Infinity)-(finite(b.free)?b.free:Infinity):sort==='used'?(finite(b.percent_used)?b.percent_used:-1)-(finite(a.percent_used)?a.percent_used:-1):String(a.label||a.mountpoint).localeCompare(String(b.label||b.mountpoint)));const list=$('vis4-drives');list.replaceChildren();
+    for(const d of rows){const b=button('',()=>prepare(d.mountpoint),'fs-drive');b.dataset.mount=d.mountpoint;b.setAttribute('aria-pressed',String(samePath($('visualizerPathInput').value,d.mountpoint)));const top=make('span',undefined,'fs-drive-top');top.append(make('strong',d.label||d.mountpoint),make('span',finite(d.percent_used)&&d.percent_used<=100?Math.round(d.percent_used)+'% used':'Usage unknown','fs-help'));b.append(top,make('span',d.mountpoint,'fs-path'));const meter=make('span',undefined,'fs-meter'),fill=make('span');fill.style.width=(finite(d.percent_used)&&d.percent_used<=100?d.percent_used:0)+'%';meter.append(fill);b.append(meter,make('span',`${bytes(d.free)} free / ${bytes(d.total)}`,'fs-help'));if(d.availability&&d.availability!=='available'){b.append(make('span',({offline:'Offline',unavailable:'Capacity unavailable',unknown:'Capacity unknown'}[d.availability]||'Capacity unavailable')+(typeof d.detail==='string'?' · '+d.detail.slice(0,240):''),'fs-drive-availability'));}list.append(b);}if(!rows.length)list.append(make('p',state.drives.length?'No drives match your search.':'No drives returned. Enter a folder to continue.','fs-help'));}
+  function applyScope(observation){if(observation)window.TLIStorageCleanup?.setScope?.({observationId:observation.job.id,root:observation.root||'common_folders',host:observation.host||{name:hostName(),id:null}});}
+  function setTab(tab){if(!['explore','large_files','duplicates','common_folders','history'].includes(tab))return;const changed=state.tab!==tab;state.tab=tab;for(const b of document.querySelectorAll('[data-fs-tab]')){const active=b.dataset.fsTab===tab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$('fs-view-'+b.dataset.fsTab).hidden=!active;}if(changed){if(tab==='explore'&&state.observation){applyScope(state.observation);renderExplorer();}else if(state.tools[tab]){applyScope(state.tools[tab]);renderTool(tab);}}}
+  function renderObservation(){const o=state.observation;$('fs-empty').hidden=!!o;$('storage-results').hidden=!o;$('panel-visualizer').classList.toggle('fs-has-observation',!!o);if(!o)return;const summary=$('vis4-summary');summary.replaceChildren();const heading=make('div',undefined,'fs-heading');heading.append(make('strong',`${itemBytes(o.index.get(o.root))} inspected`),make('span',o.job.status,'fs-badge'));summary.append(heading,make('p',`${o.host.name} · ${date(o.recordedAt)} · saved observation`,'fs-help'));
+    const details=make('details',undefined,'fs-policy');details.append(make('summary','Recorded scope & limits'),make('p',o.root,'fs-path'),make('p',visCoverage(o.raw.meta)));details.append(make('p',`Host ID: ${o.host.id||'unavailable'} · Job: ${o.job.id} · ${o.job.profile} profile. This is a saved observation, not a current capacity reading.`));const filters=o.raw.meta.scan_filters||o.raw.meta.saved_scan?.summary?.filters;if(filters){const excluded=Array.isArray(filters.excluded_names)?filters.excluded_names.filter(n=>typeof n==='string').slice(0,100):null;details.append(make('p',`Limits: ${finite(filters.max_seconds)?filters.max_seconds+' seconds':'time unavailable'}, ${finite(filters.max_entries)?filters.max_entries.toLocaleString()+' entries':'entry limit unavailable'}, ${finite(filters.max_depth)?filters.max_depth+' folder levels':'depth unavailable'}. Excluded names: ${excluded?excluded.join(', ')||'none':'not recorded'}.`));}else details.append(make('p','The returned observation did not record a scan-policy breakdown.'));summary.append(details);
+    const cats=$('visualizerCategoryFilter'),selected=cats.value;cats.replaceChildren();for(const c of ['all',...new Set(o.files.map(f=>f.category))].sort((a,b)=>a==='all'?-1:b==='all'?1:a.localeCompare(b))){const option=make('option',c==='all'?'All types':c);option.value=c;cats.append(option);}cats.value=Array.from(cats.options).some(x=>x.value===selected)?selected:'all';renderExplorer();}
+  function matching() {
+    const o=state.observation;if(!o)return [];
+    const query=$('visualizerSearchInput').value.toLowerCase(),cat=$('visualizerCategoryFilter').value,min=Number($('visualizerMinSize').value)||0;
+    const matches=f=>(!query||(f.name+' '+(f.path||f.parentPath)).toLowerCase().includes(query))&&(cat==='all'||f.category===cat)&&(min===0||finite(f.size)&&f.size>=min);
+    state.mapView=window.TLIStorageMap.view(o.map,state.focus,matches,state.mapGroup);
+    const rows=state.mode==='folders'?o.folders.filter(f=>f.path!==state.focus&&below(f.path,state.focus)&&matches(f)):state.mapView.rows;
+    return rows.slice().sort((a,b)=>{const diff=state.sort==='size'?(a.size===null?-1:a.size)-(b.size===null?-1:b.size):String(a[state.sort]||'').localeCompare(String(b[state.sort]||''));return diff*state.direction||String(a.key||a.path).localeCompare(String(b.key||b.path));});
+  }
+  const itemKey=item=>item?.key||item?.path;
+  const inspectable=(o,revision)=>o===state.observation&&!state.locked&&!state.paused&&(revision===undefined||revision===state.displayRevision);
+  function highlightSelection(){
+    const key=itemKey(state.selected);
+    for(const {node,item} of [...mapMarks,...tableMarks]){const active=key===itemKey(item)||!!item.members?.includes(key)||!!state.selected?.members?.includes(itemKey(item));node.classList.toggle('fs-is-selected',active);node.setAttribute(node.tagName==='BUTTON'?'aria-pressed':'aria-current',String(active));}
+  }
+  function choose(item,o=state.observation,revision){
+    if(!inspectable(o,revision))return;
+    state.selected=item;
+    const rows=matching(),position=rows.findIndex(row=>itemKey(row)===itemKey(item)||item.members?.includes(itemKey(row)));
+    if(position>=0&&Math.floor(position/PAGE_SIZE)!==state.page){state.page=Math.floor(position/PAGE_SIZE);renderExplorer();}
+    $('visualizerDetailsBar').hidden=false;text('visualizerDetailsName',item.name);
+    text('visualizerDetailsPath',item.path||`Grouped under ${item.parentPath||state.focus} · no individual file path`);
+    text('visualizerDetailsSize',`${itemBytes(item)} · ${item.aggregate?'Grouped indexed bytes; not an actionable file':item.isDir?'Folder in this observation':item.category}${item.protected?' · Protected location':''}${item.reason?' · '+item.reason:''}`);
+    $('visualizerCopyPathBtn').disabled=!item.path||item.synthetic;
+    $('visualizerSendToFilesBtn').disabled=!item.path||item.synthetic;
+    const actions=$('fs-selected-cleanup');actions.replaceChildren();
+    if(item.members){actions.append(button('Show grouped entries',()=>{if(!inspectable(o))return;state.mapGroup=new Set(item.members);state.page=0;state.selected=null;$('visualizerDetailsBar').hidden=true;renderExplorer();},'fs-button fs-small'));}
+    else if(item.isDir&&!item.synthetic&&item.children?.length)actions.append(button('Open recorded folder',()=>drill(item.path,o),'fs-button fs-small'));
+    else if(item.actionable!==false&&!item.isDir&&!item.synthetic)actions.append(window.TLIStorageCleanup?.choice?.(item)||make('span','Cleanup unavailable'));
+    highlightSelection();$('visualizerDetailsBar').scrollIntoView?.({block:'nearest',behavior:'instant'});
+  }
+  function drill(path,o=state.observation){
+    if(!inspectable(o))return;const item=o.index.get(path);if(!item?.isDir||item.synthetic)return;
+    state.focus=path;state.mapGroup=null;state.page=0;state.selected=null;$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup').replaceChildren();renderExplorer();$('visualizerCenterTitle').focus();
+  }
+  function renderBreadcrumbs(o){
+    const box=$('fs-map-breadcrumbs');box.replaceChildren();const trail=[];let item=o.index.get(state.focus);
+    while(item){trail.unshift(item);item=o.index.get(item.parentPath);}
+    for(const folder of trail){if(box.childElementCount)box.append(make('span','/'));const b=button(folder.path===o.root?folder.path:folder.name,()=>drill(folder.path,o),'fs-button fs-small');if(folder.path===state.focus&&!state.mapGroup)b.setAttribute('aria-current','location');box.append(b);}
+    if(state.mapGroup){box.append(make('span','/'),button('Grouped display subset · show all',()=>{if(!inspectable(o))return;state.mapGroup=null;state.page=0;state.selected=null;$('visualizerDetailsBar').hidden=true;renderExplorer();},'fs-button fs-small'));}
+  }
+  function setSurface(surface){state.surface=surface;$('fs-map-workbench').dataset.surface=surface;$('fs-mobile-map').setAttribute('aria-pressed',String(surface==='map'));$('fs-mobile-list').setAttribute('aria-pressed',String(surface==='list'));}
+  function renderExplorer(){
+    const o=state.observation;if(!o)return;state.displayRevision=(state.displayRevision||0)+1;const revision=state.displayRevision;
+    const rows=matching(),maxPage=Math.max(0,Math.ceil(rows.length/PAGE_SIZE)-1);state.page=Math.min(state.page,maxPage);
+    text('visualizerCenterSubtitle',state.focus);$('visualizerBackBtn').disabled=samePath(state.focus,o.root);renderBreadcrumbs(o);
+    text('visualizerStatusLine',`${rows.length.toLocaleString()} matching retained ${state.mode==='folders'?'folders':'entries'} · ${o.files.length.toLocaleString()} individual file paths recorded`);
+    for(const b of $('visualizerModePills').querySelectorAll('button'))b.setAttribute('aria-pressed',String(b.dataset.mode===state.mode));
+    const body=$('visualizerTableBody');body.replaceChildren();tableMarks=[];
+    for(const item of rows.slice(state.page*PAGE_SIZE,(state.page+1)*PAGE_SIZE)){
+      const tr=make('tr'),name=make('td'),action=button(item.name,()=>{if(!inspectable(o,revision))return;choose(item,o,revision);if(state.mode==='folders'&&item.isDir)drill(item.path,o);},'fs-file-name storage-file-action');
+      name.append(action,make('small',item.path||`Grouped under ${item.parentPath} · no individual path`,'fs-path'));
+      const review=make('td');
+      if(item.actionable!==false&&!item.isDir&&!item.synthetic)review.append(window.TLIStorageCleanup?.choice?.(item)||make('span','Cleanup unavailable'));
+      else if(item.isDir&&!item.synthetic&&item.children?.length)review.append(button('Open folder',()=>{if(inspectable(o,revision))drill(item.path,o);},'fs-button fs-small'));
+      else review.append(make('span',item.aggregate?'Grouped · review only':item.size===null?'Size unknown':'No file action','fs-help'));
+      tr.append(name,make('td',item.aggregate?'Grouped':item.category),make('td',itemBytes(item)),review);body.append(tr);tableMarks.push({node:tr,item});
+    }
+    if(!rows.length){const tr=make('tr'),td=make('td',o.map.atoms.length?'No entries match these display filters. Change a filter or return to the scanned root.':'No indexed entries were retained. Check coverage before treating the folder as empty.');td.colSpan=4;tr.append(td);body.append(tr);}
+    $('fs-map-workbench').hidden=state.mode==='types';$('fs-map-workbench').classList.toggle('fs-list-only',state.mode!=='map');
+    $('fs-map-list-panel').hidden=state.mode==='types';$('fs-table-wrap').hidden=state.mode==='types';$('vis4-treemap-container').hidden=state.mode!=='map';$('visualizerTypeBars').hidden=state.mode!=='types';$('fs-mobile-map-list').hidden=state.mode!=='map';
+    $('fs-paging').hidden=state.mode==='types'||rows.length<=PAGE_SIZE;text('fs-page-label',`${rows.length?state.page*PAGE_SIZE+1:0}–${Math.min((state.page+1)*PAGE_SIZE,rows.length)} of ${rows.length}`);$('fs-page-prev').disabled=state.page===0;$('fs-page-next').disabled=state.page>=maxPage;
+    mapObserver?.disconnect();mapObserver=null;
+    if(state.mode==='map')renderMap(state.mapView,o,revision);else mapMarks=[];
+    if(state.mode==='types')renderTypes(rows);setSurface(state.surface);highlightSelection();updateCleanup();
+  }
+  function renderMap(view,o,revision){
+    const box=$('vis4-treemap-container');box.replaceChildren();mapMarks=[];
+    const representation=window.TLIStorageMap.hierarchy(view);
+    const header=make('div',undefined,'fs-map-heading');header.append(make('strong','Space map'),make('span',`${bytes(view.total)} mapped known bytes`,'fs-map-total'));box.append(header);
+    box.append(make('p',`${view.unknown} retained unknown-size${view.groupedUnknown?' · '+view.groupedUnknown+' additional unknown sizes inside groups':''} · ${view.zero} zero-byte entries outside map${view.aggregateBytes?' · '+bytes(view.aggregateBytes)+' grouped bytes':''}. Recorded bytes, not drive capacity.`,'fs-help'));
+    const areaDetails=make('details',undefined,'fs-map-accounting');areaDetails.append(make('summary','Map accounting'),make('p',`${bytes(view.scopeTotal)} known indexed bytes in this recorded folder scope. The map uses ${bytes(view.total)} matching known bytes; display filters do not change saved totals. Folder and child bytes are never added twice. Unknown sizes are excluded from area, not treated as empty.`));
+    if(representation.groupedCount)areaDetails.append(make('p',`${representation.groupedCount.toLocaleString()} entries are combined in “Other mapped entries” to bound drawing. Select that group to inspect its retained entries. All indexed bytes remain in the denominator.`));
+    if(!view.total){box.append(make('p','No positive known sizes match. The linked list retains zero, unknown and grouped entries.'));return;}
+    if(!window.d3?.treemap){box.append(make('p','The map library is unavailable. The linked list retains every recorded entry and size.'));return;}
+    const canvas=make('div',undefined,'fs-map-canvas');canvas.setAttribute('role','group');canvas.setAttribute('aria-label','Recorded file bytes by folder and file type; small tiles are available in the linked list');box.append(canvas);
+    const colors=new Set(), width=Math.max(1,Math.round(canvas.getBoundingClientRect?.().width||box.getBoundingClientRect?.().width||600)), height=420;
+    const layout=window.TLIStorageMap.layout(window.d3,representation,width,height);
+    for(const leaf of layout.leaves()){
+      const item=leaf.data.item,w=leaf.x1-leaf.x0,h=leaf.y1-leaf.y0,large=w>=36&&h>=28;
+      const category=item.aggregate?'Grouped':item.category,key=String(category).toLowerCase().replace(/[^a-z]/g,'');colors.add(category);
+      const mark=large?button('',()=>choose(item,o,revision),'fs-map-item'):make('div',undefined,'fs-map-item fs-map-tiny');
+      mark.classList.add('fs-map-type-'+key);mark.dataset.mapKey=itemKey(item);
+      if(large)mark.setAttribute('aria-label',`${item.name} · ${itemBytes(item)} · ${item.path||'non-actionable grouped entries'}`);else mark.setAttribute('aria-hidden','true');
+      Object.assign(mark.style,{left:leaf.x0/width*100+'%',top:leaf.y0/height*100+'%',width:w/width*100+'%',height:h/height*100+'%'});
+      if(w>=80&&h>=54)mark.append(make('span',item.name),make('small',bytes(item.size)));
+      canvas.append(mark);mapMarks.push({node:mark,item});
+    }
+    for(const folder of layout.descendants().filter(n=>n.depth===1&&n.children)){
+      const w=folder.x1-folder.x0,h=folder.y1-folder.y0,frame=make('div',undefined,'fs-map-folder-boundary');frame.setAttribute('aria-hidden','true');Object.assign(frame.style,{left:folder.x0/width*100+'%',top:folder.y0/height*100+'%',width:w/width*100+'%',height:h/height*100+'%'});canvas.append(frame);
+      if(w>=100&&h>=90){const b=button(folder.data.name,()=>{if(inspectable(o,revision))drill(folder.data.path,o);},'fs-map-folder-label');b.setAttribute('aria-label',`Open recorded folder ${folder.data.path} · ${bytes(folder.value)} in this map region`);Object.assign(b.style,{left:folder.x0/width*100+'%',top:folder.y0/height*100+'%',maxWidth:w/width*100+'%'});canvas.append(b);}
+    }
+    const legend=make('div',undefined,'fs-map-legend');legend.setAttribute('aria-label','File type colors');
+    for(const category of [...colors].sort()){const item=make('span'),swatch=make('i',undefined,'fs-map-swatch fs-map-type-'+category.toLowerCase().replace(/[^a-z]/g,''));swatch.setAttribute('aria-hidden','true');item.append(swatch,make('span',category));legend.append(item);}box.append(legend,areaDetails,make('p','Choose a tile or list entry to inspect its path. Tiny tiles remain in the list. Cleanup selection is separate.','fs-help'));
+    highlightSelection();
+    if(window.ResizeObserver){mapObserver?.disconnect();let measured=width;mapObserver=new window.ResizeObserver(entries=>{const next=Math.round(entries[0]?.contentRect.width||0);if(next>0&&Math.abs(next-measured)>2&&inspectable(o,revision)&&state.mode==='map'){measured=next;mapObserver.disconnect();renderMap(view,o,revision);}});mapObserver.observe(canvas);}
   }
 
-  // Open in Files
-  if (openBtn && !openBtn._v4Bound){
-    openBtn._v4Bound = true;
-    openBtn.addEventListener("click", async () => {
-      const p = st.selectedPath;
-      if (!p) return;
-      try {
-        const resp = await fetch("/visualizer/open_in_files?path=" + encodeURIComponent(p));
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        showToast("Sent to Files.", "success");
-      } catch {
-        try { window.__tli_open_path_in_files = p; } catch {}
-        try { switchPanel("panel-files"); } catch {}
-        showToast("Opening Files panel…", "success");
-      }
-    });
+  function renderTypes(rows){const box=$('visualizerTypeBars');box.replaceChildren();const totals=new Map();for(const f of rows){const r=totals.get(f.category)||{size:0,count:0,unknown:0};r.count++;if(f.size===null)r.unknown++;else r.size+=f.size;totals.set(f.category,r);}const max=Math.max(1,...Array.from(totals.values(),r=>r.size));for(const [name,r] of [...totals].sort((a,b)=>b[1].size-a[1].size)){const row=make('div',undefined,'fs-type-row');row.append(make('strong',name),make('span',`${bytes(r.size)} · ${r.count} retained entries${r.unknown?' · '+r.unknown+' unknown sizes':''}`));const meter=make('span',undefined,'fs-meter'),fill=make('span');fill.style.width=r.size/max*100+'%';meter.append(fill);row.append(meter);box.append(row);}if(!totals.size)box.append(make('p','No file types match these filters.'));}
+  function renderTool(operation){const o=state.tools[operation];if(!o)return;const data=o.raw,box=$('fs-'+operation+'-results');box.replaceChildren();text('fs-'+operation+'-status',`${labels[operation]} ${o.job.status} · ${operation==='common_folders'?'Common folders on the TLI host':o.root} · ${date(o.recordedAt)}`);
+    if(operation==='large_files'){box.append(make('p',visCoverage(data.meta),'fs-help'),make('p',`${data.files.length} files returned${finite(data.meta.found)?' of '+data.meta.found+' matches found':''}. ${finite(o.job.min_mb)?'Minimum '+o.job.min_mb+' MiB.':''}`));let count=0;const show=()=>{const end=Math.min(count+PAGE_SIZE,data.files.length);for(;count<end;count++){const f=data.files[count],row=make('div',undefined,'fs-tool-row');row.append(make('strong',f.name),make('p',f.path,'fs-path'),make('span',itemBytes(f)),window.TLIStorageCleanup?.choice?.({...f,isDir:false})||make('span','Cleanup unavailable'),button('Select parent folder',()=>prepare(getParentFolderPath(f.path))));box.append(row);}more.hidden=count>=data.files.length;};const more=button('Show more files',show);show();box.append(more);if(!data.files.length)box.append(make('p','No matching files returned. Partial coverage does not establish that none exist.'));}
+    else if(operation==='duplicates'){box.append(make('p',visDuplicateCoverage(data.meta),'fs-help'),make('p',`${data.groups.length} groups returned${finite(data.meta.groups_found)?' of '+data.meta.groups_found+' found':''}.`));for(const group of data.groups){const details=make('details',undefined,'fs-dupe');details.append(make('summary',`${group.paths.length} copies · ${bytes(group.size)} each · ${bytes(group.wasted_bytes)} in extra copies`));let mounted=false;details.addEventListener('toggle',()=>{if(!details.open||mounted)return;mounted=true;if(data.meta.verification==='full_sha256'&&window.TLIStorageCleanup?.duplicateControls)details.append(window.TLIStorageCleanup.duplicateControls(group));else{for(const path of group.paths.slice(0,100))details.append(make('p',path,'fs-path'));if(group.paths.length>100)details.append(make('p','Only the first 100 unverified paths are displayed. No cleanup selection is available without full-content verification.'));}});box.append(details);}if(!data.groups.length)box.append(make('p','No duplicate groups returned from the files checked.'));}
+    else {for(const target of data.targets){const row=make('div',undefined,'fs-tool-row');row.append(make('strong',target.label),make('p',target.path,'fs-path'),make('span',target.size_partial?'At least '+bytes(target.size_bytes):bytes(target.size_bytes)),make('p',visCleanupCoverage(target),'fs-help'),button('Select this folder',()=>prepare(target.path)));box.append(row);}if(!data.targets.length)box.append(make('p','No supported common folders were returned. You can still scan a selected location.'));}updateCleanup();}
+  function openCleanup(){if(window.TLIStorageCleanup?.openReview){window.TLIStorageCleanup.openReview();return true;}const box=$('storage-cleanup-review');if(!box)return false;box.open=true;box.scrollIntoView({block:'nearest'});box.querySelector('summary').focus();return true;}
+  function updateCleanup(){const summary=$('storage-cleanup-review')?.querySelector('summary');if(summary)summary.textContent='Cleanup review · '+($('cleanup-count')?.textContent||'no files selected');}
+  function closeHandoff(){state.handoff=null;$('fs-handoff')?.close();text('fs-handoff-text','');text('fs-handoff-status','');}
+  function reviewHandoff(kind){const o=state.observation,item=state.selected;if(!o||(kind==='files'&&!item))return;const content=kind==='files'?(item.isDir?item.path:getParentFolderPath(item.path)):`Recorded storage observation on ${o.host.name}, ${date(o.recordedAt)}. Root: ${o.root}. Inspected file bytes: ${itemBytes(o.index.get(o.root))}. ${visCoverage(o.raw.meta)}\nLargest recorded files:\n${[...o.files].sort((a,b)=>(b.size||0)-(a.size||0)).slice(0,5).map(f=>`${f.path} — ${itemBytes(f)}`).join('\n')}\nPlease help me interpret this historical scan and suggest what I should review. Do not assume any file is safe to delete or that disk space has been freed.`;
+    state.handoff={kind,content,epoch:state.epoch};text('fs-handoff-title',kind==='files'?'Review this folder in Files':'Review the scan summary for Chat');text('fs-handoff-text',content);text('fs-handoff-help',kind==='files'?'This selects the parent folder in Files. No file scan, plan or move runs. If Files already has a different path draft, it stays unchanged.':'This prepares plain reference text in an empty Chat draft. It does not send a message, attach a verified report or change any existing context.');text('fs-handoff-confirm',kind==='files'?'Open Files with this location':'Use in an empty Chat draft');text('fs-handoff-status','');$('fs-handoff').showModal();}
+  function confirmHandoff(){const h=state.handoff;if(!h||!current(h.epoch))return;if(h.kind==='files'){const input=$('filesRootInput');if(!input){text('fs-handoff-status','Files is unavailable.');return;}if(input.value.trim()&&!samePath(input.value.trim(),h.content)){text('fs-handoff-status','Files already has a different folder draft. It was preserved. Copy this path and review the existing Files draft first.');return;}input.value=h.content;input.dispatchEvent(new Event('input',{bubbles:true}));closeHandoff();if(typeof switchPanel==='function')switchPanel('panel-files');input.focus();}
+    else {const input=$('chat-input');const context=[window.TLIIntelligence,window.TLIDocuments,window.TLINotebook,window.TLICaseContext].flatMap(m=>m?.describeContext?.()||[]);if(!input||input.value.trim()||$('chat-send-btn')?.disabled||context.length){text('fs-handoff-status','Chat has a draft, an active reply or selected context. Those are preserved. Finish or clear them explicitly in Chat before using this summary.');return;}input.value=h.content;input.dispatchEvent(new Event('input',{bubbles:true}));closeHandoff();if(typeof switchPanel==='function')switchPanel('panel-main');input.focus();}}
+  function clearPrivate(){mapObserver?.disconnect();mapObserver=null;mapMarks=[];tableMarks=[];state.mapView=null;state.mapGroup=null;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.job=null;state.pendingStart=null;state.busy=false;state.driveBusy=false;state.drives=[];state.drivesLoaded=false;state.observation=null;state.tools={};state.selected=null;state.focus='';state.page=0;window.visualizerV4=null;if(!state.initialized)return;closeHandoff();for(const id of ['fs-map-breadcrumbs','fs-selected-cleanup','vis4-drives','vis4-summary','visualizerTableBody','visualizerTypeBars','vis4-treemap-container','visualizerDetailsPath','visualizerDetailsName','visualizerDetailsSize','fs-large_files-results','fs-duplicates-results','fs-common_folders-results','visualizerPathSuggestions','fs-job-title','fs-job-progress','visualizerCenterSubtitle'])$(id)?.replaceChildren();for(const id of ['visualizerPathInput','visualizerSearchInput','fs-drive-search'])$(id).value='';$('visualizerDetailsBar').hidden=true;$('fs-drives-refresh').disabled=false;for(const op of operations.slice(1))text('fs-'+op+'-status','No observation loaded.');text('fs-drives-status','Refresh to read drive capacity.');status('Private observations cleared. Watching stopped; any host scan may continue within its limits. No cleanup or retry ran.');locationChanged();renderObservation();controls();}
+  function setup(){if(state.initialized||!$('panel-visualizer'))return;state.initialized=true;
+    const compact=window.matchMedia?.('(max-width: 800px)');let locationChoice=false;
+    if(compact?.matches)$('fs-locations').open=false;
+    $('fs-locations').querySelector('summary')?.addEventListener('click',()=>{locationChoice=true;});
+    compact?.addEventListener?.('change',e=>{if(!locationChoice)$('fs-locations').open=!e.matches;});
+    $('visualizerScanBtn').addEventListener('click',()=>start('scan'));$('visualizerPathInput').addEventListener('input',locationChanged);$('fs-drives-refresh').addEventListener('click',()=>drives(true));$('fs-drive-search').addEventListener('input',renderDrives);$('fs-drive-sort').addEventListener('change',renderDrives);
+    for(const b of document.querySelectorAll('[data-vis-preset]'))b.addEventListener('click',()=>{const path=window.TLI_PATHS?.common?.[b.dataset.visPreset]||(b.dataset.visPreset==='home'?window.TLI_PATHS?.home:null);if(path)prepare(path);else status('The host has not supplied this folder path. Enter its absolute path or refresh TLI.');});
+    for(const b of document.querySelectorAll('[data-fs-tab]')){b.addEventListener('click',()=>setTab(b.dataset.fsTab));b.addEventListener('keydown',e=>{const tabs=[...document.querySelectorAll('[data-fs-tab]')],i=tabs.indexOf(b);let next;if(e.key==='ArrowRight')next=(i+1)%tabs.length;if(e.key==='ArrowLeft')next=(i+tabs.length-1)%tabs.length;if(e.key==='Home')next=0;if(e.key==='End')next=tabs.length-1;if(next!==undefined){e.preventDefault();setTab(tabs[next].dataset.fsTab);tabs[next].focus();}});}
+    $('fs-profile').addEventListener('change',()=>{const deep=$('fs-profile').value==='deep';$('fs-include-excluded').disabled=!deep;if(!deep)$('fs-include-excluded').checked=false;});
+    for(const op of operations.slice(1))$('fs-start-'+op).addEventListener('click',()=>start(op));$('fs-job-stop').addEventListener('click',stop);$('fs-job-check').addEventListener('click',async()=>{if(state.pendingStart)return submitStart();if(state.job?.status==='cancelled'&&state.job.result_available){if(state.busy)return;const epoch=state.epoch;state.busy=true;controls();try{await finish(state.job,epoch,true);}catch(e){if(current(epoch))status(e.message+' The previous observation is retained.');}finally{if(current(epoch)){state.busy=false;controls();}}return;}return poll();});
+    $('fs-mobile-map').addEventListener('click',()=>setSurface('map'));$('fs-mobile-list').addEventListener('click',()=>setSurface('list'));
+    for(const b of $('visualizerModePills').querySelectorAll('button'))b.addEventListener('click',()=>{state.mode=b.dataset.mode;state.page=0;renderExplorer();});
+    for(const id of ['visualizerSearchInput','visualizerCategoryFilter','visualizerMinSize'])$(id).addEventListener(id==='visualizerSearchInput'?'input':'change',()=>{state.page=0;renderExplorer();});
+    for(const th of document.querySelectorAll('#panel-visualizer th[data-sort]'))th.querySelector('button').addEventListener('click',()=>{state.direction=state.sort===th.dataset.sort?-state.direction:th.dataset.sort==='size'?-1:1;state.sort=th.dataset.sort;state.page=0;for(const t of document.querySelectorAll('#panel-visualizer th[data-sort]'))t.setAttribute('aria-sort',t===th?(state.direction===1?'ascending':'descending'):'none');renderExplorer();});
+    $('fs-page-prev').addEventListener('click',()=>{state.page=Math.max(0,state.page-1);renderExplorer();});$('fs-page-next').addEventListener('click',()=>{state.page++;renderExplorer();});$('visualizerBackBtn').addEventListener('click',()=>drill(getParentFolderPath(state.focus)));
+    $('visualizerCopyPathBtn').addEventListener('click',async()=>{const epoch=state.epoch,path=state.selected?.path;if(!path)return;try{await navigator.clipboard.writeText(path);if(current(epoch))status('Selected path copied.');}catch{if(current(epoch))status('Copy is unavailable. Select the displayed path to copy it manually.');}});
+    $('visualizerSendToFilesBtn').addEventListener('click',()=>reviewHandoff('files'));$('fs-ask-chat').addEventListener('click',()=>reviewHandoff('chat'));$('fs-handoff-close').addEventListener('click',closeHandoff);$('fs-handoff').addEventListener('cancel',e=>{e.preventDefault();closeHandoff();});$('fs-handoff-confirm').addEventListener('click',confirmHandoff);$('fs-open-cleanup').addEventListener('click',openCleanup);
+    window.TLIStorageHistory?.setup();window.addEventListener('tli:cleanup-selection-change',updateCleanup);controls();
   }
-
-  function renderBreadcrumb(){
-    const fp = st.focusPath || st.scanPath || "(root)";
-    if (statusEl) statusEl.textContent = `Viewing: ${fp} • Total scanned: ${fmtBytes(st.totalBytes || 0)}`;
-    if (insightsSub) insightsSub.textContent = `Scan: ${st.scanPath || fp}`;
-    if (backBtn) backBtn.disabled = (st.history.length <= 1);
-    // Keep pane-head subtitle in sync as a short label
-    if (breadcrumbEl) {
-      const parts = fp.replace(/[\\\/]+$/, "").split(/[\\\/]/);
-      breadcrumbEl.textContent = parts.slice(-2).join("/") || fp;
-    }
-
-    // Build interactive breadcrumb — clickable path segments
-    const crumbTarget = document.getElementById("vis4-breadcrumb-row") || breadcrumbEl;
-    if (!crumbTarget) return;
-
-    // If it's the simple text element (old DOM), just update text
-    if (crumbTarget === breadcrumbEl && crumbTarget.tagName !== "DIV") {
-      crumbTarget.textContent = fp;
-      return;
-    }
-
-    // Split path by / or \ into segments with cumulative paths
-    const sep = fp.includes("\\") ? "\\" : "/";
-    const raw = fp.replace(/[\\\/]+$/, ""); // strip trailing sep
-    const parts = raw.split(/[\\\/]/);
-    crumbTarget.innerHTML = "";
-
-    let cumPath = "";
-    parts.forEach((seg, i) => {
-      if (!seg && i === 0) {
-        // Unix root "/"
-        cumPath = "/";
-        seg = "/";
-      } else {
-        cumPath = cumPath ? (cumPath.replace(/[\\\/]$/, "") + sep + seg) : seg;
-      }
-
-      const isLast = (i === parts.length - 1);
-      const chip = document.createElement("span");
-      chip.className = "vis4-crumb" + (isLast ? " active" : "");
-      chip.textContent = seg || sep;
-      chip.title = cumPath;
-
-      if (!isLast) {
-        const captured = cumPath;
-        chip.addEventListener("click", () => focus(captured));
-      }
-      crumbTarget.appendChild(chip);
-
-      if (!isLast) {
-        const sep_el = document.createElement("span");
-        sep_el.className = "vis4-crumb-sep";
-        sep_el.textContent = sep;
-        crumbTarget.appendChild(sep_el);
-      }
-    });
-  }
-
-  function renderSummaryStrip(rowCount){
-    const el = document.getElementById("vis4-summary");
-    if (!el) return;
-
-    const fp = st.focusPath || st.scanPath || "(root)";
-    const bytes = fmtBytes(st.totalBytes || 0);
-    const rows = rowCount || 0;
-
-    // Compute top category and top folder (lightweight)
-    let topCat = "—", topCatBytes = 0;
-    try{
-      const focusNode = getNode(st.focusPath);
-      const totals = new Map();
-      walk(focusNode, (n) => {
-        const isDir = !!n.is_dir || (Array.isArray(n.children) && n.children.length);
-        if (isDir) return;
-        const name = n.name || "";
-        const cat = categoryOf(name, false);
-        totals.set(cat, (totals.get(cat)||0) + toNumber(n.size));
-      });
-      const entries = [...totals.entries()].sort((a,b)=>b[1]-a[1]);
-      if (entries.length){ topCat = entries[0][0]; topCatBytes = entries[0][1]; }
-    } catch {}
-
-    let topFolder = "—", topFolderBytes = 0;
-    try{
-      const focusNode = getNode(st.focusPath);
-      const kids = Array.isArray(focusNode.children) ? focusNode.children : [];
-      const folders = kids
-        .filter(n => (n.is_dir || (Array.isArray(n.children) && n.children.length)) )
-        .map(n => [n.name || "(folder)", toNumber(n.size)]);
-      folders.sort((a,b)=>b[1]-a[1]);
-      if (folders.length){ topFolder = folders[0][0]; topFolderBytes = folders[0][1]; }
-    } catch {}
-
-    el.innerHTML = `
-      <div class="meta">
-        <span class="chip"><span class="k">Scanned</span><span class="v">${esc(bytes)}</span></span>
-        <span class="chip"><span class="k">Rows</span><span class="v">${esc(String(rows))}</span></span>
-        <span class="chip"><span class="k">Path</span><span class="v">${esc(fp)}</span></span>
-      </div>
-      <div class="right">
-        <span class="chip"><span class="k">Top type</span><span class="v">${esc(topCat)}${topCatBytes ? " • " + esc(fmtBytes(topCatBytes)) : ""}</span></span>
-        <span class="chip"><span class="k">Top folder</span><span class="v">${esc(topFolder)}${topFolderBytes ? " • " + esc(fmtBytes(topFolderBytes)) : ""}</span></span>
-      </div>
-    `;
-  }
-
-  // File-type icon map for tree sidebar
-  const _treeIcons = {
-    Folder: "📁", Video: "🎬", Audio: "🎵", Images: "🖼",
-    Models: "🤖", Archives: "📦", Dev: "💻", Docs: "📄", Other: "📎",
-  };
-
-  function renderTree(){
-    const focusNode = getNode(st.focusPath);
-    const kids = Array.isArray(focusNode.children) ? focusNode.children : [];
-    treeEl.innerHTML = "";
-
-    if (!kids.length){
-      const empty = document.createElement("div");
-      empty.className = "vis4-empty";
-      empty.textContent = "Nothing here.";
-      treeEl.appendChild(empty);
-      return;
-    }
-
-    // Inject interactive breadcrumb row at the top of the tree pane
-    const breadcrumbRow = document.createElement("div");
-    breadcrumbRow.id = "vis4-breadcrumb-row";
-    breadcrumbRow.className = "vis4-breadcrumb-row";
-    treeEl.appendChild(breadcrumbRow);
-
-    // Separate into folders and files, both sorted by size desc
-    const folders = kids
-      .filter(n => n.is_dir || (Array.isArray(n.children) && n.children.length))
-      .map(n => ({ name: n.name || "(folder)", path: n.path || "", size: toNumber(n.size), isDir: true, protected: !!n.protected }))
-      .sort((a, b) => b.size - a.size)
-      .slice(0, 200);
-
-    const files = kids
-      .filter(n => !n.is_dir && !(Array.isArray(n.children) && n.children.length))
-      .map(n => ({ name: n.name || "(file)", path: n.path || "", size: toNumber(n.size), isDir: false, protected: !!n.protected }))
-      .sort((a, b) => b.size - a.size)
-      .slice(0, 100);
-
-    const addNode = (f) => {
-      const row = document.createElement("div");
-      const isActive = (f.path === st.selectedPath);
-      const catIcon = f.isDir ? "📁" : (_treeIcons[categoryOf(f.name, false)] || "📎");
-      row.className = "vis4-node" + (f.isDir ? " is-dir" : " is-file") + (isActive ? " active" : "") + (f.protected ? " vis4-protected" : "");
-      row.innerHTML = `<div class="tw">${catIcon}</div><div class="name">${esc(f.name)}</div><div class="badge">${esc(fmtBytes(f.size))}</div>`;
-      row.title = f.path || f.name;
-      if (!f.protected) {
-        row.addEventListener("click", () => {
-          if (f.isDir) focus(f.path || f.name);
-          else select({ name: f.name, path: f.path, size: f.size, isDir: false, category: categoryOf(f.name, false) });
-        });
-        row.addEventListener("contextmenu", (e) => showVisContextMenu(e, f.path || f.name, f.isDir, f.deletable !== false));
-      }
-      treeEl.appendChild(row);
-    };
-
-    folders.forEach(addNode);
-
-    if (files.length) {
-      // Thin separator between folders and files
-      if (folders.length) {
-        const sep = document.createElement("div");
-        sep.style.cssText = "height:1px;background:var(--border-subtle);margin:6px 8px;";
-        treeEl.appendChild(sep);
-      }
-      files.forEach(addNode);
-    }
-
-    // Now render the breadcrumb inside the injected row
-    renderBreadcrumb();
-  }
-
-  function applyFilters(items){
-    const q = (st.filters.q || "").toLowerCase();
-    const cat = st.filters.cat || "";
-    const ext = (st.filters.ext || "").toLowerCase();
-    const minMb = toNumber(st.filters.minMb);
-    const minBytes = minMb > 0 ? minMb * 1024 * 1024 : 0;
-
-    return items.filter(it => {
-      if (minBytes && it.size < minBytes) return false;
-      if (cat && it.category !== cat) return false;
-
-      if (ext){
-        const parts = ext.split(/[\s,;]+/).filter(Boolean);
-        const e = extOf(it.name);
-        if (parts.length){
-          let ok=false;
-          for (const p of parts){
-            const pe = p.startsWith(".") ? p.toLowerCase() : ("."+p.toLowerCase());
-            if (e === pe) { ok=true; break; }
-          }
-          if (!ok) return false;
-        }
-      }
-
-      if (q){
-        const s = (it.name + " " + (it.path||"")).toLowerCase();
-        if (!s.includes(q)) return false;
-      }
-      return true;
-    });
-  }
-
-  function sortItems(items){
-    const { key, dir } = st.sort || { key:"size", dir:"desc" };
-    const mult = (dir === "asc") ? 1 : -1;
-    return items.slice().sort((a,b) => {
-      const av = (a[key] ?? "");
-      const bv = (b[key] ?? "");
-      if (key === "size"){
-        return (toNumber(av) - toNumber(bv)) * mult;
-      }
-      return String(av).localeCompare(String(bv)) * mult;
-    });
-  }
-
-  function itemsForMode(){
-    const focusNode = getNode(st.focusPath);
-    const kids = Array.isArray(focusNode.children) ? focusNode.children : [];
-
-    if (st.mode === "folders"){
-      return kids
-        .filter(n => (n.is_dir || (Array.isArray(n.children) && n.children.length)))
-        .map(n => ({ name: n.name || "(folder)", path: n.path || "", size: toNumber(n.size), isDir:true, category:"Folder", protected: !!n.protected }));
-    }
-
-    if (st.mode === "types"){
-      const byCat = new Map();
-      walk(focusNode, (n) => {
-        const isDir = !!n.is_dir || (Array.isArray(n.children) && n.children.length);
-        if (isDir) return;
-        const name = n.name || "(file)";
-        const cat = categoryOf(name, false);
-        byCat.set(cat, (byCat.get(cat) || 0) + toNumber(n.size));
-      });
-      return [...byCat.entries()].map(([cat, size]) => ({ name: cat, path: st.focusPath, size, isDir:false, category:cat }));
-    }
-
-    const files = [];
-    walk(focusNode, (n) => {
-      const isDir = !!n.is_dir || (Array.isArray(n.children) && n.children.length);
-      if (isDir) return;
-      const path = n.path || "";
-      const name = n.name || (path ? path.split(/[\\/]/).pop() : "(file)");
-      const prot = !!n.protected || isProtectedSystemPathClient(path);
-      files.push({ name, path, size: toNumber(n.size), isDir:false, category: categoryOf(name,false), protected: prot });
-    });
-    return files;
-  }
-
-  function setCenterTitles(){
-    const fp = st.focusPath || st.scanPath || "";
-    if (st.mode === "folders"){
-      if (centerTitle) centerTitle.textContent = "Largest folders";
-      if (centerSub)   centerSub.textContent = `Largest folders in: ${fp}`;
-    } else if (st.mode === "types"){
-      if (centerTitle) centerTitle.textContent = "File types";
-      if (centerSub)   centerSub.textContent = `Storage breakdown inside: ${fp}`;
-    } else if (st.mode === "map"){
-      if (centerTitle) centerTitle.textContent = "Storage map";
-      if (centerSub)   centerSub.textContent = `Visual treemap of: ${fp}`;
-    } else {
-      if (centerTitle) centerTitle.textContent = "Largest files";
-      if (centerSub)   centerSub.textContent = `Largest files inside: ${fp}`;
-    }
-  }
-
-  function renderTable(){
-    setCenterTitles();
-
-    const thead = tbody.closest("table")?.querySelector("thead");
-    if (thead && !thead._v4Bound){
-      thead._v4Bound = true;
-      thead.addEventListener("click", (e) => {
-        const th = e.target.closest("th[data-sort]");
-        if (!th) return;
-        const key = th.getAttribute("data-sort");
-        if (!key) return;
-        if (st.sort.key === key){
-          st.sort.dir = (st.sort.dir === "asc") ? "desc" : "asc";
-        } else {
-          st.sort.key = key;
-          st.sort.dir = (key === "size") ? "desc" : "asc";
-        }
-        renderTable();
-      });
-    }
-
-    let items = itemsForMode();
-    items = applyFilters(items);
-    items = sortItems(items);
-
-    const maxRows = 2500;
-    const shown = items.slice(0, maxRows);
-
-    tbody.innerHTML = "";
-    if (!shown.length){
-      const tr = document.createElement("tr");
-      tr.innerHTML = `<td colspan="4" class="vis4-empty-row">No matches.</td>`;
-      tbody.appendChild(tr);
-      if (selEl) selEl.textContent = "No selection.";
-      if (detailsBar) detailsBar.style.display = "none";
-      if (openBtn) openBtn.disabled = true;
-      return;
-    }
-
-    shown.forEach((it) => {
-      const tr = document.createElement("tr");
-      if (it.protected) tr.classList.add("vis4-protected");
-      const shield = it.protected
-        ? `<span class="vis4-shield" title="System path — do not delete">🛡</span> `
-        : "";
-      tr.innerHTML = `
-        <td class="col-name" title="${esc(it.path || it.name)}">${shield}${esc(it.name)}</td>
-        <td class="col-type">${esc(it.category)}</td>
-        <td class="col-size">${esc(fmtBytes(it.size))}</td>
-        <td class="col-path" title="${esc(it.path || "")}">${esc(it.path || "")}</td>
-      `;
-      tr.addEventListener("click", () => { if (!it.protected) select(it); });
-      tr.addEventListener("contextmenu", (e) => { if (!it.protected) showVisContextMenu(e, it.path || it.name, !!it.isDir, it.deletable !== false); });
-      tr.addEventListener("dblclick", () => {
-        if (it.isDir && it.path && !it.protected) focus(it.path);
-      });
-      tbody.appendChild(tr);
-    });
-
-    if (statusEl){
-      statusEl.textContent = `Rows: ${shown.length}${items.length>shown.length ? " (clamped)" : ""} • Total scanned: ${fmtBytes(st.totalBytes || 0)}`;
-      renderSummaryStrip(shown.length);
-    }
-  }
-
-  function select(it){
-    st.selectedPath = it.path || it.name;
-    st.selectedIsDir = !!it.isDir;
-    if (selEl) selEl.textContent = `Selected: ${it.name} • ${fmtBytes(it.size)}`;
-    if (detailsBar){
-      detailsBar.style.display = "flex";
-      dName.textContent = it.name;
-      dPath.textContent = st.selectedPath;
-      dSize.textContent = fmtBytes(it.size);
-    }
-    if (openBtn) openBtn.disabled = !st.selectedPath;
-  }
-
-  function renderInsights(){
-    const focusNode = getNode(st.focusPath);
-    const totals = new Map();
-    walk(focusNode, (n) => {
-      const isDir = !!n.is_dir || (Array.isArray(n.children) && n.children.length);
-      if (isDir) return;
-      const name = n.name || "";
-      const cat = categoryOf(name, false);
-      totals.set(cat, (totals.get(cat)||0) + toNumber(n.size));
-    });
-
-    const entries = [...totals.entries()].sort((a,b)=>b[1]-a[1]).slice(0, 8);
-    const max = entries.length ? entries[0][1] : 1;
-
-    if (typeBarsEl){
-      typeBarsEl.innerHTML = "";
-      if (!entries.length){
-        typeBarsEl.innerHTML = `<div class="vis4-empty">No data.</div>`;
-      } else {
-        entries.forEach(([k,v]) => {
-          const wrap = document.createElement("div");
-          wrap.className = "vis4-item";
-          wrap.innerHTML = `<div class="k">${esc(k)}</div><div class="v">${esc(fmtBytes(v))}</div>`;
-          const bar = document.createElement("div");
-          bar.className = "vis4-bar";
-          const fill = document.createElement("div");
-          fill.style.width = Math.max(6, Math.round((v/max)*100)) + "%";
-          bar.appendChild(fill);
-          typeBarsEl.appendChild(wrap);
-          typeBarsEl.appendChild(bar);
-        });
-      }
-    }
-
-    if (topFoldersEl){
-      topFoldersEl.innerHTML = "";
-      const kids = Array.isArray(focusNode.children) ? focusNode.children : [];
-      const folders = kids
-        .filter(n => (n.is_dir || (Array.isArray(n.children) && n.children.length)))
-        .map(n => ({ name: n.name || "(folder)", path: n.path || "", size: toNumber(n.size) }))
-        .sort((a,b)=>b.size-a.size)
-        .slice(0, 10);
-
-      if (!folders.length){
-        topFoldersEl.innerHTML = `<div class="vis4-empty">No folders.</div>`;
-      } else {
-        folders.forEach(f => {
-          const row = document.createElement("div");
-          row.className = "vis4-item";
-          row.innerHTML = `<div class="k" title="${esc(f.path||f.name)}">${esc(f.name)}</div><div class="v">${esc(fmtBytes(f.size))}</div>`;
-          row.addEventListener("click", () => focus(f.path || f.name));
-          topFoldersEl.appendChild(row);
-        });
-      }
-    }
-
-    if (cleanupEl && !cleanupEl._fetched){
-      cleanupEl._fetched = true;
-      cleanupEl.innerHTML = `<div class="vis4-empty">Loading cleanup analysis…</div>`;
-      fetch("/visualizer/cleanup-targets")
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-          if (!d || !d.targets) {
-            cleanupEl.innerHTML = `<div class="vis4-empty">Cleanup analysis unavailable.</div>`;
-            return;
-          }
-          const safetyLabel = { auto: "Safe to clear", manual: "Review first", caution: "Caution" };
-          const safetyClass = { auto: "vis4-safe", manual: "vis4-manual", caution: "vis4-caution" };
-          const targets = d.targets.filter(t => t.exists && t.size_bytes > 0);
-          if (!targets.length){
-            cleanupEl.innerHTML = `<div class="vis4-empty">No large cleanup targets found — your common temp/cache folders are empty or small.</div>`;
-            return;
-          }
-          cleanupEl.innerHTML = "";
-          // Show the strip now that we have data
-          const stripEl = document.getElementById("vis4-cleanup-strip");
-          if (stripEl) stripEl.hidden = false;
-          // Grid wrapper for the target cards only (deep-clean goes outside it)
-          const rowsGrid = document.createElement("div");
-          rowsGrid.className = "vis4-cleanup-rows-grid";
-          cleanupEl.appendChild(rowsGrid);
-          // "Still full?" deep-clean section (rendered after target cards)
-          const _renderDeepClean = () => {
-            const scanRoot = (st.root && st.root.path) || (window.TLI_SERVER_OS === "Windows" ? "C:\\" : "/");
-            const sec = document.createElement("div");
-            sec.className = "vis4-deepclean-section";
-            sec.innerHTML = `
-              <div class="vis4-deepclean-header">Still need more space?</div>
-              <p class="vis4-deepclean-sub">Common cleanup targets not enough? Go deeper — hunt large files or find duplicates taking up hidden space.</p>
-              <div class="vis4-deepclean-cards">
-                <div class="vis4-deepclean-card" id="vis4-largefile-card">
-                  <div class="vis4-deepclean-icon">&#128269;</div>
-                  <div class="vis4-deepclean-title">Hunt Large Files</div>
-                  <div class="vis4-deepclean-desc">Find every file over 100 MB. Sorted by size — spot the biggest offenders instantly.</div>
-                  <div class="vis4-deepclean-controls">
-                    <label>Min size: <select id="vis4-largefiles-minmb">
-                      <option value="50">50 MB</option>
-                      <option value="100" selected>100 MB</option>
-                      <option value="500">500 MB</option>
-                      <option value="1000">1 GB</option>
-                    </select></label>
-                    <button class="pill-btn primary vis4-deepclean-btn" id="vis4-largefiles-btn">Scan Now</button>
-                  </div>
-                  <div id="vis4-largefile-results"></div>
-                </div>
-                <div class="vis4-deepclean-card" id="vis4-dupes-card">
-                  <div class="vis4-deepclean-icon">&#128203;</div>
-                  <div class="vis4-deepclean-title">Find Duplicates</div>
-                  <div class="vis4-deepclean-desc">Groups identical files by content — not just name. See exactly how much space duplicates are wasting.</div>
-                  <button class="pill-btn primary vis4-deepclean-btn" id="vis4-dupes-btn">Scan Now</button>
-                  <div id="vis4-dupes-results"></div>
-                </div>
-                <div class="vis4-deepclean-card">
-                  <div class="vis4-deepclean-icon">&#129302;</div>
-                  <div class="vis4-deepclean-title">Ask the AI</div>
-                  <div class="vis4-deepclean-desc">Send your current scan summary to the AI for analysis and personalised cleanup recommendations.</div>
-                  <button class="pill-btn secondary vis4-deepclean-btn" id="vis4-askai-btn">Analyse with AI</button>
-                </div>
-              </div>
-            `;
-            cleanupEl.appendChild(sec);
-
-            // Large files handler
-            sec.querySelector("#vis4-largefiles-btn").addEventListener("click", () => {
-              const minMb = sec.querySelector("#vis4-largefiles-minmb").value;
-              const resEl = sec.querySelector("#vis4-largefile-results");
-              resEl.innerHTML = `<div class="vis4-deepclean-loading">Scanning for files over ${minMb} MB…</div>`;
-              fetch(`/visualizer/large-files?path=${encodeURIComponent(scanRoot)}&min_mb=${minMb}&limit=200`)
-                .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                .then(data => {
-                  if (!data.files || !data.files.length) {
-                    resEl.innerHTML = `<div class="vis4-deepclean-empty">No files over ${minMb} MB found.</div>`;
-                    return;
-                  }
-                  const totalMb = data.meta.total_mb >= 1000
-                    ? (data.meta.total_mb / 1024).toFixed(1) + " GB"
-                    : data.meta.total_mb + " MB";
-                  let html = `<div class="vis4-deepclean-summary">Found <strong>${data.files.length}</strong> files — <strong>${totalMb}</strong> total (took ${data.meta.seconds}s)</div>
-                    <table class="vis4-deepclean-table">
-                      <thead><tr><th>File</th><th>Size</th><th></th></tr></thead><tbody>`;
-                  data.files.slice(0, 100).forEach(f => {
-                    const mb = f.size >= 1073741824
-                      ? (f.size / 1073741824).toFixed(2) + " GB"
-                      : (f.size / 1048576).toFixed(1) + " MB";
-                    html += `<tr>
-                      <td class="vis4-deepclean-fname" title="${esc(f.path)}">${esc(f.name)}</td>
-                      <td class="vis4-deepclean-fsize">${mb}</td>
-                      <td><button class="vis4-deepclean-reveal pill-btn secondary" data-path="${esc(f.path)}">Reveal</button></td>
-                    </tr>`;
-                  });
-                  html += `</tbody></table>`;
-                  if (data.files.length > 100) html += `<div class="vis4-deepclean-more">…and ${data.files.length - 100} more</div>`;
-                  resEl.innerHTML = html;
-                  resEl.querySelectorAll(".vis4-deepclean-reveal").forEach(btn => {
-                    btn.addEventListener("click", () => {
-                      const p = btn.getAttribute("data-path");
-                      const parent = p.substring(0, Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")));
-                      if (parent && window.TLIVisualizer?.scanPath) window.TLIVisualizer.scanPath(parent);
-                    });
-                  });
-                })
-                .catch(err => { resEl.innerHTML = `<div class="vis4-deepclean-empty">Scan failed (${err}). Check the path and try again.</div>`; });
-            });
-
-            // Duplicates handler
-            sec.querySelector("#vis4-dupes-btn").addEventListener("click", () => {
-              const resEl = sec.querySelector("#vis4-dupes-results");
-              resEl.innerHTML = `<div class="vis4-deepclean-loading">Scanning for duplicates in ${esc(scanRoot)}…<br><small>This may take a while for large drives.</small></div>`;
-              fetch(`/visualizer/duplicates?path=${encodeURIComponent(scanRoot)}`)
-                .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                .then(data => {
-                  if (!data.groups || !data.groups.length) {
-                    resEl.innerHTML = `<div class="vis4-deepclean-empty">No duplicate files found.</div>`;
-                    return;
-                  }
-                  const wastedMb = data.meta.total_wasted_mb >= 1000
-                    ? (data.meta.total_wasted_mb / 1024).toFixed(1) + " GB"
-                    : data.meta.total_wasted_mb + " MB";
-                  let html = `<div class="vis4-deepclean-summary">Found <strong>${data.groups.length}</strong> duplicate groups — <strong>${wastedMb}</strong> wasted (took ${data.meta.seconds}s)</div>`;
-                  data.groups.slice(0, 30).forEach((g, i) => {
-                    const gWasted = g.wasted_bytes >= 1073741824
-                      ? (g.wasted_bytes / 1073741824).toFixed(2) + " GB"
-                      : (g.wasted_bytes / 1048576).toFixed(1) + " MB";
-                    const gSize = g.size >= 1073741824
-                      ? (g.size / 1073741824).toFixed(2) + " GB"
-                      : (g.size / 1048576).toFixed(1) + " MB";
-                    html += `<details class="vis4-dupe-group">
-                      <summary>${g.count} copies &times; ${gSize} = <strong>${gWasted} wasted</strong></summary>
-                      <ul class="vis4-dupe-list">`;
-                    g.paths.forEach(p => {
-                      html += `<li title="${esc(p)}">${esc(p)}</li>`;
-                    });
-                    html += `</ul></details>`;
-                  });
-                  if (data.groups.length > 30) html += `<div class="vis4-deepclean-more">…and ${data.groups.length - 30} more groups</div>`;
-                  resEl.innerHTML = html;
-                })
-                .catch(err => { resEl.innerHTML = `<div class="vis4-deepclean-empty">Scan failed (${err}).</div>`; });
-            });
-
-            // Ask AI handler
-            sec.querySelector("#vis4-askai-btn").addEventListener("click", () => {
-              // Build a concise scan summary from current state
-              const root = st.root;
-              const totalMb = root ? Math.round((root.size || 0) / 1048576) : 0;
-              const largest = (st.largest || []).slice(0, 5).map(f => {
-                const mb = Math.round(f.size / 1048576);
-                return `${f.name} (${mb} MB)`;
-              }).join(", ");
-              const alerts = (window._tliAlerts || []).filter(a => !a.dismissed).map(a => a.message).join("; ");
-              let prompt = `My TLI storage scan shows: root="${scanRoot}", total size ≈${totalMb} MB`;
-              if (largest) prompt += `, largest files: ${largest}`;
-              if (alerts)  prompt += `, active alerts: ${alerts}`;
-              prompt += `. Can you analyse this and give me specific recommendations to free up space?`;
-              // Inject into chat and switch panel
-              const chatInput = document.getElementById("chatInput") || document.querySelector(".chat-input textarea") || document.querySelector("#chat-panel textarea");
-              if (chatInput) {
-                chatInput.value = prompt;
-                chatInput.dispatchEvent(new Event("input", { bubbles: true }));
-              }
-              switchPanel("panel-chat");
-              showToast("Scan summary sent to AI chat");
-            });
-          };
-          // Append deep-clean section after all target rows render
-          setTimeout(_renderDeepClean, 0);
-
-          targets.forEach(t => {
-            const sizeMb = t.size_mb >= 1000
-              ? (t.size_mb / 1024).toFixed(1) + " GB"
-              : t.size_mb.toFixed(0) + " MB";
-            const row = document.createElement("div");
-            row.className = "vis4-cleanup-row";
-            row.innerHTML = `
-              <div class="vis4-cleanup-header">
-                <span class="vis4-cleanup-label">${esc(t.label)}</span>
-                <span class="vis4-cleanup-size">${esc(sizeMb)}</span>
-                <span class="vis4-cleanup-safety ${esc(safetyClass[t.safety] || "")}">${esc(safetyLabel[t.safety] || t.safety)}</span>
-              </div>
-              <div class="vis4-cleanup-tip">${esc(t.tip)}</div>
-              <div class="vis4-cleanup-how"><strong>How:</strong> ${esc(t.how)}</div>
-              <button class="vis4-cleanup-scan-btn pill-btn secondary" data-path="${esc(t.path)}">Scan this folder</button>
-            `;
-            row.querySelector(".vis4-cleanup-scan-btn").addEventListener("click", (e) => {
-              const p = e.currentTarget.getAttribute("data-path");
-              if (p && window.TLIVisualizer?.scanPath) window.TLIVisualizer.scanPath(p);
-            });
-            rowsGrid.appendChild(row);
-          });
-        })
-        .catch(() => {
-          cleanupEl.innerHTML = `<div class="vis4-empty">Could not load cleanup targets.</div>`;
-        });
-    }
-  }
-
-  // ── D3 Treemap ────────────────────────────────────────────────────────────
-  // Colors drawn from TLI's emerald palette + complementary accents
-  const _TM_COLORS = {
-    Folder:   "#35c98b",   // TLI accent emerald
-    Models:   "#a78bfa",   // soft violet
-    Video:    "#f59e0b",   // amber
-    Archives: "#f97316",   // orange
-    Images:   "#ec4899",   // pink
-    Audio:    "#22d3ee",   // cyan
-    Dev:      "#60a5fa",   // blue
-    Docs:     "#94a3b8",   // slate
-    Other:    "#4b5563",   // gray
-  };
-
-  function renderTreemapD3() {
-    const container = document.getElementById("vis4-treemap-container");
-    if (!container) return;
-    container.innerHTML = "";
-
-    if (typeof d3 === "undefined") {
-      container.innerHTML = '<div class="vis4-empty">D3 not loaded — check /assets/d3.v7.min.js</div>';
-      return;
-    }
-
-    const focusNode = getNode(st.focusPath);
-    if (!focusNode) { container.innerHTML = '<div class="vis4-empty">No data.</div>'; return; }
-
-    const W = Math.max(container.clientWidth || 600, 300);
-    const H = Math.max(Math.round(W * 0.58), 340);
-
-    const root = d3.hierarchy(focusNode)
-      .sum(d => (!d.children || !d.children.length) ? Math.max(1, toNumber(d.size)) : 0)
-      .sort((a, b) => b.value - a.value);
-
-    d3.treemap()
-      .size([W, H])
-      .paddingOuter(3)
-      .paddingInner(1)
-      .paddingTop(18)
-      .round(true)(root);
-
-    const svg = d3.create("svg")
-      .attr("width", W).attr("height", H)
-      .attr("viewBox", `0 0 ${W} ${H}`)
-      .style("display", "block").style("overflow", "hidden")
-      .style("border-radius", "8px").style("background", "#070f18");
-
-    // Folder header bands (non-leaf nodes)
-    svg.selectAll(".tm-dir")
-      .data(root.descendants().filter(d => d.depth > 0 && d.children))
-      .join("g").attr("class","tm-dir")
-      .attr("transform", d => `translate(${d.x0},${d.y0})`)
-      .call(g => {
-        g.append("rect")
-          .attr("width", d => Math.max(0, d.x1-d.x0))
-          .attr("height", 17)
-          .attr("fill", "#35c98b").attr("opacity", 0.22).attr("rx", 2);
-        g.append("text")
-          .attr("x", 4).attr("y", 12)
-          .attr("fill", "#6ee7b7").attr("font-size", "10px").attr("font-weight", "600")
-          .text(d => {
-            const avail = Math.floor((d.x1-d.x0) / 6.2);
-            const name = d.data.name || "";
-            return name.length > avail ? name.slice(0, avail-1)+"…" : name;
-          });
-        g.style("cursor","pointer")
-          .on("click", (_, d) => { if (d.data.path) focus(d.data.path); });
-      });
-
-    // Leaf tiles
-    const leaf = svg.selectAll(".tm-leaf")
-      .data(root.leaves())
-      .join("g").attr("class","tm-leaf")
-      .attr("transform", d => `translate(${d.x0},${d.y0})`);
-
-    leaf.append("rect")
-      .attr("width",  d => Math.max(0, d.x1-d.x0))
-      .attr("height", d => Math.max(0, d.y1-d.y0))
-      .attr("fill", d => _TM_COLORS[categoryOf(d.data.name||"", false)] || _TM_COLORS.Other)
-      .attr("opacity", 0.68).attr("rx", 2).attr("stroke","#070f18").attr("stroke-width",0.75);
-
-    // Name label
-    leaf.filter(d => (d.x1-d.x0) > 32 && (d.y1-d.y0) > 16)
-      .append("text")
-      .attr("x", 3).attr("y", 13)
-      .attr("fill","#fff").attr("font-size","10px")
-      .attr("pointer-events","none")
-      .text(d => {
-        const avail = Math.floor((d.x1-d.x0) / 5.8);
-        const name = d.data.name || "";
-        return name.length > avail ? name.slice(0, avail-1)+"…" : name;
-      });
-
-    // Size label
-    leaf.filter(d => (d.x1-d.x0) > 44 && (d.y1-d.y0) > 30)
-      .append("text")
-      .attr("x", 3).attr("y", 25)
-      .attr("fill","rgba(255,255,255,0.55)").attr("font-size","9px")
-      .attr("pointer-events","none")
-      .text(d => fmtBytes(d.data.size || d.value || 0));
-
-    // Tooltip
-    let _tip = document.getElementById("_tli_vis_tip");
-    if (!_tip) {
-      _tip = document.createElement("div");
-      _tip.id = "_tli_vis_tip";
-      _tip.style.cssText = "position:fixed;background:#050c14;border:1px solid #35c98b;color:#f5f7ff;padding:8px 12px;border-radius:8px;font-size:12px;pointer-events:none;z-index:9999;display:none;line-height:1.6;max-width:300px;word-break:break-all;box-shadow:0 4px 16px rgba(0,0,0,.5);";
-      document.body.appendChild(_tip);
-    }
-    leaf.on("mousemove", (event, d) => {
-      _tip.style.display = "block";
-      _tip.style.left = (event.clientX+14)+"px";
-      _tip.style.top  = (event.clientY-36)+"px";
-      const cat = categoryOf(d.data.name||"",false);
-      _tip.innerHTML = `<b style="color:#6ee7b7">${esc(d.data.name||"")}</b><br>${esc(fmtBytes(toNumber(d.data.size||d.value||0)))} · <span style="color:#35c98b">${esc(cat)}</span><br><span style="color:#6b7a8a;font-size:10px">${esc(d.data.path||"")}</span>`;
-    }).on("mouseleave", () => { _tip.style.display = "none"; });
-
-    leaf.style("cursor","pointer")
-      .on("click", (_, d) => {
-        select({ name: d.data.name||"", path: d.data.path||"", size: toNumber(d.data.size||d.value||0), isDir:false, category: categoryOf(d.data.name||"",false) });
-      })
-      .on("contextmenu", (event, d) => showVisContextMenu(event, d.data.path||d.data.name||"", false, d.data.deletable !== false));
-
-    container.appendChild(svg.node());
-  }
-
-  // ── renderAll ────────────────────────────────────────────────────────────
-  function renderAll(){
-    renderTree();       // creates #vis4-breadcrumb-row, then calls renderBreadcrumb internally
-    renderInsights();
-
-    const tableWrap = tbody && tbody.closest(".vis4-table-wrap");
-    const tmContainer = document.getElementById("vis4-treemap-container");
-    const isMap = st.mode === "map";
-
-    if (tableWrap) tableWrap.style.display = isMap ? "none" : "";
-    if (tmContainer) tmContainer.style.display = isMap ? "block" : "none";
-
-    if (isMap) {
-      renderTreemapD3();
-    } else {
-      renderTable();
-    }
-  }
-
-  renderAll();
-}
-
-function getNodePath(node) {
-  if (!node) return null;
-
-  const ancestors = node.ancestors().reverse();
-  const root = ancestors[0];
-
-  // Full absolute path of the scanned directory
-  const rootPath = root.data?.path || root.data?.name || "";
-
-  // Build tail path from children
-  const parts = ancestors
-    .slice(1)
-    .map(a => a.data?.name)
-    .filter(Boolean);
-
-  let sep = "\\"; // Windows default
-  if (rootPath.includes("/")) sep = "/";
-
-  const tail = parts.join(sep);
-
-  // Ensure proper joining:
-  // rootPath + "\" + subdirs...
-  if (!tail) return rootPath;
-
-  return rootPath.replace(/[\\\/]$/, "") + sep + tail;
-}
-
-
-// Re-render on resize so the treemap always fills the panel nicely
-window.addEventListener("resize", () => {
-  if (lastVisualizerData) {
-    renderStorageExplorer(lastVisualizerData);
-  }
-});
-
-
-
-
-
-
+  window.TLIFreeSpace={setup,prepare,startScan:({path}={})=>start('scan',path),start,stop,poll,loadDrives:drives,clearPrivate,openCleanup,updateCleanup,
+    // Read-only validators also exercised by isolated controller tests.
+    validateJob,validateResult,bytes,getState:()=>({busy:state.busy,job:state.job,observation:state.observation,tab:state.tab,epoch:state.epoch,mode:state.mode,focus:state.focus,selected:state.selected,mapView:state.mapView})};
+  window.TLIVisualizer={scanPath:prepare,startScan:({path}={})=>start('scan',path)};
+  function pause(){mapObserver?.disconnect();mapObserver=null;state.paused=true;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.busy=false;state.driveBusy=false;closeHandoff();controls();}
+  function resume(){if(!state.paused||state.locked||document.hidden||!state.panelActive)return;state.paused=false;if(state.initialized)$('fs-drives-refresh').disabled=false;controls();if(state.observation&&state.tab==='explore')renderExplorer();if(state.job&&!terminal.has(state.job.status))poll();else if(state.pendingStart){status('Start response was interrupted. Retry this start request explicitly using its same request ID.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Retry this start request';}}
+  window.addEventListener('tli-session-locked',()=>{
+    const job=state.job;state.locked=true;clearPrivate();
+    if(job&&!terminal.has(job.status))fetch(`/visualizer/jobs/${encodeURIComponent(job.id)}/cancel`,{method:'POST',credentials:'same-origin',cache:'no-store',keepalive:true,headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});
+  });
+  window.addEventListener('tli-session-unlocked',()=>{state.locked=false;state.paused=document.hidden||!state.panelActive;controls();});
+  window.addEventListener('pagehide',event=>{if(event.persisted)pause();else clearPrivate();});
+  window.addEventListener('pageshow',event=>{if(event.persisted)resume();});
+  document.addEventListener?.('visibilitychange',()=>{if(document.hidden)pause();else resume();});
+  document.addEventListener?.('tli-panel-switched',event=>{state.panelActive=event.detail?.panelId==='panel-visualizer';if(state.panelActive)resume();else pause();});
+})();
+function setupVisualizer(){window.TLIFreeSpace.setup();}
+function loadVisualizerDrives(){return window.TLIFreeSpace.loadDrives();}
+function renderStorageExplorer(){throw new Error('Storage observations require a validated job result.');}

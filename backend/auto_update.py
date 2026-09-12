@@ -57,6 +57,7 @@ _progress: int = 0    # 0-100 during download
 
 def get_status() -> dict:
     with _lock:
+        settings = _load_settings()
         return {
             "state":            _state.value,
             "current_version":  S.TLI_VERSION,
@@ -66,7 +67,8 @@ def get_status() -> dict:
             "frontend_only":    _info.get("frontend_only", True),
             "progress":         _progress,
             "error":            _error,
-            "update_url":       _load_settings().get("update_url", ""),
+            "update_url":       settings.get("update_url", ""),
+            "auto_check":       settings.get("auto_check", True),
         }
 
 # ── Settings ─────────────────────────────────────────────────────────

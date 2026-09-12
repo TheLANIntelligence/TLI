@@ -23,6 +23,7 @@ import base64
 import hashlib
 import json
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -36,10 +37,12 @@ from cryptography.hazmat.primitives.serialization import (
 )
 
 import data_protection as _dp
+import security_state as _security
 
 # Module-level cached identity (loaded once at startup)
 _ident: Optional[dict] = None
 _data_dir: str = "."
+_LOCK = threading.RLock()
 
 
 # ── Internal helpers ──────────────────────────────────────────────
@@ -62,17 +65,19 @@ def _protect(raw: bytes) -> bytes:
     if _dp.is_windows():
         try:
             return _dp.dpapi_protect(raw)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise _security.SecurityStateUnavailable("node identity") from exc
     return raw
 
 
 def _unprotect(blob: bytes, is_protected: bool) -> bytes:
-    if is_protected and _dp.is_windows():
+    if is_protected:
+        if not _dp.is_windows():
+            raise _security.SecurityStateUnavailable("node identity")
         try:
             return _dp.dpapi_unprotect(blob)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise _security.SecurityStateUnavailable("node identity") from exc
     return blob
 
 
@@ -81,32 +86,56 @@ def _unprotect(blob: bytes, is_protected: bool) -> bytes:
 def init(data_dir: str) -> None:
     """Load or generate this node's identity. Call once at startup."""
     global _ident, _data_dir
-    _data_dir = data_dir
-    _ident = _load_or_create()
+    with _LOCK:
+        _data_dir = data_dir
+        _ident = None
+        _ident = _load_or_create()
+
+
+def read_existing(data_dir) -> Optional[dict]:
+    """Validate persisted identity, including its keypair, without any writes."""
+    path = Path(data_dir) / "node_identity.json"
+    try:
+        record = _security.read_json(path, "node identity", 65536)
+    except FileNotFoundError:
+        if _security.node_dependencies(data_dir):
+            raise _security.SecurityStateUnavailable("node identity")
+        try:
+            cfg = _security.read_json(Path(data_dir) / "mesh" / "node_config.json", "node configuration", 65536)
+        except FileNotFoundError:
+            cfg = {}
+        if not isinstance(cfg, dict) or (cfg and (not isinstance(cfg.get("node_id"), str) or not cfg["node_id"].strip())):
+            raise _security.SecurityStateUnavailable("node configuration")
+        if cfg.get("role") == "member" or cfg.get("host_device_id") or cfg.get("mesh_status") in ("pending", "approved", "blocked", "removed"):
+            raise _security.SecurityStateUnavailable("node identity")
+        return None
+    try:
+        if not isinstance(record, dict) or type(record.get("version", 1)) is not int or record.get("version", 1) != 1 or type(record.get("dpapi", False)) is not bool:
+            raise ValueError("Invalid identity record")
+        pub_bytes = bytes.fromhex(record["public_key"])
+        if len(pub_bytes) != 32:
+            raise ValueError("Invalid public key")
+        priv_blob = base64.b64decode(record["private_key_enc"], validate=True)
+        priv_key = Ed25519PrivateKey.from_private_bytes(_unprotect(priv_blob, record.get("dpapi", False)))
+        if priv_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw) != pub_bytes:
+            raise ValueError("Mismatched keypair")
+        identity_id = "tli_" + pub_bytes.hex()[:12]
+        if record.get("node_id", identity_id) != identity_id or not isinstance(record.get("created_at", ""), str):
+            raise ValueError("Invalid identity metadata")
+        return {"private_key": priv_key, "public_key_bytes": pub_bytes,
+                "public_key_hex": pub_bytes.hex(), "fingerprint": _fmt_fingerprint(pub_bytes),
+                "node_id": identity_id, "created_at": record.get("created_at", "")}
+    except _security.SecurityStateUnavailable:
+        raise
+    except Exception as exc:
+        raise _security.SecurityStateUnavailable("node identity") from exc
 
 
 def _load_or_create() -> dict:
     path = _identity_path()
-
-    if path.exists():
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-            pub_bytes = bytes.fromhex(record["public_key"])
-            priv_blob = base64.b64decode(record["private_key_enc"])
-            dpapi_flag = record.get("dpapi", False)
-            priv_bytes = _unprotect(priv_blob, dpapi_flag)
-            priv_key   = Ed25519PrivateKey.from_private_bytes(priv_bytes)
-
-            return {
-                "private_key":    priv_key,
-                "public_key_bytes": pub_bytes,
-                "public_key_hex": pub_bytes.hex(),
-                "fingerprint":    _fmt_fingerprint(pub_bytes),
-                "node_id":        record.get("node_id", "tli_" + pub_bytes.hex()[:12]),
-                "created_at":     record.get("created_at", ""),
-            }
-        except Exception:
-            pass  # corrupted — generate fresh
+    existing = read_existing(_data_dir)
+    if existing is not None:
+        return existing
 
     # Generate a brand-new Ed25519 keypair
     priv_key   = Ed25519PrivateKey.generate()
@@ -127,8 +156,7 @@ def _load_or_create() -> dict:
         "dpapi":           dpapi_flag,
         "created_at":      now,
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    _security.write_json(path, record, "node identity", new=True)
 
     return {
         "private_key":      priv_key,
@@ -142,9 +170,10 @@ def _load_or_create() -> dict:
 
 def _ensure() -> dict:
     global _ident
-    if _ident is None:
-        _ident = _load_or_create()
-    return _ident
+    with _LOCK:
+        if _ident is None:
+            _ident = _load_or_create()
+        return _ident
 
 
 def fingerprint() -> str:

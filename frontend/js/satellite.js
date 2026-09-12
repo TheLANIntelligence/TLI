@@ -27,6 +27,7 @@
     const screen = document.getElementById("tli-sat-join");
     if (!screen) return;
     screen.hidden = false;
+    screen.classList.remove("hidden");
     screen.removeAttribute("aria-hidden");
 
     const nameInput = document.getElementById("tli-sat-join-name");

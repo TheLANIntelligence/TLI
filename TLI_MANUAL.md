@@ -1,5 +1,13 @@
 # TheLANIntelligence — User Manual
-*v1.1.1 Beta · Windows · macOS · Linux · No cloud, no tracking*
+*Private home console · Windows, macOS and Linux host adapters*
+
+For the current anniversary interface, use the bundled
+[browser manual](frontend/manual.html) and
+[capability reference](docs/TLI_CAPABILITIES.md). The detailed implementation and
+acceptance status lives in the
+[anniversary completion program](docs/TLI_ANNIVERSARY_COMPLETION_PROGRAM.md).
+Optional online services and real-device acceptance are described separately;
+host support is not a claim that every feature runs on every platform.
 
 ---
 
@@ -11,8 +19,8 @@
 4. [Vault](#vault)
 5. [Home Automation](#home-automation)
 6. [Automations](#automations)
-7. [Game Optimizer](#game-optimizer)
-8. [Storage Visualizer](#storage-visualizer)
+7. [Performance & apps](#performance--apps)
+8. [Free Space](#storage-visualizer)
 9. [Files Panel](#files-panel)
 10. [Mesh & Multi-Device](#mesh--multi-device)
 11. [Satellite Phones](#satellite-phones)
@@ -89,23 +97,40 @@ The Dashboard shows a live snapshot of your system the moment TLI opens.
 - **Narrator** — rotating AI observations about your system's current state
 - **Mesh strip** — shows all online nodes at a glance
 
-Click the **disk usage tile** to jump directly to the Storage Visualizer for that drive.
+Click the **disk usage tile** to prepare that drive in Free Space. Choose **Scan** there to inspect it.
 
 ---
 
 ## AI Chat
 
-TLI connects to a local LLM. No API key or internet required.
+Review the AI source and context summary before sending. General answers require
+an available provider; specific host-status questions can use dated observations.
+Opening a panel alone does not provide its files or scan results to the model.
 
-- Type and press **Enter** to send, or click the send button
-- The AI streams its response in real time
-- Use the **mode selector** to switch between Default, Concise, Step-by-step, and Developer modes
-- The system prompt is configurable in **Settings → System Profile**
-- Chat history persists across sessions
+- **Use saved notes** allows relevant Notes & fixes to be included. A short
+  follow-up such as “What fixed it last time?” can reuse the recent user topic,
+  with the current note version and selected-computer restrictions. Disabling
+  saved notes skips new retrieval; it does not erase earlier conversation text.
+- **Save to Notes & fixes…** offers a new note or a deliberate update to an existing note.
+  Review the before/after text. A changed note requires another review, and saved
+  AI advice is not a confirmed fix. Notes are setup details, preferences and past
+  fixes, separate from conversation history and passphrase-protected Vault notes.
+- **Document questions** accept up to four UTF-8 .txt/.md files, together up to
+  64 KiB. Whole numbered excerpts are chosen when full text exceeds the input
+  budget. Review supplied line ranges and omitted coverage; citations can be
+  wrong, and omitted passages may matter. Files are unchanged. This mode excludes
+  previous conversation, other notes, images, device/report and Vault context.
+- **Response timing** shows browser-observed waiting and elapsed response time.
+  Stop ends receipt in this view without guaranteeing server work was cancelled.
+  Interrupted text remains incomplete. Review the question and Send explicitly
+  to retry; uncertain requests are not automatically replayed.
+- **History** resumes saved conversations. New Chat starts a separate one.
 
-**Panel awareness:** The AI knows which TLI panel you are viewing. Ask "what should I delete?" from the Storage Visualizer and it understands you mean the current disk scan.
-
-**AI Source:** TLI can route queries between a local model and a LAN model. Configure this in **Settings → AI Source** (Auto, Local Only, LAN Only, Prefer LAN, Prefer Local).
+Up to four explicitly selected notes can be questioned on their own through
+bundled AI or configured LM Studio. Their current versions and the question are
+provided without other context or prior history. Review conflicts before Send.
+With PIN protection disabled, local access shares one owner. Unlocking Vault does
+not automatically share its contents with AI.
 
 ---
 
@@ -164,40 +189,43 @@ A Scene is a saved group of device states you can activate with one tap. Create 
 
 ## Automations
 
-Automations fire device actions based on a trigger.
+The Automations section prepares **manual routines**. Choose a starter or create
+up to 20 steps using supported actions, review the exact devices and relays, then
+save the routine. Saving changes no device state.
 
-### Trigger types
+Open a saved routine, review its current targets and acknowledge the complete
+plan before **Run reviewed routine**. Every target must resolve before any step
+executes. Duplicate requests share the recorded execution; an uncertain response
+does not automatically retry. Inspect the per-step result and saved receipt for
+successful, failed and partially completed work.
 
-| Trigger | Fires when |
-|---|---|
-| Node comes online | A mesh node connects |
-| Node goes offline | A mesh node disconnects |
-| Power exceeds threshold | A device's power reading rises above N watts |
-| Power drops below threshold | A device's power reading falls below N watts |
-| Daily at a set time | At a specific time on selected days |
-
-### Creating an automation
-1. Open the **Automations** panel
-2. Choose a trigger type and fill in the details
-3. Set the cooldown (minimum seconds between re-fires; default 30s)
-4. Choose a device and capability for the action
-5. Click **Create Enabled** to activate immediately, or **Create Disabled** to save for later
-
-Each automation shows its last-fired time and can be toggled or deleted individually. Every firing writes a receipt to the log — the 12 most recent are shown in the panel.
+Legacy trigger, enabled and cooldown fields are retained in existing records.
+This installation has no active presence, power or scheduled-trigger executor;
+those fields do not make a routine run automatically. See
+[reviewed routines](docs/TLI_ROUTINE_REVIEW.md).
 
 ---
 
-## Game Optimizer
+<a id="game-optimizer"></a>
+## Performance & apps
 
-The Game Optimizer helps you tune game settings based on your actual hardware and current config.
+The former Game Optimizer is now the host observation tool for Troubleshooting.
+It measures CPU and memory; it does not tune settings or prove the cause of a problem.
 
 ### How it works
-1. Open the **Game Optimizer** panel
-2. TLI reads your hardware (GPU, CPU, RAM, display) and shows it as pills at the top
-3. Click **Detect** to auto-detect a running game, or type a game name manually
-4. If TLI supports that game's config format, it reads your current in-game settings and displays them
-5. Choose an optimization goal (Stable 60 FPS, High FPS, Max Visuals) or ask a specific question
-6. Click **Get Advice** — TLI sends your hardware, current settings, and goal to your local AI model and streams back recommendations
+
+1. Open **Performance & apps** and choose a running process on the TLI host.
+2. Describe the symptom and explicitly start a **30-second observation**.
+3. Review its duration, sample coverage and missing readings. Stop leaves a partial result.
+4. Save a useful result explicitly into diagnostic history.
+5. Review a Chat handoff or add the saved report's link to a Troubleshooting draft.
+
+PID and creation time identify one process launch. It may be only part of an app;
+process exit or PID reuse never silently retargets the observation. Earlier results
+remain when replacement work fails. Comparisons identify host/workload caveats;
+application differences require matching host and a known executable identity.
+GPU metadata is separate from these measurements. FPS, dropped frames, thermal
+throttling and causal bottlenecks are not measured by this tool.
 
 ### Supported config reading
 
@@ -206,20 +234,53 @@ TLI currently reads config files directly for:
 - **The Witcher 3** — `user.settings`
 - **Red Dead Redemption 2** — `system.xml`
 
-When a supported game is detected, a badge shows how many settings were read. Settings tagged in amber are performance-heavy. This context is automatically included when you ask for advice.
+These remain in the secondary gaming controls. Read hardware and the selected
+game's settings deliberately, then request advice about a goal. Unsupported or
+unreadable settings stay unavailable. AI advice is interpretation; a desired FPS
+is a goal, not a benchmark. Stop identifies interrupted output and a failed
+replacement retains prior advice. No game settings are written or processes stopped.
 
-When a game is unsupported, TLI still gives AI advice based on your hardware alone.
+### Guided Troubleshooting
+
+Open **Troubleshooting** to describe a problem and explicitly choose its computer.
+Review an available check's executing host, target, scope and internet contact
+before Run. System/network checks measure the TLI host; device checks measure
+reachability from that host and are not remote application tests.
+
+A completed check saves a report. Review its link, add it to the problem draft,
+then save the problem separately. If that save fails, the report and draft remain;
+the check is not rerun. Marking Resolved records your conclusion, not measured
+recovery. Confirming a historical fix remains a separate reviewed action.
 
 ---
 
-## Storage Visualizer
+<a id="storage-visualizer"></a>
+## Free Space
 
-An interactive treemap of your disk. See exactly what is taking space, drill into folders, and clean from inside TLI.
+Inspect storage on the computer hosting TLI. Choose a location, understand the
+recorded results, review selected files and check the outcome.
 
-- Click the **disk tile on the Dashboard** to open the Visualizer pre-loaded with your system drive
-- Or open the **Visualizer** panel and scan any folder
-- Click any block to drill in; use the breadcrumb trail to navigate up
-- Right-click (or use the action buttons) to **Move to Trash** or **Delete permanently**
+- Choose a drive or quick folder, or enter an exact path. Navigation prepares
+  the location; **Scan** starts work.
+- Start with **Quick overview** (up to 15 seconds), then explicitly request a
+  **Deeper scan** (up to five minutes) if needed. Entry/depth limits, exclusions
+  and permission failures remain visible; neither mode guarantees full coverage.
+- Inspect largest files, folder totals, File types or Map. Use breadcrumbs and
+  keyboard-accessible lists to explore the recorded observation.
+- **Stop scan** requests cancellation. Leaving the page does not cancel work.
+  A failed replacement preserves previous results and their observation time.
+- Run Large-file search, Duplicate search or Common folders explicitly. Save
+  comparable scan summaries only when wanted; a saved comparison is historical.
+- Select up to 100 individual files for a host-side exact-path review. Choose a
+  duplicate copy to keep before selecting others. Protected paths remain blocked.
+- **Move reviewed files to Trash** is separate from scanning and review. There is
+  no permanent-delete control. Trash may still use storage, so moved bytes do not
+  prove freed space. Check an uncertain receipt instead of repeating the move.
+- **Prepare a question about this scan** reviews the information to share without
+  sending Chat automatically or replacing an existing draft.
+
+See [the complete Free Space workflow](docs/TLI_FREE_SPACE_REBUILD.md) for scope,
+limits, preservation and verification.
 
 ---
 
@@ -416,8 +477,34 @@ Type a task description, choose a language (`.bat`, `.ps1`, `.py`), and TLI asks
 | System Prompt | System Profile | Default context sent to the AI |
 | AI Source Policy | AI Source | Auto / Local Only / LAN Only / Prefer LAN / Prefer Local |
 | TLS | TLS | Enable HTTPS, download cert for other devices |
-| Theme | Appearance | Midnight (default), Emerald, Light, or any Hub theme |
+| Interface | Appearance or header View | Modern (default) or Classic: changes navigation and workspace layouts using current features |
+| Color theme | Appearance | Independent palette choice; existing themes work with either interface |
 | Update URL | Updates | URL for checking latest version manifest |
+
+### Classic or Modern interface
+
+To return to the early TLI layout, choose **View → Classic UI** in the header or
+**Settings → General → Appearance → Classic TLI**. Switch back to Modern at any
+time. Classic uses compact navigation, raised cards, chat bubbles and long-form
+Settings, with current functionality and data protections. The choice saves in
+this browser separately from its color theme. **Classic Mint** is the retained
+mint-and-teal palette; choosing it alone does not change the interface layout.
+Neither interface rolls back TLI or its data.
+
+### Saved data & backups
+
+**Check saved data**, **Create backup** and **Verify backup** have separate effects:
+checking current readability, downloading a password-protected notes/chats/reports
+archive, and validating an uploaded archive in a temporary copy.
+
+**Recover into a separate copy** reviews an archive and writes it to a new folder
+on the TLI host. The review shows source ownership, counts and exact destination;
+creation maps records to the copy's local owner and verifies them with current
+readers. The folder must not already exist. The current installation stays in use,
+and its data is never merged or replaced. The copy contains data and a receipt,
+not the application, PIN, identity, Vault, Companion credentials, models or
+attachments. This checkpoint supports Python/ZIP installations; frozen standalone
+recovery is unavailable. See [scope and verification](docs/TLI_SEPARATE_RECOVERY.md).
 
 ---
 
@@ -514,10 +601,11 @@ TLI checks for updates 5 seconds after startup. When a new version is available,
 - Confirm the device is powered and on your LAN
 - Use the device's own app to verify it's online, then refresh TLI
 
-**Automation not firing**
-- Check the automation toggle is enabled (green)
-- Check the cooldown — it won't re-fire until the cooldown period has elapsed
-- For schedule triggers, verify the time and day checkboxes
+**Routine did not run**
+- Saving does not run a routine, and automatic triggers are inactive.
+- Open its current target review, check every step and explicitly choose Run.
+- If a request was submitted, inspect its existing receipt before deciding on a
+  new action. Do not assume a timeout means that nothing happened.
 
 **Hub package won't install**
 - Starter Pack installs from built-in data — no internet needed

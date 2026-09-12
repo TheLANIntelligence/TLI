@@ -212,12 +212,24 @@ class LMStudioProvider:
     # -----------------------------
     # completion
     # -----------------------------
+    def text_capacity(self, model_id=None):
+        """The current OpenAI-compatible adapter has no verified capacity API.
+
+        Listed models and chat health do not identify a loaded context size.
+        Keep discovery side-effect free instead of calling the readiness probe.
+        """
+        return {"status": "unknown", "context_tokens": None,
+                "source": "unavailable", "model": model_id}
+
     def complete(
         self,
         messages: List[Dict[str, str]],
         model_id: str,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        *,
+        allow_redirects: bool = True,
+        enforce_text_budget: bool = False,
     ) -> Dict[str, Any]:
         """
         Returns provider-normalized response:
@@ -227,6 +239,14 @@ class LMStudioProvider:
             "raw": <full json>
           }
         """
+        budget_receipt = None
+        if enforce_text_budget:
+            from intelligence.input_budget import for_provider, DEFAULT_OUTPUT_TOKENS
+            if max_tokens is None:
+                max_tokens = DEFAULT_OUTPUT_TOKENS
+            # Chat opts in; Builder and other provider consumers keep their
+            # existing input limits and provider-selected response length.
+            for_provider("lmstudio", provider=self, model_id=model_id, max_tokens=max_tokens).validate(messages)
         # If no model_id provided, pick the first available
         if not model_id:
             models = self.list_models()
@@ -235,6 +255,8 @@ class LMStudioProvider:
                     "No models found in LM Studio. Load a model and start the server."
                 )
             model_id = models[0]["id"]
+        if enforce_text_budget:
+            budget_receipt = for_provider("lmstudio", provider=self, model_id=model_id, max_tokens=max_tokens).validate(messages)
 
         payload: Dict[str, Any] = {
             "model": model_id,
@@ -249,6 +271,7 @@ class LMStudioProvider:
             self.chat_url,
             json=payload,
             timeout=(self.connect_timeout, self.read_timeout),
+            **({"allow_redirects": False} if not allow_redirects else {}),
         )
 
         if r.status_code != 200:
@@ -272,4 +295,5 @@ class LMStudioProvider:
             "text": str(text or ""),
             "model": data.get("model") or model_id,
             "raw": data,
+            **({"input_budget": budget_receipt} if budget_receipt is not None else {}),
         }

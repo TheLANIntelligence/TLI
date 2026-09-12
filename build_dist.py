@@ -18,6 +18,7 @@ import hashlib
 import os
 import pathlib
 import re
+import stat
 import sys
 import zipfile
 
@@ -53,21 +54,22 @@ def _read_version() -> str:
 # excluded entirely — including all its contents.
 SKIP_DIR_NAMES: set[str] = {
     # Python / virtualenv
-    ".venv", "__pycache__", ".mypy_cache", ".pytest_cache",
+    ".venv", "venv", "__pycache__", ".mypy_cache", ".pytest_cache", ".cache",
     # Version control / IDE
     ".git", ".claude", ".vscode",
+    ".codex", ".idea",
     # User runtime data (never distribute)
-    "data",
+    "data", "tli_data", "vault_data", "vault", "keys", "tls", "secrets", ".ssh", ".aws", ".azure", ".gnupg",
     # AI session memory (your sessions, not defaults)
-    "session",
+    "session", "sessions", "models",
     # AI session memory (your sessions, not defaults) — runtime is now included
     # Build artefacts (PyInstaller)
-    "build", "build_work", "dist",
+    "build", "build_work", "dist", "dist_build", "build-inspect", "coverage",
     # TLI-specific content not for end users
     "TLI_Beta", "TLI_Confidential", "TLI_Installer",
     "tli-vault-extension", "tools", "docs", "landing", "modules",
     # Node / misc
-    "node_modules",
+    "node_modules", "mobile", ".expo", ".gradle",  # native apps have their own EAS distribution
 }
 
 # File extensions that are never useful to a user running from source
@@ -75,13 +77,14 @@ SKIP_EXTENSIONS: set[str] = {
     # Compiled / binary
     ".pyc", ".pyd", ".pyo", ".so", ".dll", ".exe",
     # Model weights
-    ".gguf", ".bin", ".safetensors",
+    ".gguf", ".ggml", ".bin", ".safetensors", ".onnx", ".pt", ".pth",
     # Archives (don't bundle zips inside the zip)
     ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2",
     # Media (large, not needed)
     ".mp4", ".avi", ".mkv", ".mov",
     # Runtime databases / logs
-    ".db", ".sqlite", ".sqlite3", ".bak", ".log",
+    ".db", ".sqlite", ".sqlite3", ".bak", ".log", ".jsonl", ".enc", ".tmp",
+    ".pem", ".key", ".crt", ".pfx", ".p12", ".jks", ".keystore", ".mobileprovision", ".env",
     # IDE workspace files
     ".code-workspace",
 }
@@ -116,6 +119,10 @@ SKIP_FILENAMES: set[str] = {
     "devices.json",            # backend/devices.json
     "tli_model_config.json",   # backend/tli_model_config.json
     "vault_meta.json",         # backend/vault_meta.json
+    "credentials.json", "node_identity.json", "tli_pin.json", "tli_system_profile.json",
+    "conversations.json", "vault_sessions.json", "startup.json",
+    "printers_snmp.json", "secrets.json", "secrets.yaml", "secrets.yml",
+    "credentials.yaml", "credentials.yml", "id_rsa", "id_ed25519",
     # Your personal AI memory
     "Ryzen-main.json",
     # The packager itself — not useful inside the dist
@@ -125,8 +132,13 @@ SKIP_FILENAMES: set[str] = {
 # Relative-path substrings — any path containing one of these is excluded.
 # Use forward slashes; comparison is done on the posix path string.
 SKIP_PATH_CONTAINS: list[str] = [
+    "backend/ai/memory/",       # entire private legacy AI memory tree; never traverse
     "backend/memory/",          # all machine-specific AI memory files
     "backend/tests/",           # test suite
+    "frontend/tests/",          # browser/component tests
+    "scripts/verify_release.py", # isolated developer release check
+    "scripts/release_rehearsal.py",
+    "scripts/",                # developer harnesses never ship to end users
     "backend/build_work/",      # PyInstaller intermediates (belt + suspenders)
 ]
 
@@ -139,10 +151,14 @@ SKIP_ROOT_FILES: set[str] = {
 def _should_skip(rel: pathlib.Path) -> tuple[bool, str]:
     """Return (True, reason) if this path should be excluded from the dist."""
     parts = rel.parts
-    posix = rel.as_posix()
+    posix = rel.as_posix().casefold()
+    name = rel.name.casefold()
+
+    if name == ".env" or name.startswith(".env."):
+        return True, "skip-environment"
 
     # 0a. Root-level specific file exclusions
-    if len(parts) == 1 and rel.name in SKIP_ROOT_FILES:
+    if len(parts) == 1 and name in {value.casefold() for value in SKIP_ROOT_FILES}:
         return True, f"skip-root-file:{rel.name}"
 
     # 0b. Skip previously-extracted dist folders at the root level
@@ -154,34 +170,43 @@ def _should_skip(rel: pathlib.Path) -> tuple[bool, str]:
 
     # 1. Directory component check
     for part in parts[:-1]:   # exclude the filename itself
-        if part in SKIP_DIR_NAMES:
+        if part.casefold() in {value.casefold() for value in SKIP_DIR_NAMES}:
             return True, f"skip-dir:{part}"
+
+    # Exact paths apply before any runtime extension override.
+    for substr in SKIP_PATH_CONTAINS:
+        if substr in posix:
+            return True, f"skip-path:{substr}"
 
     # 1b. AI runtime override — include runtime binaries despite .exe/.dll extension rule.
     #     SKIP_FILENAMES still applies (dev-only bench tools are excluded there).
-    if "backend/ai/runtime/" in posix:
-        if rel.name in SKIP_FILENAMES:
+    if posix.startswith("backend/ai/runtime/"):
+        if name in {value.casefold() for value in SKIP_FILENAMES}:
             return True, f"skip-file:{rel.name}"
-        return False, ""
+        if rel.suffix.lower() in {".exe", ".dll", ".so"}:
+            return False, ""
 
     # 2. Extension check
     if rel.suffix.lower() in SKIP_EXTENSIONS:
         return True, f"skip-ext:{rel.suffix}"
 
     # 3. Filename check
-    if rel.name in SKIP_FILENAMES:
+    if name in {value.casefold() for value in SKIP_FILENAMES}:
         return True, f"skip-file:{rel.name}"
-
-    # 4. Path-contains check
-    for substr in SKIP_PATH_CONTAINS:
-        if substr in posix:
-            return True, f"skip-path:{substr}"
 
     return False, ""
 
 
+def _is_linked_path(path: pathlib.Path) -> bool:
+    """Reject symlinks and Windows junction/reparse points on Python 3.10+."""
+    info = path.lstat()
+    return stat.S_ISLNK(info.st_mode) or bool(
+        getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    ) or path.is_symlink()
+
+
 # ── Main ─────────────────────────────────────────────────────────────
-def build(out_path: pathlib.Path, dry_run: bool = False) -> None:
+def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = False) -> None:
     version = _read_version()
     print(f"TLI version : {version}")
     print(f"Output      : {out_path}")
@@ -192,20 +217,35 @@ def build(out_path: pathlib.Path, dry_run: bool = False) -> None:
     included: list[pathlib.Path] = []
     skipped:  list[tuple[pathlib.Path, str]] = []
 
-    for abs_path in sorted(ROOT.rglob("*")):
-        if abs_path.is_dir():
-            continue
-        rel = abs_path.relative_to(ROOT)
-
-        # Never include the output zip itself
-        if abs_path == out_path:
-            continue
-
-        skip, reason = _should_skip(rel)
-        if skip:
-            skipped.append((rel, reason))
-        else:
-            included.append(rel)
+    for directory, dirs, files in os.walk(ROOT, followlinks=False):
+        base = pathlib.Path(directory)
+        kept_dirs = []
+        for name in sorted(dirs):
+            path = base / name
+            rel = path.relative_to(ROOT)
+            skip, reason = _should_skip(rel / "__directory__")
+            if _is_linked_path(path):
+                skipped.append((rel, "skip-linked-directory"))
+            elif skip:
+                skipped.append((rel, reason))
+            else:
+                kept_dirs.append(name)
+        dirs[:] = kept_dirs
+        for name in sorted(files):
+            abs_path = base / name
+            rel = abs_path.relative_to(ROOT)
+            if abs_path.resolve() == out_path.resolve():
+                continue
+            skip, reason = _should_skip(rel)
+            if _is_linked_path(abs_path):
+                skip, reason = True, "skip-linked-file"
+            if frontend_only and rel.parts[0] != "frontend":
+                skip, reason = True, "frontend-only"
+            if skip:
+                skipped.append((rel, reason))
+            else:
+                included.append(rel)
+    included.sort()
 
     print(f"Included    : {len(included)} files")
     print(f"Excluded    : {len(skipped)} files")
@@ -243,7 +283,9 @@ def build(out_path: pathlib.Path, dry_run: bool = False) -> None:
             abs_path = ROOT / rel
             data = abs_path.read_bytes()
             info = zipfile.ZipInfo.from_file(abs_path, rel)
+            info.compress_type = zipfile.ZIP_DEFLATED
             if _needs_exec(rel):
+                info.create_system = 3  # Unix permissions must survive a Windows-built zip.
                 info.external_attr = _EXEC_PERMS
             zf.writestr(info, data)
 
@@ -267,13 +309,17 @@ def build(out_path: pathlib.Path, dry_run: bool = False) -> None:
     print("Paste this into your latest.json when you publish the release:")
     print(f'  "version":      "{version}",')
     print(f'  "sha256":       "{digest}",')
-    print(f'  "frontend_only": true')
+    print(f'  "frontend_only": {str(frontend_only).lower()}')
+    if not frontend_only:
+        print("Full source update: install the included requirements and restart the backend.")
+        print("Validate the matching platform installer separately before distribution.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Build TLI distribution zip")
     parser.add_argument("--out",     metavar="FILE",  help="Output zip path (default: TLI_dist_<version>.zip)")
     parser.add_argument("--dry-run", action="store_true", help="Print file list without writing zip")
+    parser.add_argument("--frontend-only", action="store_true", help="Package only frontend files; use only for changes with no backend/dependency requirements")
     args = parser.parse_args()
 
     version  = _read_version()
@@ -283,7 +329,7 @@ def main():
     if out_path.exists() and not args.dry_run:
         print(f"Warning: {out_path.name} already exists and will be overwritten.")
 
-    build(out_path, dry_run=args.dry_run)
+    build(out_path, dry_run=args.dry_run, frontend_only=args.frontend_only)
 
 
 if __name__ == "__main__":

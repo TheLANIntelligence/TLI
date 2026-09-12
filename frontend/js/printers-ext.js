@@ -1,41 +1,3 @@
-// TLI Printers Extended
-(() => {
-  const TAG = "TLI_PRINTERS_NATIVE_SETTINGS_WIRE";
-
-  async function _openNativePrinters() {
-    try {
-      await fetch("/api/printers/open_add", { method: "POST" });
-      if (typeof toast === "function") toast("Opening system printer screen…");
-      else if (typeof showToast === "function") showToast("Opening system printer screen…");
-    } catch (e) {
-      if (typeof toast === "function") toast("Printer screen not available (backend).", "warning");
-      else if (typeof showToast === "function") showToast("Printer screen not available (backend).", "warning");
-      console.warn(TAG, "open_add failed:", e);
-    }
-  }
-
-  function _btnText(el) {
-    try { return (el.textContent || "").trim().toLowerCase(); } catch { return ""; }
-  }
-
-  document.addEventListener("click", (ev) => {
-    const t = ev.target;
-    if (!t) return;
-
-    // find closest button-like element
-    const btn = t.closest("button, .btn, [role='button']");
-    if (!btn) return;
-
-    const txt = _btnText(btn);
-    if (txt === "discover" || txt === "add printer") {
-      ev.preventDefault();
-      _openNativePrinters();
-    }
-  }, true);
-})();
-
-
-
 /* === TLI PRINTERS MODULE v2 (locked) === */
 /* === TLI PRINTERS MODULE v2 (locked) ===
    Restores: Refresh list + WIA devices + OS open + Test Print
@@ -74,7 +36,7 @@
       box.innerHTML = `
         <div class="tli-empty-mini">
           <div class="tli-empty-title">No printers found</div>
-          <div class="tli-empty-sub">If your printer isn’t installed yet, click Add Printer.</div>
+          <div class="tli-empty-sub">Use Printer settings to manage printer installation on the TLI host.</div>
         </div>`;
       return;
     }
@@ -118,24 +80,6 @@
       pill("devices-printers-status", "Error", "pill-warn");
       setText("devices-printers-summary", String(e));
     }
-  };
-
-  window.openAddPrinter = async function(){
-    try{
-      // backend supports GET or POST (we'll POST)
-      await fetch("/api/printers/open_add", { method: "POST" });
-      if (typeof toast === "function") toast("Opening system printer screen…");
-      else if (typeof showToast === "function") showToast("Opening system printer screen…");
-    }catch(e){
-      if (typeof toast === "function") toast("Could not open printer screen.", "warning");
-      else if (typeof showToast === "function") showToast("Could not open printer screen.", "warning");
-    }
-  };
-
-  window.discoverPrinters = async function(){
-    try { await fetch("/api/printers/discover"); } catch {}
-    try { await window.openAddPrinter(); } catch {}
-    try { await window.refreshPrinters(); } catch {}
   };
 
   window.fixPrinter = async function(){
@@ -209,51 +153,6 @@
       }
     }
   }catch{}
-
-  // ---- Test Print ----
-  window.testPrint = async function(){
-    pill("devices-printers-status", "Printing…", "pill-muted");
-    setText("devices-printers-summary", "Sending TLI test page…");
-    try{
-      const { r, j } = await fetchJson("/api/printers/test_print", { method: "POST" });
-      if (!r.ok || !j || j.ok !== true){
-        const msg = (j && (j.message || j.detail)) ? (j.message || j.detail) : ("HTTP " + r.status);
-        pill("devices-printers-status", "Error", "pill-warn");
-        setText("devices-printers-summary", msg);
-        return;
-      }
-      pill("devices-printers-status", "Sent", "pill-ok");
-      setText("devices-printers-summary", "Test page sent to: " + (j.printer || "Default printer"));
-      try{
-        if (typeof toast === "function") toast("Test page sent.");
-        else if (typeof showToast === "function") showToast("Test page sent.");
-      }catch{}
-    }catch(e){
-      pill("devices-printers-status", "Error", "pill-warn");
-      setText("devices-printers-summary", String(e));
-    }
-  };
-
-  // Add a Test Print button next to Add Printer if it doesn't exist
-  function ensureTestButton(){
-    try{
-      const btns = Array.from(document.querySelectorAll("button"));
-      const add = btns.find(b => (b.textContent || "").trim().toLowerCase() === "add printer");
-      if (add){
-        const parent = add.parentElement;
-        if (parent && !parent.querySelector('button[data-tli="test-print"]')){
-          const b = document.createElement("button");
-          b.className = add.className || "btn-ghost";
-          b.textContent = "Test Print";
-          b.setAttribute("data-tli", "test-print");
-          b.onclick = () => window.testPrint();
-          parent.insertBefore(b, add);
-        }
-      }
-    }catch{}
-  }
-  let tries = 0;
-  const t = setInterval(()=>{ ensureTestButton(); tries++; if (tries>10) clearInterval(t); }, 500);
 
   // Bootstrap — printer refresh moved to dedicated IIFE below to prevent duplicate startup calls
   // setTimeout(()=>{ try{ window.refreshPrinters(); }catch{} try{ window.refreshWiaDevices(); }catch{} }, 300);
@@ -400,7 +299,7 @@ function toastMsg(msg, kind) {
             <option value="status">Sort: Status</option>
           </select>
           <label class="tli-printers-toggle" title="Show system/virtual printers (PDF, Fax, OneNote, XPS)"><input type="checkbox" id="tli-printers-show-virtual" /> System</label>
-        </div
+        </div>
       </div>
       <div class="tli-printers-toolbar-meta"><span id="tli-printers-count" class="small-meta"></span></div>
     `;
@@ -467,17 +366,17 @@ function toastMsg(msg, kind) {
         </span>
       </div>
       <div class="tli-rollup-actions">
-        <button class="btn-ghost" id="tli-rollup-manage" title="Open system printers">Manage</button>
+        <button class="btn-ghost" id="tli-rollup-manage" title="Open printer settings on the TLI host">Printer settings</button>
         <button class="btn-ghost" id="tli-rollup-test" title="Send test page to default printer">Test page</button>
       </div>
     `;
 
     $("tli-rollup-manage")?.addEventListener("click", async () => {
-      try { if (typeof window.openAddPrinter === "function") return await window.openAddPrinter(); await fetch("/api/printers/open_add", { method: "POST" }); }
+      try { return await window.openAddPrinter(); }
       catch { toastMsg("Could not open printer settings.", "warning"); }
     });
     $("tli-rollup-test")?.addEventListener("click", async () => {
-      try { if (typeof window.testPrint === "function") return await window.testPrint(); await fetch("/api/printers/test_print", { method: "POST" }); }
+      try { return await window.testPrint(); }
       catch { toastMsg("Could not send test page.", "warning"); }
     });
   }
@@ -489,7 +388,7 @@ function toastMsg(msg, kind) {
     box.innerHTML = `
       <div class="tli-empty-mini tli-empty-polished">
         <div class="tli-empty-title">${esc(title || "No printers found")}</div>
-        <div class="tli-empty-sub">${esc(subtitle || "Click Refresh to load installed printers, or Add Printer to install one.")}</div>
+        <div class="tli-empty-sub">${esc(subtitle || "Use Refresh printers to read the installed list, or Printer settings to manage installation on the host.")}</div>
       </div>
     `;
   }
@@ -560,7 +459,7 @@ function toastMsg(msg, kind) {
             </div>
 
             <div class="tli-printer-actions">
-              <button class="btn-ghost ps-deeplink-btn" data-printshop="${esc(p?.name || "")}" title="Open in Print &amp; Scan Studio">🖨️ Print</button>
+              <button class="btn-ghost ps-deeplink-btn" data-printshop="${esc(p?.name || "")}" title="Select this printer in Print &amp; Scan; review before submitting">Open Print &amp; Scan</button>
               <button class="btn-ghost" data-expand="${esc(k)}" aria-expanded="${open ? "true" : "false"}">${open ? "Hide" : "Details"}</button>
             </div>
           </div>
@@ -576,7 +475,7 @@ function toastMsg(msg, kind) {
             <div class="tli-detail-row"><span class="tli-detail-k">System name</span><span class="tli-detail-v"><code class="tli-code" data-full="${esc(p?.system_name || p?.name || "")}">${esc(p?.system_name || p?.name || "")}</code></span></div>
             ${(p?.ip || p?.hostname) ? `<div class="tli-detail-row"><span class="tli-detail-k">Host</span><span class="tli-detail-v"><code class="tli-code" data-full="${esc(p?.ip || p?.hostname)}">${esc(p?.ip || p?.hostname)}</code></span></div>` : ``}
             <div class="tli-detail-actions">
-              <button class="btn-ghost" data-manage="${esc(k)}" title="Open system printers">Manage</button>
+              <button class="btn-ghost" data-manage="${esc(k)}" title="Open printer settings on the TLI host">Printer settings</button>
               <button class="btn-ghost" data-test="${esc(k)}" title="${esc(testTitle)}" ${testDisabled ? "disabled" : ""}>Test page</button>
             </div>
             ${suppliesHtml(p)}
@@ -597,13 +496,13 @@ function toastMsg(msg, kind) {
       }
       const manage = ev.target?.closest?.("button[data-manage]");
       if (manage) {
-        try { if (typeof window.openAddPrinter === "function") return await window.openAddPrinter(); await fetch("/api/printers/open_add", { method: "POST" }); toastMsg("Opening system printer screen…"); }
+        try { return await window.openAddPrinter(); }
         catch { toastMsg("Could not open printer screen.", "warning"); }
         return;
       }
       const test = ev.target?.closest?.("button[data-test]");
       if (test && !test.disabled) {
-        try { if (typeof window.testPrint === "function") return await window.testPrint(); await fetch("/api/printers/test_print", { method: "POST" }); toastMsg("Test page sent."); }
+        try { return await window.testPrint(); }
         catch { toastMsg("Could not send test page.", "warning"); }
         return;
       }
@@ -701,223 +600,13 @@ function toastMsg(msg, kind) {
   console.debug(TAG, "loaded");
 })();
 
-/* =========================================================
-   TLI_PRINTERS_HTTP_FALLBACK_V1
-   Fix "Method Not Allowed" (405) by retrying GET when POST is rejected.
-   Additive only: wraps existing openAddPrinter/testPrint safely.
-   ========================================================= */
-(() => {
-  const TAG = "TLI_PRINTERS_HTTP_FALLBACK_V1";
-
-  async function tryPostThenGetJson(url) {
-    // Try POST first (current UI), fallback to GET on 405.
-    let r = await fetch(url, { method: "POST" });
-    if (r.status === 405) r = await fetch(url, { method: "GET" });
-    const ct = (r.headers.get("content-type") || "").toLowerCase();
-    const j = ct.includes("application/json") ? await r.json().catch(() => null) : null;
-    return { r, j };
-  }
-
-  function safeToast(msg, kind) {
-    try {
-      if (typeof toast === "function") return toast(msg, kind);
-      if (typeof showToast === "function") return showToast(msg, kind);
-    } catch {}
-  }
-
-  // ---- Wrap openAddPrinter ----
-  if (typeof window.openAddPrinter === "function" && !window.openAddPrinter.__tli_http_fallback__) {
-    const original = window.openAddPrinter;
-    window.openAddPrinter = async function () {
-      try {
-        // Call original first (it also updates UI/alerts in your app.js)
-        await original();
-        return;
-      } catch (e) {
-        // If original threw, still attempt fallback logic.
-      }
-
-      try {
-        const { r, j } = await tryPostThenGetJson("/api/printers/open_add");
-        if (!r.ok) throw new Error((j && (j.detail || j.message)) || `HTTP ${r.status}`);
-        safeToast("Opening system printer screen…");
-      } catch (e) {
-        safeToast("Could not open printer settings.", "warning");
-        console.warn(TAG, "openAddPrinter failed:", e);
-      }
-    };
-    window.openAddPrinter.__tli_http_fallback__ = true;
-  }
-
-  // ---- Wrap testPrint ----
-  if (typeof window.testPrint === "function" && !window.testPrint.__tli_http_fallback__) {
-    const original = window.testPrint;
-    window.testPrint = async function () {
-      try {
-        await original();
-        return;
-      } catch (e) {
-        // If original threw, still attempt fallback logic.
-      }
-
-      try {
-        const { r, j } = await tryPostThenGetJson("/api/printers/test_print");
-        if (!r.ok || !j || j.ok !== true) {
-          throw new Error((j && (j.message || j.detail)) || `HTTP ${r.status}`);
-        }
-        safeToast("Test page sent.");
-      } catch (e) {
-        safeToast("Could not send test page.", "warning");
-        console.warn(TAG, "testPrint failed:", e);
-      }
-    };
-    window.testPrint.__tli_http_fallback__ = true;
-  }
-})();
-
-/* =====================================================
-   TLI_PRINTERS_DISABLE_UNUSED_ACTIONS_V1
-   Why:
-   - Discover/Fix are not part of Phase 1 and may 404/405.
-   ===================================================== */
-(() => {
-  // Keep functions defined if other code calls them, but make them no-ops.
-  if (typeof window.discoverPrinters === "function") {
-    window.discoverPrinters = async () => {
-      try { if (typeof showToast === "function") showToast("Discover is not enabled in Phase 1.", "warning"); } catch {}
-    };
-  }
-  if (typeof window.fixPrinter === "function") {
-    window.fixPrinter = async () => {
-      try { if (typeof showToast === "function") showToast("Fix Printer is not enabled in Phase 1.", "warning"); } catch {}
-    };
-  }
-})();
-
-/* =====================================================
-   TLI_SCAN_LAUNCH_V1
-   Opens Windows Scan (stable, packaged-friendly).
-   Uses POST then GET fallback to avoid 405s.
-   ===================================================== */
-(() => {
-  async function postThenGet(url) {
-    let r = await fetch(url, { method: "POST" });
-    if (r.status === 405) r = await fetch(url, { method: "GET" });
-    return r;
-  }
-
-  function toastMsg(msg, kind) {
-    try {
-      if (typeof showToast === "function") return showToast(msg, kind);
-      if (typeof toast === "function") return toast(msg, kind);
-    } catch {}
-  }
-
-  window.openScan = async function () {
-    try {
-      const r = await postThenGet("/api/printers/open_scan");
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok || j.ok !== true) throw new Error(j.message || j.error || `HTTP ${r.status}`);
-      toastMsg("Opening Windows Scan…");
-    } catch (e) {
-      toastMsg("Could not open Windows Scan.", "warning");
-      console.warn("openScan failed:", e);
-    }
-  };
-})();
-
-/* =====================================================
-   TLI_PRINTER_ACTIONS_WIRING_V1
-   Fixes:
-   - "Error HTTP 200" false errors (non-JSON 200 responses)
-   - Buttons not working (missing openScan or method mismatch)
-   Strategy:
-   - POST then GET fallback
-   - Accept JSON OR empty/text responses as success when HTTP 2xx
-   - Provide consistent toasts
-   ===================================================== */
-(() => {
-  async function fetchPostThenGet(url) {
-    let r = await fetch(url, { method: "POST" });
-    if (r.status === 405) r = await fetch(url, { method: "GET" });
-    return r;
-  }
-
-  async function parseJsonSafe(r) {
-    const ct = (r.headers.get("content-type") || "").toLowerCase();
-    if (!ct.includes("application/json")) return null;
-    return await r.json().catch(() => null);
-  }
-
-  function toastMsg(msg, kind) {
-    try {
-      if (typeof showToast === "function") return showToast(msg, kind);
-      if (typeof toast === "function") return toast(msg, kind);
-    } catch {}
-  }
-
-  // Scan -> backend route we just added
-  window.openScan = async function () {
-    try {
-      const r = await fetchPostThenGet("/api/printers/open_scan");
-      const j = await parseJsonSafe(r);
-
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      // If JSON exists and ok==false, treat as error; otherwise treat 2xx as success
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Scan failed");
-
-      toastMsg("Opening Windows Scan…");
-    } catch (e) {
-      toastMsg("Could not open Windows Scan.", "warning");
-      console.warn("openScan failed:", e);
-    }
-  };
-
-  // Test page -> backend route we just added
-  const prevTestPrint = window.testPrint;
-  window.testPrint = async function () {
-    try {
-      const r = await fetchPostThenGet("/api/printers/test_print");
-      const j = await parseJsonSafe(r);
-
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Test print failed");
-
-      toastMsg("Test page sent.");
-    } catch (e) {
-      toastMsg("Could not send test page.", "warning");
-      console.warn("testPrint failed:", e);
-      // if an older impl exists, try it as a last resort
-      try { if (typeof prevTestPrint === "function") return await prevTestPrint(); } catch {}
-    }
-  };
-
-  // Manage -> your main.py has /api/printers/open_add (may be GET-only and may not return JSON)
-  const prevOpenAdd = window.openAddPrinter;
-  window.openAddPrinter = async function () {
-    try {
-      const r = await fetchPostThenGet("/api/printers/open_add");
-      const j = await parseJsonSafe(r);
-
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Could not open settings");
-
-      toastMsg("Opening printer settings…");
-    } catch (e) {
-      toastMsg("Could not open printer settings.", "warning");
-      console.warn("openAddPrinter failed:", e);
-      try { if (typeof prevOpenAdd === "function") return await prevOpenAdd(); } catch {}
-    }
-  };
-})();
-
 /* =====================================================
    TLI_PRINTERS_FINAL_WIRING_V3
    Fixes (production-safe):
    - Removes false "Error HTTP 200" by accepting array payloads from /api/printers
-   - Ensures Manage/Test/Scan always work (POST -> GET fallback)
-   - Treats any 2xx as success even if response is not JSON (prevents "HTTP 200" false errors)
-   - Single authoritative handlers (prevents duplicate toasts)
+   - Keep endpoint compatibility, with GET only after a rejected POST method.
+   - Require explicit execution confirmation; HTTP success alone is not enough.
+   - Serialize duplicate requests and never retry a failed action automatically.
    ===================================================== */
 (() => {
   const TAG = "TLI_PRINTERS_FINAL_WIRING_V3";
@@ -930,15 +619,15 @@ function toastMsg(msg, kind) {
   }
 
   function setStatus(ok, msg) {
-    try {
-      if (typeof pill === "function") pill("devices-printers-status", ok ? "OK" : "Error", ok ? "pill-ok" : "pill-warn");
-      if (typeof setText === "function") setText("devices-printers-summary", msg || "");
-    } catch {}
+    const pill = document.getElementById("devices-printers-status");
+    const summary = document.getElementById("devices-printers-summary");
+    if (pill) { pill.textContent = ok === null ? "Working…" : ok ? "Confirmed" : "Failed"; pill.className = "pill " + (ok === null ? "pill-muted" : ok ? "pill-ok" : "pill-warn"); }
+    if (summary) summary.textContent = msg || "";
   }
 
   async function postThenGet(url) {
     let r = await fetch(url, { method: "POST" });
-    if (r.status === 405) r = await fetch(url, { method: "GET" });
+    if (r.status === 405 && !locked) r = await fetch(url, { method: "GET" });
     return r;
   }
 
@@ -987,47 +676,51 @@ function toastMsg(msg, kind) {
     }
   };
 
-  // Manage: main.py provides POST /api/printers/open_add returning {ok:true}
-  window.openAddPrinter = async function () {
-    try {
-      const r = await postThenGet("/api/printers/open_add");
-      const j = await jsonOrNull(r);
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Could not open settings");
-      toastMsg("Opening printer settings…");
-    } catch (e) {
-      toastMsg("Could not open printer settings.", "warning");
-      console.warn(TAG, "openAddPrinter failed:", e);
-    }
+  // One owner for printer mutations. Existing data-action bindings call these
+  // named handlers; button text in other panels is never an execution trigger.
+  const pending = new Map();
+  let privateEpoch = 0, locked = false;
+  window.addEventListener("tli-session-locked", () => { privateEpoch++; locked = true; setStatus(null, "Unlock TLI to use printer controls."); });
+  window.addEventListener("tli-session-unlocked", () => { locked = false; });
+  const actions = {
+    openAddPrinter: {url: "/api/printers/open_add", progress: "Opening printer settings on the TLI host…", success: "Printer settings opened on the TLI host.", failure: "Could not open printer settings.", extra: '[data-manage], #tli-rollup-manage'},
+    testPrint: {url: "/api/printers/test_print", progress: "Submitting a test page to the host’s default printer…", success: "Test page submitted to the host’s default printer. Check the printer for physical output.", failure: "Could not submit the test page.", extra: '[data-test], #tli-rollup-test'},
+    openScan: {url: "/api/printers/open_scan", progress: "Opening the scanner app on the TLI host…", success: "Scanner app opened on the TLI host. No document was scanned by this action.", failure: "Could not open the scanner app.", extra: ''}
   };
-
-  // Test Page: router provides GET|POST /api/printers/test_print returning {ok:true}
-  window.testPrint = async function () {
-    try {
-      const r = await postThenGet("/api/printers/test_print");
-      const j = await jsonOrNull(r);
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Test print failed");
-      toastMsg("Test page sent.");
-    } catch (e) {
-      toastMsg("Could not send test page.", "warning");
-      console.warn(TAG, "testPrint failed:", e);
-    }
-  };
-
-  // Scan: router provides GET|POST /api/printers/open_scan returning {ok:true}
-  window.openScan = async function () {
-    try {
-      const r = await postThenGet("/api/printers/open_scan");
-      const j = await jsonOrNull(r);
-      if (!r.ok) throw new Error(j?.message || j?.error || `HTTP ${r.status}`);
-      if (j && j.ok === false) throw new Error(j.message || j.error || "Scan launch failed");
-      toastMsg("Opening Windows Scan…");
-    } catch (e) {
-      toastMsg("Could not open Windows Scan.", "warning");
-      console.warn(TAG, "openScan failed:", e);
-    }
-  };
+  function runPrinterAction(name) {
+    if (locked) return Promise.resolve({ok: false, message: "Unlock TLI before using printer controls."});
+    if (pending.has(name)) return pending.get(name);
+    const action = actions[name], epoch = privateEpoch;
+    const selectors = [`#panel-devices [data-action="${name}"]`];
+    if (action.extra) selectors.push(...action.extra.split(',').map(selector => '#panel-devices ' + selector.trim()));
+    const controls = [...document.querySelectorAll(selectors.join(', '))].map(control => ({control, disabled: control.disabled}));
+    controls.forEach(({control}) => { control.disabled = true; });
+    setStatus(null, action.progress);
+    const work = Promise.resolve().then(async () => {
+      if (locked || epoch !== privateEpoch) return {ok: false, message: "Printer request stopped before submission because TLI locked."};
+      try {
+        const response = await postThenGet(action.url);
+        const data = await jsonOrNull(response);
+        if (!response.ok || data?.ok !== true) throw new Error(data?.message || data?.detail || data?.error || (response.ok ? "The host did not confirm the action." : `HTTP ${response.status}`));
+        const result = {...data, ok: true, message: action.success};
+        if (epoch === privateEpoch && !locked) { setStatus(true, action.success); toastMsg(action.success); }
+        return result;
+      } catch (error) {
+        const message = action.failure + " " + error.message + " Retry explicitly when ready.";
+        if (epoch === privateEpoch && !locked) { setStatus(false, message); toastMsg(message, "warning"); }
+        return {ok: false, message};
+      }
+    }).finally(() => {
+      pending.delete(name);
+      controls.forEach(({control, disabled}) => { control.disabled = disabled; });
+    });
+    pending.set(name, work);
+    return work;
+  }
+  for (const name of Object.keys(actions)) window[name] = () => runPrinterAction(name);
+  // Retained compatibility names do not enable unverified legacy workflows.
+  window.discoverPrinters = async () => ({ok: false, message: "Use Refresh printers to read the installed printer list."});
+  window.fixPrinter = async () => ({ok: false, message: "Automatic printer repair is unavailable. Open Printer settings to review the device."});
 
   // Auto-refresh once when loaded — delayed to avoid competing with startup activity
   try { window.setTimeout(() => { try { window.refreshPrinters(); } catch {} }, 8000); } catch {}

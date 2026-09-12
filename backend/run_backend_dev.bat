@@ -16,6 +16,9 @@ if %ERRORLEVEL%==0 (
   set PY=python
 )
 
+REM Prefer the project's installed dependencies when the virtual environment exists.
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
+
 echo Using: %PY%
 %PY% --version
 echo.

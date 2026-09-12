@@ -3,12 +3,18 @@ import json
 import base64
 import hashlib
 import hmac
+import re
+import threading
+from contextlib import contextmanager
+from functools import wraps
+from pathlib import Path
 import secrets as _secrets_mod
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 import data_protection as _dp
+import security_state as _security
 
 VAULT_META_PATH = "vault_meta.json"
 VAULT_UNLOCK_MINUTES = 30
@@ -18,6 +24,32 @@ UNLOCKED_VAULTS: Dict[str, datetime] = {}
 
 # In-memory encryption keys for unlocked users (32-byte AES keys)
 ENCRYPTION_KEYS: Dict[str, bytes] = {}
+_META_LOCK = threading.RLock()
+_CONTENT_LOCK = threading.RLock()
+
+
+@contextmanager
+def content_transaction():
+    """Keep a portable snapshot coherent; callers retry writes deliberately.
+
+    Access revocation intentionally does not acquire this lock. A backup checks
+    current access between chunks and aborts if the owner locks the Vault.
+    """
+    from fastapi import HTTPException
+    if not _CONTENT_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "Vault content is busy with another operation. Wait for its result and retry deliberately.")
+    try:
+        yield
+    finally:
+        _CONTENT_LOCK.release()
+
+
+def _metadata_transaction(fn):
+    @wraps(fn)
+    def guarded(*args, **kwargs):
+        with _META_LOCK:
+            return fn(*args, **kwargs)
+    return guarded
 
 # ============================================
 #  Machine-key session persistence
@@ -46,9 +78,14 @@ def _get_or_create_machine_key() -> bytes:
     Load or generate the machine-local 32-byte secret used to encrypt persisted
     session AES keys.  On Windows the key blob is DPAPI-protected (bound to the
     current OS user account).  On non-Windows a plain binary file is used.
-    Legacy plain 32-byte key files are automatically migrated to DPAPI in-place.
+    Legacy plain 32-byte key files remain readable without being rewritten.
     """
-    return _dp.get_or_create_key(_machine_key_path())
+    try:
+        return _dp.load_existing_key(_machine_key_path())
+    except FileNotFoundError:
+        if _load_sessions_file():
+            raise _dp.KeyUnavailableError('The saved Vault sessions need their original machine key. Unlock the Vault with its passphrase; existing session files were preserved.')
+        return _dp.get_or_create_key(_machine_key_path())
 
 
 def _encrypt_with_machine_key(data: bytes) -> str:
@@ -62,7 +99,7 @@ def _encrypt_with_machine_key(data: bytes) -> str:
 
 def _decrypt_with_machine_key(b64: str) -> bytes:
     """Decrypt a base64-encoded nonce+ciphertext produced by _encrypt_with_machine_key."""
-    key = _get_or_create_machine_key()
+    key = _dp.load_existing_key(_machine_key_path())
     raw = base64.b64decode(b64)
     nonce, ciphertext = raw[:12], raw[12:]
     return AESGCM(key).decrypt(nonce, ciphertext, None)
@@ -70,20 +107,19 @@ def _decrypt_with_machine_key(b64: str) -> bytes:
 
 def _load_sessions_file() -> dict:
     path = _sessions_path()
-    if not os.path.exists(path):
-        return {}
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
+            result = json.load(f)
+        if not isinstance(result, dict):
+            raise ValueError('Invalid saved sessions')
+        return result
+    except FileNotFoundError:
         return {}
 
 
 def _save_sessions_file(sessions: dict) -> None:
     path = _sessions_path()
-    os.makedirs(os.path.dirname(path) if os.path.dirname(path) else ".", exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(sessions, f, indent=2)
+    _security.write_json(path, sessions, "Vault unlock sessions")
 
 
 def _persist_session(user_id: str, expiry: datetime, aes_key: bytes) -> None:
@@ -101,13 +137,10 @@ def _persist_session(user_id: str, expiry: datetime, aes_key: bytes) -> None:
 
 def _remove_persisted_session(user_id: str) -> None:
     """Remove a user's session from the sessions file."""
-    try:
-        sessions = _load_sessions_file()
-        if user_id in sessions:
-            del sessions[user_id]
-            _save_sessions_file(sessions)
-    except Exception:
-        pass
+    sessions = _load_sessions_file()
+    if user_id in sessions:
+        del sessions[user_id]
+        _save_sessions_file(sessions)
 
 
 def load_persisted_sessions() -> None:
@@ -133,7 +166,9 @@ def load_persisted_sessions() -> None:
                 UNLOCKED_VAULTS[user_id] = expiry
                 ENCRYPTION_KEYS[user_id] = aes_key
             except Exception:
-                expired_keys.append(user_id)
+                # Unreadable is not expired. Preserve ciphertext for recovery;
+                # the passphrase can still unlock the Vault normally.
+                continue
         # Prune expired entries from disk
         if expired_keys:
             for k in expired_keys:
@@ -156,19 +191,71 @@ def _normalize_user_id(user_id: Optional[str]) -> str:
     return user_id.strip().lower()
 
 
-def _load_meta() -> dict:
-    if not os.path.exists(VAULT_META_PATH):
+def _has_vault_dependencies(data_dir=None) -> bool:
+    root = Path(data_dir if data_dir is not None else _DATA_DIR)
+    # The blob directory remains the same configured directory used by routes.
+    import tli_state as S
+    vault_dir = Path(S.VAULT_DIR)
+    try:
+        with os.scandir(vault_dir) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 4096 or entry.name.lower().endswith(".vault"):
+                    return True
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise _security.SecurityStateUnavailable("Vault metadata") from exc
+    try:
+        sessions = _security.read_json(root / "vault_sessions.json", "Vault metadata")
+    except FileNotFoundError:
+        return False
+    if not isinstance(sessions, dict):
+        raise _security.SecurityStateUnavailable("Vault metadata")
+    return bool(sessions)
+
+
+def read_existing_meta(*, data_dir=None) -> dict:
+    """Read legacy metadata in its existing location; never repair missing salts."""
+    try:
+        meta = _security.read_json(VAULT_META_PATH, "Vault metadata")
+    except FileNotFoundError:
+        if _has_vault_dependencies(data_dir):
+            raise _security.SecurityStateUnavailable("Vault metadata")
         return {}
     try:
-        with open(VAULT_META_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+        if not isinstance(meta, dict):
+            raise ValueError("Invalid metadata")
+        for field, length in (("password_hash", 32), ("password_salt", 16), ("encryption_salt", 16)):
+            if field == "encryption_salt" and field not in meta:
+                if _has_vault_dependencies(data_dir):
+                    raise ValueError("Missing encryption salt for saved data")
+                continue  # Phase 1 vaults without encrypted data may upgrade on unlock.
+            if not isinstance(meta.get(field), str) or len(base64.b64decode(meta[field], validate=True)) != length:
+                raise ValueError("Invalid metadata field")
+        if type(meta.get("failed_attempts", 0)) is not int or meta.get("failed_attempts", 0) < 0:
+            raise ValueError("Invalid lockout counter")
+        locked = meta.get("locked_until")
+        if locked is not None and (not isinstance(locked, str) or datetime.fromisoformat(locked).tzinfo is not None):
+            raise ValueError("Invalid lockout time")
+        if "ext_api_key_hash" in meta:
+            if not isinstance(meta["ext_api_key_hash"], str) or not re.fullmatch(r"[0-9a-f]{64}", meta["ext_api_key_hash"]):
+                raise ValueError("Invalid extension key")
+            if "ext_api_key_user" in meta and (not isinstance(meta["ext_api_key_user"], str) or not meta["ext_api_key_user"].strip()):
+                raise ValueError("Invalid extension owner")
+        return meta
+    except _security.SecurityStateUnavailable:
+        raise
+    except Exception as exc:
+        raise _security.SecurityStateUnavailable("Vault metadata") from exc
+
+
+def _load_meta() -> dict:
+    return read_existing_meta()
 
 
 def _save_meta(meta: dict) -> None:
-    with open(VAULT_META_PATH, "w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
+    existing = _load_meta()
+    _security.write_json(VAULT_META_PATH, meta, "Vault metadata", new=not existing)
 
 
 def is_initialized() -> bool:
@@ -191,7 +278,7 @@ def _hash_password(password: str, salt: Optional[bytes] = None) -> Tuple[bytes, 
 def _derive_encryption_key(password: str, salt: bytes) -> bytes:
     """
     Derive a 32-byte AES key from the password using PBKDF2-HMAC-SHA256.
-    This key is NOT stored on disk, only derived in-memory on unlock.
+    Unlock may persist this key encrypted by the separate machine-local key.
     """
     return hashlib.pbkdf2_hmac(
         "sha256",
@@ -202,6 +289,7 @@ def _derive_encryption_key(password: str, salt: bytes) -> bytes:
     )
 
 
+@_metadata_transaction
 def setup_password(password: str) -> None:
     """
     One-time setup. If a password already exists, this should not overwrite it.
@@ -273,6 +361,7 @@ def get_status(user_id: Optional[str] = None) -> dict:
     }
 
 
+@_metadata_transaction
 def unlock(user_id: str, password: str) -> dict:
     """
     Attempt to unlock the vault for a given user_id with a password.
@@ -352,10 +441,15 @@ def unlock(user_id: str, password: str) -> dict:
     }
 
 
+class VaultSessionRevocationError(RuntimeError):
+    """Memory was locked, but a saved session could not be durably revoked."""
+
+
+@_metadata_transaction
 def lock(user_id: Optional[str] = None) -> None:
     """
     Lock the vault either for a specific user or for everyone.
-    This also wipes the in-memory AES keys and any persisted session.
+    Clear memory first; return successfully only after saved access is revoked.
     """
     if user_id is None:
         # Clear all in-memory sessions and the entire sessions file
@@ -363,19 +457,23 @@ def lock(user_id: Optional[str] = None) -> None:
         ENCRYPTION_KEYS.clear()
         try:
             _save_sessions_file({})
-        except Exception:
-            pass
+        except Exception as exc:
+            raise VaultSessionRevocationError("Vault access was cleared from memory, but the saved unlock session could not be removed. Restarting TLI may restore access until that session expires. Retry locking.") from exc
     else:
         norm_user = _normalize_user_id(user_id)
         UNLOCKED_VAULTS.pop(norm_user, None)
         ENCRYPTION_KEYS.pop(norm_user, None)
-        _remove_persisted_session(norm_user)
+        try:
+            _remove_persisted_session(norm_user)
+        except Exception as exc:
+            raise VaultSessionRevocationError("Vault access was cleared from memory, but the saved unlock session could not be removed. Restarting TLI may restore access until that session expires. Retry locking.") from exc
 
 
 def is_vault_unlocked(user_id: str) -> bool:
     """
     Check if a given user currently has vault access.
     """
+    _load_meta()  # A cached key never bypasses missing or damaged password metadata.
     norm_user = _normalize_user_id(user_id)
     expiry = UNLOCKED_VAULTS.get(norm_user)
     if not expiry:
@@ -388,11 +486,13 @@ def is_vault_unlocked(user_id: str) -> bool:
     return True
 
 
+@_metadata_transaction
 def reset_vault() -> None:
     """
     Hard reset: wipe the password hash/salts and all in-memory session state.
     Caller is responsible for deleting the encrypted .vault files.
     """
+    _load_meta()
     if os.path.exists(VAULT_META_PATH):
         os.remove(VAULT_META_PATH)
     UNLOCKED_VAULTS.clear()
@@ -426,6 +526,7 @@ def get_encryption_key(user_id: str) -> Optional[bytes]:
 # Extension API Key management
 # ---------------------------------------------------------------------------
 
+@_metadata_transaction
 def generate_api_key(user_id: str) -> str:
     """
     Generate a random API key for the browser extension, store its SHA-256
@@ -459,6 +560,7 @@ def validate_api_key(raw_key: Optional[str]) -> Optional[str]:
     return None
 
 
+@_metadata_transaction
 def revoke_api_key() -> None:
     """Remove the extension API key from vault_meta.json."""
     meta = _load_meta()

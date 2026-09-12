@@ -8,7 +8,6 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 VENV_DIR="$BACKEND_DIR/.venv"
-PORT="${TLI_PORT:-8000}"
 
 # ── Colours ──────────────────────────────────────────────────
 GRN='\033[0;32m'; CYN='\033[0;36m'; YLW='\033[1;33m'; RED='\033[0;31m'; RST='\033[0m'
@@ -18,7 +17,7 @@ _on_error() {
     echo -e "${RED}  TLI failed to start. See the error above.${RST}"
     echo "  Common fixes:"
     echo "    - Python 3.10+ not installed: https://python.org/downloads"
-    echo "    - Port $PORT in use: set TLI_PORT=8001 and try again"
+    echo "    - Address in use: choose a free TLI_PORT and try again"
     echo ""
 }
 trap '_on_error' ERR
@@ -197,21 +196,14 @@ fi
 # ── Download AI runtime if missing ───────────────────────────
 _setup_llama_runtime
 
-# ── Free port if busy ────────────────────────────────────────
-if command -v lsof &>/dev/null && lsof -ti tcp:"$PORT" &>/dev/null 2>&1; then
-    echo -e "  ${YLW}Port $PORT busy — stopping previous instance…${RST}"
-    lsof -ti tcp:"$PORT" | xargs kill -TERM 2>/dev/null || true
-    sleep 1
-fi
+# Check the resolved address without stopping an existing server.
+TLI_ROOT="$SCRIPT_DIR" "$PYTHON" "$BACKEND_DIR/launch_checks.py" || exit 1
 
 # ── Launch ───────────────────────────────────────────────────
 echo ""
-echo -e "  ${GRN}Starting TLI on http://localhost:$PORT${RST}"
+echo -e "  ${GRN}Starting TLI with saved settings and explicit environment overrides.${RST}"
 echo "  Press Ctrl+C to stop."
 echo ""
 
-# Auto-open browser after a short delay
-(sleep 2 && $PYTHON -c "import webbrowser; webbrowser.open('http://localhost:$PORT')" 2>/dev/null) &
-
 cd "$BACKEND_DIR"
-TLI_ROOT="$SCRIPT_DIR" TLI_PORT="$PORT" $PYTHON main.py
+TLI_ROOT="$SCRIPT_DIR" TLI_OPEN_BROWSER=1 "$PYTHON" main.py

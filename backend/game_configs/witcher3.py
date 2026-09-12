@@ -1,4 +1,4 @@
-"""
+r"""
 game_configs/witcher3.py — The Witcher 3: Wild Hunt config reader.
 
 Config file: user.settings (INI-like, key=value)

@@ -1,0 +1,136 @@
+"""Distribution rules run against synthetic files, never the installation's data."""
+import importlib.util
+import os
+from pathlib import Path
+import stat
+from types import SimpleNamespace
+import zipfile
+
+import pytest
+
+spec = importlib.util.spec_from_file_location("release_packager", Path(__file__).resolve().parents[2] / "build_dist.py")
+packager = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(packager)
+
+
+@pytest.fixture
+def package_root(tmp_path, monkeypatch):
+    files = {
+        "backend/tli_state.py": 'TLI_VERSION = "test"',
+        "backend/main.py": "print('application')",
+        "backend/requirements.txt": "Pillow>=12.1.1",
+        "frontend/index.html": "<html>TLI</html>",
+        "frontend/js/intelligence.js": "/* shipped feature */",
+        "frontend/tests/example.test.cjs": "/* test only */",
+        "mobile/package.json": "{}",
+        "mobile/modules/tli-transport/index.ts": "/* native app only */",
+        "backend/tests/example.py": "# test only",
+        "data/intelligence/private.json": "private data",
+        "backend/ai/memory/user/facts.json": "legacy private notes",
+        "backend/ai/memory/user/session.py": "private memory even with source extension",
+        "backend/memory/user.json": "private memory",
+        "backend/tli_data/pin.json": "legacy runtime state",
+        "backend/vault_data/secret.txt": "legacy encrypted material",
+        "backend/ai/models/catalog.json": "runtime model installation",
+        "backend/build_work/intermediate.py": "build artifact",
+        "backend/dist_build/source.py": "build artifact",
+        "frontend/.expo/cache.js": "build artifact",
+        "backend/credentials.json": "credentials",
+        "backend/routers/printers_snmp.json": "private printer communities",
+        "backend/secrets.yaml": "secrets",
+        "backend/id_ed25519": "SSH key",
+        "backend/tli_pin.json": "PIN verifier",
+        "backend/ai/runtime/keys/secret.dll": "key directory must beat binary override",
+        "backend/ai/runtime/model.ggml": "legacy model",
+        "backend/ai/runtime/credential.pfx": "private key",
+        "backend/ai/runtime/access.jsonl": "private event log",
+        "scripts/release_snapshot.py": "developer harness",
+        "scripts/verify_companion_browser.cjs": "developer harness",
+        "scripts/tests/test_snapshot.py": "developer test",
+        ".env": "secret settings",
+        "backend/.env.local": "local secrets",
+        "backend/key.pem": "private key",
+        "backend/ai/runtime/llama_server.exe": "runtime",
+        "backend/ai/runtime/ggml.dll": "runtime library",
+        "backend/ai/runtime/llama-server": "unix runtime",
+        "backend/ai/runtime/private.gguf": "model weights",
+        "backend/ai/runtime/private.key": "private key",
+        "backend/ai/runtime/trace.log": "private log",
+        "backend/ai/runtime/llama-bench.exe": "benchmark only",
+        "TLI_Start.sh": "#!/bin/sh\nexit 0\n",
+    }
+    for name, data in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data, encoding="utf-8")
+    monkeypatch.setattr(packager, "ROOT", tmp_path)
+    return tmp_path
+
+
+def test_full_release_keeps_dependencies_runtime_and_excludes_private_files(package_root, capsys):
+    output = package_root / "build.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert names == {
+            "backend/tli_state.py", "backend/main.py", "backend/requirements.txt",
+            "frontend/index.html", "frontend/js/intelligence.js",
+            "backend/ai/runtime/llama_server.exe", "backend/ai/runtime/ggml.dll",
+            "backend/ai/runtime/llama-server", "TLI_Start.sh",
+        }
+        for name in ("TLI_Start.sh", "backend/ai/runtime/llama-server"):
+            info = archive.getinfo(name)
+            assert info.create_system == 3 and (info.external_attr >> 16) & 0o111 == 0o111
+        assert archive.getinfo("backend/main.py").compress_type == zipfile.ZIP_DEFLATED
+    assert '"frontend_only": false' in capsys.readouterr().out
+    assert (package_root / "data/intelligence/private.json").read_text() == "private data"
+
+
+def test_frontend_only_is_explicit_and_contains_no_backend(package_root, capsys):
+    output = package_root / "ui.zip"
+    packager.build(output, frontend_only=True)
+    with zipfile.ZipFile(output) as archive:
+        assert set(archive.namelist()) == {"frontend/index.html", "frontend/js/intelligence.js"}
+    assert '"frontend_only": true' in capsys.readouterr().out
+
+
+def test_linked_files_cannot_pull_private_data_into_a_package(package_root, monkeypatch):
+    # Fake link detection also exercises this rule on Windows without symlink privileges.
+    original = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda path: path.name == "intelligence.js" or original(path))
+    output = package_root / "linked.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        assert "frontend/js/intelligence.js" not in archive.namelist()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_private_memory_is_pruned_without_enumerating_or_reading_it(package_root, monkeypatch, dry_run):
+    original = os.scandir
+    def scan(path):
+        relative = Path(path).relative_to(package_root).as_posix()
+        assert not relative.startswith(("backend/ai/memory", "backend/memory", "data/", "backend/tli_data", "backend/vault_data"))
+        return original(path)
+    monkeypatch.setattr(os, "scandir", scan)
+    packager.build(package_root / "safe.zip", dry_run=dry_run)
+
+
+def test_windows_junction_and_symlink_directories_are_pruned_on_older_python(package_root, monkeypatch):
+    linked = package_root / "frontend" / "linked"
+    linked.mkdir()
+    (linked / "private.js").write_text("do not package")
+    original_stat, original_scan = Path.lstat, os.scandir
+    monkeypatch.setattr(Path, "lstat", lambda path: SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400) if path == linked else original_stat(path))
+    def scan(path):
+        assert Path(path) != linked
+        return original_scan(path)
+    monkeypatch.setattr(os, "scandir", scan)
+    output = package_root / "junction.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        assert "frontend/linked/private.js" not in archive.namelist()
+
+
+@pytest.mark.parametrize("path", ["BACKEND/AI/MEMORY/user/facts.json", "backend/Data/facts.json", "backend/.ENV.local", "backend/CREDENTIALS.JSON", "backend/private.P12"])
+def test_sensitive_exclusions_are_case_insensitive(path):
+    assert packager._should_skip(Path(path))[0]

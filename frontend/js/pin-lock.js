@@ -7,6 +7,7 @@
    ============================================================= */
 (function () {
   const SS_KEY = "tli_session_unlocked";
+  let _generation = 0, _checking = null, _submitting = false, _locking = null, _verifyRequest = null;
 
   function _isUnlocked() {
     try { return sessionStorage.getItem(SS_KEY) === "1"; } catch { return false; }
@@ -24,67 +25,116 @@
   function _lockBtn()    { return document.getElementById("tli-lock-btn"); }
 
   function _showLock() {
+    window.dispatchEvent(new CustomEvent('tli-session-locked'));
     const s = _lockScreen();
-    if (s) { s.classList.remove("hidden"); s.removeAttribute("hidden"); }
+    if (s) { s.classList.remove("hidden"); s.removeAttribute("hidden"); s.setAttribute("aria-hidden", "false"); }
     document.body.style.overflow = "hidden";
     setTimeout(() => { const i = _lockInput(); if (i) i.focus(); }, 120);
   }
 
   function _hideLock() {
     const s = _lockScreen();
-    if (s) s.classList.add("hidden");
+    if (s) { s.classList.add("hidden"); s.setAttribute("aria-hidden", "true"); }
     document.body.style.overflow = "";
     const b = _lockBtn();
     if (b) b.hidden = false;
+    // Resume authenticated views only after confirmed PIN verification or an
+    // explicit server response that PIN protection is disabled.
+    window.dispatchEvent(new CustomEvent('tli-session-unlocked'));
   }
 
-  async function _checkAndLock() {
-    try {
-      const r = await fetch("/system/pin/status", { cache: "no-store" });
-      if (!r.ok) return; // backend unreachable — don't block
-      const d = await r.json();
-      if (d.enabled && !_isUnlocked()) {
-        _showLock();
-      } else if (!d.enabled) {
-        // PIN not set — hide lock screen and lock btn
-        _hideLock();
-        const b = _lockBtn();
-        if (b) b.hidden = true;
-        _suggestPin();
-      } else {
-        // PIN set + already unlocked — show lock btn
-        const b = _lockBtn();
-        if (b) b.hidden = false;
+  function _accessUnavailable(message) {
+    _setUnlocked(false); _showLock();
+    const error = _lockError(); if (error) error.textContent = message + (message.includes('Access remains locked') ? '' : ' Access remains locked.');
+    const retry = document.getElementById('tli-lock-recheck'); if (retry) retry.hidden = false;
+  }
+
+  function _checkAndLock() {
+    if (_checking) return _checking;
+    const generation = _generation;
+    _checking = (async () => {
+      try {
+        const r = await fetch("/system/pin/status", { cache: "no-store" });
+        const d = await r.json().catch(() => null);
+        if (generation !== _generation) return;
+        if (!r.ok) throw new Error((typeof d?.detail === 'string' ? d.detail : `TLI could not confirm access status (${r.status}).`) + ' Access remains locked.');
+        if (typeof d?.enabled !== 'boolean') throw new Error('TLI returned an invalid access status. Access remains locked. Recheck before continuing.');
+        const retry = document.getElementById('tli-lock-recheck'); if (retry) retry.hidden = true;
+        const error = _lockError(); if (error) error.textContent = '';
+        if (d.enabled && !_isUnlocked()) {
+          _showLock();
+        } else if (d.enabled === false) {
+          _hideLock();
+          const b = _lockBtn(); if (b) b.hidden = true;
+          _suggestPin();
+        } else {
+          const b = _lockBtn(); if (b) b.hidden = false;
+        }
+      } catch (error) {
+        if (generation === _generation) _accessUnavailable(error.message || 'Could not reach TLI to confirm access status. Access remains locked. Reconnect to the host and recheck.');
       }
-    } catch {
-      // Silent — don't block app on network error
-    }
+    })().finally(() => { _checking = null; });
+    return _checking;
   }
 
   async function _submitPin() {
+    if (_submitting || _locking) return;
     const input = _lockInput();
     const errEl = _lockError();
     const pin = input ? input.value : "";
     if (!pin) { if (errEl) errEl.textContent = "Enter your PIN."; return; }
-
+    const generation = ++_generation;
+    const submit = document.getElementById('tli-lock-submit');
+    _submitting = true; if (submit) submit.disabled = true;
     try {
-      const r = await fetch("/system/pin/verify", {
+      _verifyRequest = fetch("/system/pin/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pin }),
       });
-      if (r.ok) {
+      const r = await _verifyRequest;
+      const result = await r.json().catch(() => null);
+      if (generation !== _generation) return;
+      if (r.ok && result?.ok === true) {
         _setUnlocked(true);
         if (input) input.value = "";
         if (errEl) errEl.textContent = "";
         _hideLock();
       } else {
-        if (errEl) errEl.textContent = "Incorrect PIN. Try again.";
+        _accessUnavailable(typeof result?.detail === 'string' ? result.detail : r.ok ? 'TLI did not confirm the PIN. Access remains locked.' : `The PIN could not be verified (${r.status}). Access remains locked.`);
         if (input) { input.value = ""; input.focus(); }
       }
     } catch {
-      if (errEl) errEl.textContent = "Could not reach backend. Try again.";
-    }
+      if (generation === _generation) _accessUnavailable('Could not reach TLI to verify the PIN. Access remains locked. Reconnect and try again.');
+    } finally { _verifyRequest = null; _submitting = false; if (submit) submit.disabled = !!_locking; }
+  }
+
+  function _lock() {
+    if (_locking) return _locking;
+    _generation++; _setUnlocked(false); _showLock();
+    const submit = document.getElementById('tli-lock-submit');
+    if (submit) submit.disabled = true;
+    const error = _lockError(); if (error) error.textContent = 'Locking this browser session…';
+    const retryLock = document.getElementById('tli-lock-retry'); if (retryLock) retryLock.hidden = true;
+    const verification = _verifyRequest;
+    _locking = (async () => {
+      // A late unlock response can set a new HTTP-only cookie even when its UI
+      // result is stale. Wait for it before revoking this browser's cookie.
+      if (verification) await verification.catch(() => null);
+      try {
+        const response = await fetch('/system/pin/lock', { method: 'POST', credentials: 'same-origin' });
+        const result = await response.json().catch(() => null);
+        if (!response.ok || result?.ok !== true || result.locked !== true) throw new Error(typeof result?.detail === 'string' ? result.detail : 'TLI did not confirm the browser session was revoked.');
+        if (error) error.textContent = 'Browser session locked. Enter your PIN to continue.';
+        return result;
+      } catch (failure) {
+        const message = (failure?.message || 'Could not reach TLI.') + ' This view is locked, but the server session may still be active. Recheck the connection and explicitly lock again.';
+        _accessUnavailable(message);
+        if (retryLock) retryLock.hidden = false;
+        throw new Error(message);
+      }
+    })().finally(() => { _locking = null; if (submit) submit.disabled = _submitting; });
+    return _locking;
   }
 
   function _suggestPin() {
@@ -114,24 +164,14 @@
     el.querySelector("#tli-pin-nudge-dismiss").addEventListener("click", dismissPermanent);
   }
 
-  async function _emergencyReset() {
-    try {
-      const r = await fetch("/system/pin/emergency-reset", { method: "POST" });
-      if (r.ok) {
-        _setUnlocked(true);
-        _hideLock();
-        location.reload();
-      } else {
-        const errEl = _lockError();
-        if (errEl) errEl.textContent = "Reset failed. Try restarting the backend.";
-      }
-    } catch {
-      const errEl = _lockError();
-      if (errEl) errEl.textContent = "Could not reach backend.";
-    }
-  }
-
   document.addEventListener("DOMContentLoaded", () => {
+    window.addEventListener('tli-session-locked', () => { _generation++; _setUnlocked(false); });
+    const retry = document.createElement('button'); retry.id = 'tli-lock-recheck'; retry.type = 'button'; retry.className = 'btn-outline';
+    retry.textContent = 'Recheck access status'; retry.hidden = true; retry.addEventListener('click', _checkAndLock);
+    _lockError()?.after(retry);
+    const retryLock = document.createElement('button'); retryLock.id = 'tli-lock-retry'; retryLock.type = 'button'; retryLock.className = 'btn-outline';
+    retryLock.textContent = 'Retry browser lock'; retryLock.hidden = true;
+    retryLock.addEventListener('click', () => _lock().catch(() => {})); retry.after(retryLock);
     _checkAndLock();
 
     // Submit on button click
@@ -145,10 +185,7 @@
     // Lock button in header
     const lockBtn = _lockBtn();
     if (lockBtn) {
-      lockBtn.addEventListener("click", () => {
-        _setUnlocked(false);
-        _showLock();
-      });
+      lockBtn.addEventListener("click", () => _lock().catch(() => {}));
     }
 
     // Forgot PIN flow
@@ -156,24 +193,34 @@
     const resetPanel = document.getElementById("tli-lock-reset-panel");
     const resetConfirmBtn = document.getElementById("tli-lock-reset-confirm-btn");
     const resetCancelBtn = document.getElementById("tli-lock-reset-cancel-btn");
+    const recovery = resetPanel?.querySelector('.tli-lock-reset-warn');
+    if (recovery) recovery.textContent = 'This screen cannot remove or bypass your PIN. If saved security files are unavailable, stop TLI and preserve the existing files. Restore a matching backup using the original operating-system account; Windows-protected keys may also require the original computer. Do not run setup over this installation.';
+    if (resetCancelBtn) resetCancelBtn.textContent = 'Back to PIN';
 
     if (forgotBtn && resetPanel) {
       forgotBtn.addEventListener("click", () => {
         resetPanel.classList.remove("hidden");
+        resetPanel.setAttribute("aria-hidden", "false");
+        forgotBtn.setAttribute("aria-expanded", "true");
         forgotBtn.style.display = "none";
+        if (resetCancelBtn) resetCancelBtn.focus();
       });
     }
     if (resetCancelBtn && resetPanel) {
       resetCancelBtn.addEventListener("click", () => {
         resetPanel.classList.add("hidden");
+        resetPanel.setAttribute("aria-hidden", "true");
+        if (forgotBtn) forgotBtn.setAttribute("aria-expanded", "false");
         if (forgotBtn) forgotBtn.style.display = "";
+        if (forgotBtn) forgotBtn.focus();
       });
     }
     if (resetConfirmBtn) {
-      resetConfirmBtn.addEventListener("click", _emergencyReset);
+      resetConfirmBtn.textContent = 'Recheck access status'; resetConfirmBtn.className = 'btn btn-outline btn-sm';
+      resetConfirmBtn.addEventListener("click", _checkAndLock);
     }
   });
 
   // Expose for settings panel
-  window.TLIPinLock = { checkAndLock: _checkAndLock };
+  window.TLIPinLock = { checkAndLock: _checkAndLock, lock: _lock, showRecovery: _accessUnavailable };
 })();

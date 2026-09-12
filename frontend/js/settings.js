@@ -1,5 +1,6 @@
-// ---------- settings panel (local only) ----------
+// ---------- settings panel (browser preferences + host controls) ----------
 const settingsKey = "tli_settings";
+const settingsLegacyConversationsKey = "tli_previous_conversations";
 function readSettings() {
   try {
     const raw = localStorage.getItem(settingsKey);
@@ -11,6 +12,15 @@ function readSettings() {
 
 function writeSettings(s) {
   localStorage.setItem(settingsKey, JSON.stringify(s));
+}
+
+function settingsFeedback(id, message, failed = false) {
+  const target = $(id);
+  if (target) {
+    target.textContent = message;
+    target.setAttribute("role", "status");
+    target.dataset.state = failed ? "error" : "saved";
+  }
 }
 
 // Apply settings to the ACTIVE UI (header chips + theme)
@@ -27,8 +37,9 @@ function applySettingsToUI(s) {
     else tgl.classList.remove("on");
   }
 
-  $("temperature-input").value = s.defaultTemp || "0.7";
-  $("max-tokens-input").value  = s.defaultMax  || "768";
+  const tempEl = $("temperature-input"), maxEl = $("max-tokens-input");
+  if (tempEl) tempEl.value = s.defaultTemp || "0.7";
+  if (maxEl) maxEl.value = s.defaultMax || "768";
 
   // Apply theme to <html>
   const theme = s.defaultTheme || DEFAULT_THEME;
@@ -119,17 +130,10 @@ async function fetchSystemProfileSettings() {
       select.value = data.current;
     }
 
-    // Apply suggested UI defaults (safe: only touches Settings controls)
-    const ui = data.ui_defaults || {};
-    const tempEl = $("settings-temp");
-    const maxEl  = $("settings-max");
-    if (tempEl && ui.temp) tempEl.value = ui.temp;
-    if (maxEl && ui.max_tokens) maxEl.value = ui.max_tokens;
-
     if (meta && data.profiles && data.current && data.profiles[data.current]) {
       meta.textContent =
         "Profile: " + (data.profiles[data.current].label || data.current) +
-        " · Suggested defaults applied in this Settings view.";
+        " · Saved on the TLI host. Your chat preferences are unchanged.";
     }
 
     debugLog("info", "Loaded system profile from backend.");
@@ -172,17 +176,27 @@ function loadSettingsPanel() {
   const maxEl      = $("settings-max");
   const themeEl    = $("settings-theme");
 
-  if (brainEl)  brainEl.value  = s.defaultBrain || "auto";
+  if (brainEl) {
+    const savedBrain = s.defaultBrain || "auto";
+    if (brainEl.options && !Array.from(brainEl.options).some(option => option.value === savedBrain)) {
+      const savedOption = document.createElement("option");
+      savedOption.value = savedBrain;
+      savedOption.textContent = "Saved model hint: " + savedBrain;
+      brainEl.appendChild(savedOption);
+    }
+    brainEl.value = savedBrain;
+  }
   if (modeEl)   modeEl.value   = s.defaultMode  || "default";
 
   if (teachingBtn) {
     if (s.teachingOn) teachingBtn.classList.add("on");
     else teachingBtn.classList.remove("on");
+    teachingBtn.setAttribute("aria-pressed", String(!!s.teachingOn));
   }
 
   if (tempEl)   tempEl.value   = s.defaultTemp  || "0.7";
   if (maxEl)    maxEl.value    = s.defaultMax   || "768";
-  if (themeEl)  themeEl.value  = s.defaultTheme || DEFAULT_THEME;
+  if (themeEl)  themeEl.value  = window.TLIThemes?.resolve(s.defaultTheme).id || s.defaultTheme || DEFAULT_THEME;
 
   // Ask backend which models exist & which one is current
   fetchModelSettings();
@@ -205,7 +219,8 @@ function setupSettingsPanel() {
   if (saveProfileBtn) {
     saveProfileBtn.addEventListener("click", async () => {
       const select = $("settings-system-profile");
-      if (!select) return;
+      if (!select || saveProfileBtn.disabled) return;
+      saveProfileBtn.disabled = true;
 
       try {
         const resp = await fetch("/system/profile", {
@@ -215,11 +230,14 @@ function setupSettingsPanel() {
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
+        if (data.ok !== true) throw new Error("The host did not confirm the save.");
         showToast("System profile saved: " + (data.current || select.value));
-        fetchSystemProfileSettings(); // refresh meta + defaults
+        fetchSystemProfileSettings();
       } catch (err) {
-        showToast("Could not save system profile: " + err);
+        showToast("Could not save system profile: " + err, "error");
         debugLog("error", "Failed to save system profile: " + err);
+      } finally {
+        saveProfileBtn.disabled = false;
       }
     });
   }
@@ -229,14 +247,24 @@ function setupSettingsPanel() {
   if (teachingBtn) {
     teachingBtn.addEventListener("click", () => {
       teachingBtn.classList.toggle("on");
+      teachingBtn.setAttribute("aria-pressed", String(teachingBtn.classList.contains("on")));
     });
   }
 
-  // Live theme preview
+  // Theme is a browser preference and saves independently from chat defaults.
   const themeSelectEl = $("settings-theme");
   if (themeSelectEl) {
     themeSelectEl.addEventListener("change", () => {
-      applyTheme(themeSelectEl.value);
+      const previousTheme = document.documentElement.getAttribute("data-theme") || DEFAULT_THEME;
+      try {
+        writeSettings({ ...readSettings(), defaultTheme: themeSelectEl.value });
+        applyTheme(themeSelectEl.value);
+        settingsFeedback("settings-theme-status", "Theme saved in this browser.");
+      } catch (error) {
+        themeSelectEl.value = previousTheme;
+        settingsFeedback("settings-theme-status", "Theme could not be saved. Check browser storage and try again.", true);
+        showToast("Could not save theme: " + error.message, "error");
+      }
     });
   }
 
@@ -250,6 +278,7 @@ function setupSettingsPanel() {
   // Save default model on backend
   if (saveModelBtn) {
     saveModelBtn.addEventListener("click", async () => {
+      if (saveModelBtn.disabled) return;
       const select = $("settings-model-id");
       if (!select || !select.value) {
         showToast("No model selected.");
@@ -262,6 +291,7 @@ function setupSettingsPanel() {
           ? select.selectedOptions[0].textContent
           : modelId) || modelId;
 
+      saveModelBtn.disabled = true;
       try {
         const resp = await fetch("/models/set-default", {
           method: "POST",
@@ -270,103 +300,97 @@ function setupSettingsPanel() {
         });
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         const data = await resp.json();
+        if (data.ok !== true) throw new Error("The host did not confirm the save.");
         showToast(
           "Saved default model: " +
           (data.model && data.model.label ? data.model.label : label)
         );
         debugLog("info", "Updated default model: " + JSON.stringify(data));
       } catch (err) {
-        showToast("Could not save model setting: " + err);
+        showToast("Could not save model setting: " + err, "error");
         debugLog("error", "Failed to save default model: " + err);
+      } finally {
+        saveModelBtn.disabled = false;
       }
     });
   }
 
-   // Save settings (including theme) to localStorage AND apply immediately
-  if (saveBtn) {
-    saveBtn.addEventListener("click", () => {
+  // Save only the fields owned by Chat preferences. Search Assist and custom
+  // model metadata share this object and must survive an unrelated save.
+  function saveChatPreferences() {
+    try {
+      const previous = readSettings() || {};
       const brainEl    = $("settings-brain");
       const teachingEl = $("settings-teaching");
       const tempEl     = $("settings-temp");
       const maxEl      = $("settings-max");
-      const themeEl    = $("settings-theme");
 
       const s = {
-        defaultBrain: brainEl ? brainEl.value : "auto",
-        // defaultMode is omitted for now – there is no settings-mode element in the UI
+        ...previous,
+        defaultBrain: brainEl?.value || previous.defaultBrain || "auto",
         teachingOn:   teachingEl ? teachingEl.classList.contains("on") : false,
-        defaultTemp:  tempEl ? tempEl.value : "0.7",
-        defaultMax:   maxEl ? maxEl.value : "768",
-        defaultTheme: themeEl ? themeEl.value : DEFAULT_THEME,
+        defaultTemp:  tempEl?.value || previous.defaultTemp || "0.7",
+        defaultMax:   maxEl?.value || previous.defaultMax || "768",
       };
 
       writeSettings(s);
       applySettingsToUI(s);
-      showToast("Settings saved locally and applied.");
-      debugLog("info", "Settings saved to localStorage and applied.");
-    });
+      settingsFeedback("settings-chat-status", "Chat preferences saved in this browser and applied to new messages.");
+      showToast("Chat preferences saved in this browser.", "success");
+      debugLog("info", "Chat preferences saved and applied.");
+    } catch (error) {
+      settingsFeedback("settings-chat-status", "Chat preferences could not be saved. Try again after checking browser storage.", true);
+      showToast("Could not save chat preferences: " + error.message, "error");
+    }
   }
-
-  // Apply current controls immediately AND persist them
-  if (applyBtn) {
-    applyBtn.addEventListener("click", () => {
-      const brainEl    = $("settings-brain");
-      const teachingEl = $("settings-teaching");
-      const tempEl     = $("settings-temp");
-      const maxEl      = $("settings-max");
-      const themeEl    = $("settings-theme");
-
-      const s = {
-        defaultBrain: brainEl ? brainEl.value : "auto",
-        teachingOn:   teachingEl ? teachingEl.classList.contains("on") : false,
-        defaultTemp:  tempEl ? tempEl.value : "0.7",
-        defaultMax:   maxEl ? maxEl.value : "768",
-        defaultTheme: themeEl ? themeEl.value : DEFAULT_THEME,
-      };
-
-      writeSettings(s);
-      applySettingsToUI(s);
-      showToast("Applied to header, advanced defaults, and theme (saved for next time).");
-      debugLog("info", "Settings applied to UI and saved.");
-    });
-  }
+  if (saveBtn) saveBtn.addEventListener("click", saveChatPreferences);
+  // Retain the legacy control ID as a compatibility alias, with one save path.
+  if (applyBtn) applyBtn.addEventListener("click", saveChatPreferences);
 
 
   // Clear history (local only)
   if (clearBtn) {
     clearBtn.addEventListener("click", () => {
-      if (!confirm("Clear previous prompts and conversations from this browser?")) return;
-      localStorage.setItem(previousPromptsKey, JSON.stringify([]));
-      localStorage.setItem(previousConversationsKey, JSON.stringify([]));
-      loadPreviousPrompts();
-      showToast("Local history cleared.");
-      debugLog("info", "Local history cleared (prompts + conversations).");
+      if (!confirm("Clear legacy prompts and conversation copies from this browser? Saved conversations and Notebook notes on the TLI host are unchanged.")) return;
+      try {
+        localStorage.setItem(previousPromptsKey, JSON.stringify([]));
+        localStorage.setItem(settingsLegacyConversationsKey, JSON.stringify([]));
+        loadPreviousPrompts();
+        showToast("Legacy browser history cleared. Saved conversations are unchanged.", "success");
+        debugLog("info", "Legacy browser history cleared.");
+      } catch (error) {
+        showToast("Could not finish clearing legacy browser history: " + error.message, "error");
+      }
     });
   }
 
   // Export settings + history
   if (exportBtn) {
     exportBtn.addEventListener("click", () => {
-      const payload = {
-        tli_settings: readSettings(),
-        tli_previous_prompts:
-          JSON.parse(localStorage.getItem(previousPromptsKey) || "[]"),
-        tli_previous_conversations:
-          JSON.parse(localStorage.getItem(previousConversationsKey) || "[]"),
-        exported_at: new Date().toISOString(),
-      };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], {
-        type: "application/json",
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "tli_export.json";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      debugLog("info", "Settings/history exported to tli_export.json.");
+      try {
+        const payload = {
+          tli_settings: readSettings(),
+          tli_previous_prompts:
+            JSON.parse(localStorage.getItem(previousPromptsKey) || "[]"),
+          tli_previous_conversations:
+            JSON.parse(localStorage.getItem(settingsLegacyConversationsKey) || "[]"),
+          exported_at: new Date().toISOString(),
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "tli_export.json";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        debugLog("info", "Settings/history exported to tli_export.json.");
+      } catch (error) {
+        showToast("Could not export browser preferences and legacy history: " + error.message, "error");
+      }
     });
   }
 
@@ -379,19 +403,27 @@ function setupSettingsPanel() {
       reader.onload = () => {
         try {
           const j = JSON.parse(reader.result);
+          if (!j || typeof j !== "object" || Array.isArray(j)) throw new Error("Choose a TLI browser preferences export.");
+          const fields = ["tli_settings", "tli_previous_prompts", "tli_previous_conversations"];
+          if (!fields.some(key => Object.prototype.hasOwnProperty.call(j, key))) throw new Error("This file does not contain TLI browser preferences or legacy history.");
+          if (Object.prototype.hasOwnProperty.call(j, "tli_settings") && (!j.tli_settings || typeof j.tli_settings !== "object" || Array.isArray(j.tli_settings))) throw new Error("Browser preferences must be a settings object.");
+          for (const key of fields.slice(1)) {
+            if (Object.prototype.hasOwnProperty.call(j, key) && !Array.isArray(j[key])) throw new Error("Legacy history must contain lists.");
+          }
+          if (!confirm("Replace the browser preferences and legacy history included in this file? Saved conversations and Notebook notes on the TLI host are unchanged.")) return;
           if (j.tli_settings) writeSettings(j.tli_settings);
           if (Array.isArray(j.tli_previous_prompts))
             localStorage.setItem(previousPromptsKey, JSON.stringify(j.tli_previous_prompts));
           if (Array.isArray(j.tli_previous_conversations))
-            localStorage.setItem(previousConversationsKey, JSON.stringify(j.tli_previous_conversations));
+            localStorage.setItem(settingsLegacyConversationsKey, JSON.stringify(j.tli_previous_conversations));
 
           loadSettingsPanel();
           applySettingsToUI(readSettings());
           loadPreviousPrompts();
-          showToast("Import complete.");
+          showToast("Browser preferences and included legacy history imported.", "success");
           debugLog("info", "Settings/history import complete.");
         } catch (err) {
-          showToast("Import failed: " + err.message);
+          showToast("Import failed: " + err.message, "error");
           debugLog("error", "Settings/history import failed: " + err.message);
         } finally {
           e.target.value = "";
@@ -419,6 +451,7 @@ function setupSettingsPanel() {
   const nodeIdentitySaveBtn = $("settings-node-identity-save");
   if (nodeIdentitySaveBtn) {
     nodeIdentitySaveBtn.addEventListener("click", async () => {
+      if (nodeIdentitySaveBtn.disabled) return;
       const nameEl = $("settings-node-name");
       const roleEl = $("settings-node-role");
       const name = (nameEl ? nameEl.value : "").trim();
@@ -432,7 +465,9 @@ function setupSettingsPanel() {
           body: JSON.stringify({ node_name: name, role }),
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
-        showToast("Node identity saved.", "success");
+        const data = await r.json();
+        if (data.ok !== true) throw new Error("The host did not confirm the save.");
+        showToast("Computer name and network role saved.", "success");
       } catch (e) {
         showToast("Failed to save identity: " + e.message, "error");
       } finally {
@@ -491,11 +526,16 @@ function setupSettingsPanel() {
   const meshAISaveBtn = $("settings-mesh-ai-save");
   if (meshAISaveBtn) {
     meshAISaveBtn.addEventListener("click", async () => {
+      if (meshAISaveBtn.disabled) return;
       const tog = $("settings-prefer-mesh-ai");
       const thresh = $("settings-mesh-cpu-threshold");
       const statusEl = $("settings-mesh-ai-status");
       const prefer = tog ? tog.checked : false;
-      const cpu = thresh ? parseInt(thresh.value) : 80;
+      const cpu = thresh ? Number(thresh.value) : 80;
+      if (!Number.isInteger(cpu) || cpu < 40 || cpu > 100) {
+        showToast("Choose a CPU threshold from 40 to 100 percent.", "error");
+        return;
+      }
       meshAISaveBtn.disabled = true;
       try {
         const r = await fetch("/api/ai/mesh/preference", {
@@ -505,9 +545,10 @@ function setupSettingsPanel() {
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const d = await r.json();
-        if (statusEl) statusEl.textContent = prefer
-          ? `Mesh AI preferred — will route to best available mesh peer.`
-          : `Local AI preferred — mesh used only when local AI is unavailable or CPU ≥ ${d.mesh_ai_cpu_threshold}%.`;
+        if (d.ok !== true) throw new Error("The host did not confirm the save.");
+        if (statusEl) statusEl.textContent = d.prefer_mesh_ai
+          ? "Saved: prefer another available TLI computer for AI requests. Browser routing rules still apply."
+          : `Saved: prefer this host; another available TLI computer may be used when AI is unavailable, CPU reaches ${d.mesh_ai_cpu_threshold}%, or RAM pressure is high. Browser routing rules still apply.`;
         showToast("Mesh AI settings saved.", "success");
       } catch (e) {
         showToast("Failed to save mesh AI settings: " + e.message, "error");
@@ -521,16 +562,18 @@ function setupSettingsPanel() {
 
   // ── PIN Lock settings ─────────────────────────────────────
   async function _refreshPinUI() {
+    const desc      = $("settings-pin-status-desc");
+    const label     = $("settings-pin-action-label");
+    const curInput  = $("settings-pin-current");
+    const saveBtn   = $("settings-pin-save");
+    const removeBtn = $("settings-pin-remove");
+    const callout   = $("settings-pin-callout");
     try {
       const r = await fetch("/system/pin/status", { cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
-      const desc      = $("settings-pin-status-desc");
-      const label     = $("settings-pin-action-label");
-      const curInput  = $("settings-pin-current");
-      const saveBtn   = $("settings-pin-save");
-      const removeBtn = $("settings-pin-remove");
-      const callout = $("settings-pin-callout");
+      const d = await r.json().catch(() => null);
+      if (!r.ok || typeof d?.enabled !== 'boolean') throw new Error(typeof d?.detail === 'string' ? d.detail : 'TLI could not confirm the saved PIN status. Recheck after reconnecting to the host.');
+      if (saveBtn) saveBtn.disabled = false;
+      if (removeBtn) removeBtn.disabled = false;
       if (d.enabled) {
         if (desc)      desc.textContent = "PIN is set. Changing requires your current PIN.";
         if (label)     label.textContent = "Change PIN";
@@ -548,7 +591,15 @@ function setupSettingsPanel() {
         if (removeBtn) removeBtn.style.display = "none";
         if (callout)   callout.style.display = "";
       }
-    } catch {}
+    } catch (error) {
+      const message = 'PIN status unavailable. ' + (error.message || 'Reconnect to TLI and recheck.');
+      if (desc) desc.textContent = message;
+      if (label) label.textContent = 'PIN unavailable';
+      if (saveBtn) saveBtn.disabled = true;
+      if (removeBtn) removeBtn.disabled = true;
+      if (callout) callout.style.display = 'none';
+      window.TLIPinLock?.showRecovery?.(message);
+    }
   }
 
   const pinSaveBtn   = $("settings-pin-save");

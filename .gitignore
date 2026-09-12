@@ -18,6 +18,7 @@ venv/
 *.egg-info/
 dist/
 build/
+build_work/
 
 # AI model files
 *.gguf

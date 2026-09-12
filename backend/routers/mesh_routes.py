@@ -10,12 +10,14 @@ import time
 import threading
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
+from urllib.parse import urlsplit
 
 import os
 
 import shutil
 
 import requests
+import peer_trust
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -26,7 +28,7 @@ from tli_state import NodeConfig
 from routers.system_routes import require_session
 from license_gate import gate as _gate
 
-router = APIRouter(tags=["mesh"])
+router = APIRouter(tags=["mesh"], route_class=peer_trust.BoundedPeerRoute)
 
 MESH_CHAT_DIR = S.MESH_DATA_DIR / "chat"
 MESH_TRANSFERS_DIR = S.MESH_DATA_DIR / "transfers"
@@ -35,37 +37,17 @@ PRESENCE_TIMEOUT_SEC = 90  # seconds without heartbeat before node is offline
 
 
 # ============================================
-#  Node-to-node HTTP helper (HTTPS → HTTP fallback)
+#  Reviewed node-to-node HTTPS transport
 # ============================================
 #
-# All TLI nodes run HTTPS by default (self-signed cert).  We must use
-# verify=False because the cert is self-signed.  Fall back to plain HTTP
-# for older/dev nodes that didn't generate a cert.
+# No discovery auto-trust, unchecked certificate or HTTP downgrade.
 
-def _node_get(base: str, path: str, **kw) -> requests.Response:
-    """GET a peer node endpoint.  base = 'ip:port' or full URL."""
-    if base.startswith("http://") or base.startswith("https://"):
-        url = base.rstrip("/") + path
-        return requests.get(url, verify=False, **kw)
-    for scheme in ("https", "http"):
-        try:
-            return requests.get(f"{scheme}://{base}{path}", verify=False, **kw)
-        except requests.exceptions.ConnectionError:
-            continue
-    raise requests.exceptions.ConnectionError(f"Could not reach {base}{path}")
+def _node_get(base: str, path: str, **kw):
+    return peer_trust.request(peer_trust.by_address(base), "GET", path, params=kw.get("params"))
 
 
-def _node_post(base: str, path: str, **kw) -> requests.Response:
-    """POST to a peer node endpoint.  base = 'ip:port' or full URL."""
-    if base.startswith("http://") or base.startswith("https://"):
-        url = base.rstrip("/") + path
-        return requests.post(url, verify=False, **kw)
-    for scheme in ("https", "http"):
-        try:
-            return requests.post(f"{scheme}://{base}{path}", verify=False, **kw)
-        except requests.exceptions.ConnectionError:
-            continue
-    raise requests.exceptions.ConnectionError(f"Could not reach {base}{path}")
+def _node_post(base: str, path: str, **kw):
+    return peer_trust.request(peer_trust.by_address(base), "POST", path, json_body=kw.get("json"))
 
 # ============================================
 #  Presence pub/sub (SSE broadcast)
@@ -125,7 +107,10 @@ class MeshDeviceEntry(BaseModel):
     last_seen: Optional[str] = None
     labels: List[str] = []
     notes: Optional[str] = None
-    identity_fingerprint: Optional[str] = None   # Ed25519 public key fingerprint
+    identity_fingerprint: Optional[str] = None
+    trust_state: str = "review_required"
+    trust_revision: Optional[str] = None
+    origin: Optional[str] = None
 
 class MeshDirectoryResponse(BaseModel):
     mode: str
@@ -175,6 +160,7 @@ class MeshTaskRunRequest(BaseModel):
     payload: Optional[Dict[str, Any]] = None
 
 class ChatMessageRequest(BaseModel):
+    message_id: Optional[str] = None
     thread_id: str
     from_id: str
     from_name: str
@@ -188,24 +174,41 @@ class ChatMessageRequest(BaseModel):
 #  Helpers
 # ============================================
 
+def _refresh_own_host_address(cfg: NodeConfig) -> bool:
+    """Update only this host's address; a member's address names a remote host."""
+    if cfg.role != "host" or not cfg.host_address:
+        return False
+    address = cfg.host_address.strip()
+    explicit_scheme = "://" in address
+    try:
+        parsed = urlsplit(address if explicit_scheme else "//" + address)
+        hostname = parsed.hostname
+        if not hostname or parsed.username is not None or parsed.password is not None:
+            return False
+        authority = f"[{hostname}]" if ":" in hostname else hostname
+        refreshed = parsed._replace(netloc=f"{authority}:{S.server_port()}").geturl()
+        if not explicit_scheme:
+            refreshed = refreshed.removeprefix("//")
+    except ValueError:
+        return False
+    if refreshed == cfg.host_address:
+        return False
+    cfg.host_address = refreshed
+    cfg.updated_at = S.now_iso()
+    return True
+
+
+@peer_trust.directory_locked
 def _ensure_host_in_mesh_directory() -> None:
     try:
         node_cfg = S.load_node_config()
     except Exception:
         return
+    if _refresh_own_host_address(node_cfg):
+        S.save_node_config(node_cfg)
     devices = S.load_mesh_directory()
 
-    # Remove stale ghost entries that share this machine's name but have a different node_id.
-    # These accumulate when node_config.json is recreated (new UUID) across restarts.
-    stale_ids = [
-        dev_id for dev_id, d in devices.items()
-        if dev_id != node_cfg.node_id
-        and (d.get("display_name") or "").strip().lower() == node_cfg.node_name.strip().lower()
-    ]
-    for dev_id in stale_ids:
-        devices.pop(dev_id, None)
-        S.log_debug("mesh", "INFO", "Removed ghost duplicate entry", ghost_id=dev_id, name=node_cfg.node_name)
-
+    # Names and IP addresses are not identities. Preserve all other records.
     entry = devices.get(node_cfg.node_id, {})
     entry.setdefault("display_name", node_cfg.node_name)
     # Auto-detect and persist the host's own IP
@@ -218,7 +221,7 @@ def _ensure_host_in_mesh_directory() -> None:
         entry.setdefault("ip", None)
     entry.setdefault("status", "allowed" if node_cfg.role == "host" else "pending")
     entry.setdefault("is_host", node_cfg.role == "host")
-    entry.setdefault("tli_port", int(os.environ.get("TLI_PORT", "8000")))
+    entry["tli_port"] = S.server_port()
     entry["last_seen"] = S.now_iso()
     devices[node_cfg.node_id] = entry
     S.save_mesh_directory(devices)
@@ -231,6 +234,7 @@ def _ensure_host_in_mesh_directory() -> None:
 @router.get("/mesh/node")
 def get_node_identity(_session=Depends(require_session)):
     cfg = S.load_node_config()
+    _refresh_own_host_address(cfg)
     if cfg.role == "host":
         join_mode = "host"
     elif cfg.role == "member":
@@ -310,13 +314,14 @@ def update_node_identity(body: UpdateNodeIdentityRequest, _session=Depends(requi
 
 
 @router.post("/mesh/node/become_host")
+@peer_trust.directory_locked
 def become_host(_session=Depends(require_session), _l=Depends(_gate("peer_nodes"))):
     cfg = S.load_node_config()
     cfg.role = "host"
     cfg.mesh_status = "approved"
     hostname = socket.gethostname()
     host_ip = socket.gethostbyname(hostname)
-    host_address = f"{host_ip}:{os.environ.get('TLI_PORT', '8000')}"
+    host_address = f"{host_ip}:{S.server_port()}"
     cfg.host_address = host_address
     cfg.updated_at = S.now_iso()
     S.save_node_config(cfg)
@@ -324,10 +329,12 @@ def become_host(_session=Depends(require_session), _l=Depends(_gate("peer_nodes"
     if cfg.node_id not in directory:
         directory[cfg.node_id] = {
             "display_name": cfg.node_name, "ip": host_ip, "status": "allowed",
-            "is_host": True, "tli_port": int(os.environ.get("TLI_PORT", "8000")),
+            "is_host": True, "tli_port": S.server_port(),
             "last_seen": cfg.updated_at, "labels": ["Host"], "notes": "",
         }
-        S.save_mesh_directory(directory)
+    else:
+        directory[cfg.node_id]["tli_port"] = S.server_port()
+    S.save_mesh_directory(directory)
     return {"ok": True, "message": "This node is now the Host.", "host_address": cfg.host_address}
 
 
@@ -336,10 +343,15 @@ def become_host(_session=Depends(require_session), _l=Depends(_gate("peer_nodes"
 # ============================================
 
 @router.post("/mesh/agent_heartbeat")
-def mesh_agent_heartbeat(body: AgentHeartbeatRequest):
+@peer_trust.directory_locked
+def mesh_agent_heartbeat(body: AgentHeartbeatRequest, access=Depends(peer_trust.coordinate_access)):
+    _peer_body(access, body.device_id)
     cfg = S.load_node_config()
     if cfg.role != "host":
         raise HTTPException(status_code=403, detail="This node is not a Mesh host.")
+    directory = S.load_mesh_directory()
+    if body.tli_port != directory[body.device_id].get("tli_port"):
+        raise HTTPException(409, "Peer listener changed; review its new card.")
     now = S.now_iso()
     state = S.load_agent_state()
     entry = state.get(body.device_id, {})
@@ -353,7 +365,6 @@ def mesh_agent_heartbeat(body: AgentHeartbeatRequest):
     directory = S.load_mesh_directory()
     if body.device_id in directory:
         directory[body.device_id]["last_seen"] = now
-        directory[body.device_id]["tli_port"] = body.tli_port
         S.save_mesh_directory(directory)
     S.log_debug("mesh", "INFO", "Agent heartbeat received", device_id=body.device_id, status=body.status)
     # Broadcast live presence update
@@ -370,6 +381,7 @@ def mesh_agent_heartbeat(body: AgentHeartbeatRequest):
 
 
 @router.post("/agent/tasks/{device_id}/enqueue")
+@peer_trust.directory_locked
 def agent_enqueue_task(device_id: str, body: AgentTaskEnqueueRequest, _session=Depends(require_session), _l=Depends(_gate("peer_nodes"))):
     cfg = S.load_node_config()
     if cfg.role != "host":
@@ -377,12 +389,17 @@ def agent_enqueue_task(device_id: str, body: AgentTaskEnqueueRequest, _session=D
     directory = S.load_mesh_directory()
     if device_id not in directory:
         raise HTTPException(status_code=404, detail="Unknown device_id for tasks.")
-    task = S.enqueue_agent_task(device_id, body.type, body.payload or {})
+    peer_trust.trusted(device_id, "coordinate")
+    if body.type != "ping" or body.payload:
+        raise HTTPException(409, {"code": "capability_required", "message": "This peer queue supports an explicit read-only ping only."})
+    task = S.enqueue_agent_task(device_id, body.type, {})
     return {"ok": True, "task": task}
 
 
 @router.post("/agent/tasks/next")
-def agent_get_next_task(body: AgentTaskNextRequest):
+@peer_trust.directory_locked
+def agent_get_next_task(body: AgentTaskNextRequest, access=Depends(peer_trust.coordinate_access)):
+    _peer_body(access, body.device_id)
     cfg = S.load_node_config()
     if cfg.role != "host":
         raise HTTPException(status_code=403, detail="This node is not a Mesh host.")
@@ -394,7 +411,9 @@ def agent_get_next_task(body: AgentTaskNextRequest):
 
 
 @router.post("/agent/tasks/report")
-def agent_report_task(body: AgentTaskReportRequest):
+@peer_trust.directory_locked
+def agent_report_task(body: AgentTaskReportRequest, access=Depends(peer_trust.coordinate_access)):
+    _peer_body(access, body.device_id)
     cfg = S.load_node_config()
     if cfg.role != "host":
         raise HTTPException(status_code=403, detail="This node is not a Mesh host.")
@@ -411,19 +430,13 @@ def agent_report_task(body: AgentTaskReportRequest):
 
 @router.get("/mesh/directory", response_model=MeshDirectoryResponse)
 def get_mesh_directory(_session=Depends(require_session)):
-    try:
-        node_cfg = S.load_node_config()
-    except Exception:
-        return MeshDirectoryResponse(mode="standalone", this_device_id="standalone-node", devices=[])
+    node_cfg = S.load_node_config()
     _ensure_host_in_mesh_directory()
     raw = S.load_mesh_directory()
     devices = []
     for dev_id, d in raw.items():
         # Never include this node itself in the peer list — it's identified by this_device_id
         if dev_id == node_cfg.node_id:
-            continue
-        # Skip null-IP ghost entries for peers
-        if not d.get("ip"):
             continue
         try:
             status_enum = MeshDeviceStatusEnum(d.get("status", "pending"))
@@ -434,6 +447,7 @@ def get_mesh_directory(_session=Depends(require_session)):
             tli_port=int(d.get("tli_port", 8000)),
             status=status_enum, is_host=bool(d.get("is_host", False)), last_seen=d.get("last_seen"),
             labels=d.get("labels") or [], notes=d.get("notes"),
+            **peer_trust.public_trust(dev_id),
         ))
     host_device_id = node_cfg.node_id if node_cfg.role == "host" else None
     return MeshDirectoryResponse(mode=node_cfg.role, this_device_id=node_cfg.node_id, host_device_id=host_device_id, devices=devices)
@@ -461,10 +475,10 @@ def mesh_health(_session=Depends(require_session)):
 
     # ── Peers ──────────────────────────────────────────────────
     raw_dir = S.load_mesh_directory()
-    seen_ips: set[str] = set()
-    seen_names: set[str] = set()
+    seen_ids: set[str] = set()
 
-    # collect unique peers — dedup by IP and display name
+    # Friendly names and addresses are not identities. Two TLI installations
+    # may share either; keep distinct registry identities visible to the user.
     peer_list: list[dict] = []
     for dev_id, d in raw_dir.items():
         try:
@@ -474,14 +488,10 @@ def mesh_health(_session=Depends(require_session)):
         except Exception:
             pass
         ip = d.get("ip", "")
-        display = (d.get("display_name") or dev_id).strip().lower()
-        if not ip or ip in seen_ips:
+        ident = str(d.get("node_id") or d.get("device_id") or dev_id)
+        if not ip or ident in seen_ids:
             continue
-        if display and display in seen_names:
-            continue
-        seen_ips.add(ip)
-        if display:
-            seen_names.add(display)
+        seen_ids.add(ident)
         peer_list.append({"peer_id": dev_id, "ip": ip, "port": int(d.get("tli_port", 8000)),
                           "display_name": d.get("display_name") or dev_id})
 
@@ -501,12 +511,15 @@ def mesh_health(_session=Depends(require_session)):
         base = {"is_self": False, "peer_id": p["peer_id"],
                 "node_name": p["display_name"], "ip": p["ip"], "port": p["port"]}
         try:
-            r = requests.get(f"http://{p['ip']}:{p['port']}/agent/health", timeout=2.0)
-            if r.ok:
-                data = r.json()
-                data.update({"is_self": False, "online": True, "peer_id": p["peer_id"]})
-                return data
-            base.update({"online": False, "error": f"HTTP {r.status_code}"})
+            peer_trust.trusted(p["peer_id"], "coordinate")
+        except HTTPException as exc:
+            base.update({"online": None, "connection_state": "review_required", "trust_state": "review_required",
+                         "reason": exc.detail, "error": None})
+            return base
+        try:
+            data = peer_trust.health(p["peer_id"])
+            data.update({"is_self": False, "online": True, "peer_id": p["peer_id"]})
+            return data
         except Exception as e:
             base.update({"online": False, "error": _friendly_error(e)})
         return base
@@ -525,7 +538,7 @@ def mesh_health(_session=Depends(require_session)):
 
 @router.get("/api/lan/peers")
 def get_lan_peers(_session=Depends(require_session)):
-    """Return all LAN-discovered TLI peers (excludes self, deduped by IP, with online status).
+    """Return distinct recorded LAN identities and reported presence.
 
     This is the lightweight endpoint TLI Chat uses — no mesh pairing required.
     Any TLI node on the same LAN that has been seen via UDP beacon shows up here.
@@ -547,9 +560,6 @@ def get_lan_peers(_session=Depends(require_session)):
         ip = d.get("ip") or ""
         if not ip:
             continue  # skip ghost entries with no IP
-        if ip in seen_ips:
-            continue  # dedup by IP (same machine, different node IDs)
-        seen_ips.add(ip)
 
         last_seen_str = d.get("last_seen")
         online = False
@@ -567,7 +577,8 @@ def get_lan_peers(_session=Depends(require_session)):
             "port":      int(d.get("tli_port", 8000)),
             "last_seen": last_seen_str,
             "online":    online,
-            "status":    d.get("status", "allowed"),
+            "status":    d.get("status", "pending"),
+            **peer_trust.public_trust(dev_id),
         })
 
     # Sort: online first, then by name
@@ -577,12 +588,17 @@ def get_lan_peers(_session=Depends(require_session)):
 
 
 @router.post("/mesh/devices/{device_id}/status", response_model=MeshDeviceEntry)
+@peer_trust.directory_locked
 def update_mesh_device_status(device_id: str, body: MeshDeviceStatusUpdate, _session=Depends(require_session)):
     node_cfg = S.load_node_config()
     if node_cfg.role != "host":
         raise HTTPException(status_code=403, detail="Only the Host node may change mesh device status.")
+    if body.status == MeshDeviceStatusEnum.allowed:
+        raise HTTPException(409, {"code": "review_required", "message": "Import and review this computer’s signed card to allow it."})
     directory = S.load_mesh_directory()
-    entry = directory.get(device_id, {})
+    if device_id not in directory:
+        raise HTTPException(404, "Computer not found")
+    entry = directory[device_id]
     is_host = bool(entry.get("is_host", False))
     entry.setdefault("display_name", device_id)
     entry.setdefault("ip", None)
@@ -601,82 +617,22 @@ def update_mesh_device_status(device_id: str, body: MeshDeviceStatusUpdate, _ses
 
 
 @router.post("/mesh/join", response_model=MeshDeviceEntry)
-def host_receive_join(req: MeshJoinRequest, request: Request, _l=Depends(_gate("peer_nodes"))):
-    node_cfg = S.load_node_config()
-    if node_cfg.role != "host":
-        raise HTTPException(status_code=403, detail="Only a Host node may receive mesh join requests.")
-    directory = S.load_mesh_directory()
-    now = S.now_iso()
-    # Use the real connection IP — more reliable than what the client claims
-    real_ip = (request.client.host if request.client else None) or req.ip
-
-    # Block self-registration: a node must not appear as a peer in its own directory
-    if req.device_id == node_cfg.node_id:
-        raise HTTPException(status_code=400, detail="A node may not register itself as a mesh peer.")
-
-    # IP deduplication: if another device_id already claims this IP, treat this as a
-    # reinstall of the same physical machine.  Migrate its status/labels/notes to the
-    # incoming entry and remove the stale ghost(s).
-    stale_ids = [
-        did for did, dev in directory.items()
-        if dev.get("ip") == real_ip and did != req.device_id
-    ]
-    inherited_status = MeshDeviceStatusEnum.pending.value
-    inherited_labels: list = []
-    inherited_notes: str = ""
-    if stale_ids:
-        # Prefer the most-recently-seen stale entry for inheritance
-        stale_ids.sort(key=lambda d: directory[d].get("last_seen", ""), reverse=True)
-        best = directory[stale_ids[0]]
-        inherited_status = best.get("status", inherited_status)
-        inherited_labels = best.get("labels") or []
-        inherited_notes = best.get("notes", "")
-        for sid in stale_ids:
-            directory.pop(sid, None)
-        S.log_debug("mesh", "INFO", "Removed stale ghost entries on IP dedup",
-                    stale_ids=stale_ids, real_ip=real_ip, new_id=req.device_id)
-
-    entry = directory.get(req.device_id, {})
-    entry["display_name"] = req.display_name or req.device_id
-    entry["ip"] = real_ip
-    entry["tli_port"] = req.tli_port
-    # Preserve existing status/labels/notes if already known; otherwise inherit from stale entry
-    if "status" not in entry:
-        entry["status"] = inherited_status
-    entry["is_host"] = bool(entry.get("is_host", False)) or False
-    entry["last_seen"] = now
-    entry.setdefault("labels", inherited_labels)
-    entry.setdefault("notes", inherited_notes)
-    if req.identity_fingerprint:
-        entry["identity_fingerprint"] = req.identity_fingerprint
-    directory[req.device_id] = entry
-    S.save_mesh_directory(directory)
-    S.log_debug("mesh", "INFO", "Join request received", device_id=req.device_id, display_name=req.display_name, ip=real_ip)
-    # Broadcast presence — new node just appeared
-    _broadcast_presence({
-        "type": "node_online",
-        "node_id": req.device_id,
-        "name": entry["display_name"],
-        "ip": real_ip,
-        "tli_port": req.tli_port,
-        "status": MeshDeviceStatusEnum.pending.value,
-        "identity_fingerprint": entry.get("identity_fingerprint"),
-    })
-    try:
-        import event_bus as _eb
-        _eb.emit_event("mesh", "info", f"{entry['display_name']} joined the mesh", f"Node at {real_ip}")
-    except Exception:
-        pass
-    return MeshDeviceEntry(
-        device_id=req.device_id, display_name=entry["display_name"], ip=entry.get("ip"),
-        tli_port=entry["tli_port"],
-        status=MeshDeviceStatusEnum.pending, is_host=bool(entry.get("is_host", False)),
-        last_seen=entry.get("last_seen"), labels=entry.get("labels") or [], notes=entry.get("notes"),
-        identity_fingerprint=entry.get("identity_fingerprint"),
-    )
+@peer_trust.directory_locked
+def host_receive_join(req: MeshJoinRequest, request: Request, access=Depends(peer_trust.coordinate_access), _l=Depends(_gate("peer_nodes"))):
+    if S.load_node_config().role != "host":
+        raise HTTPException(403, "Only a Host node may receive mesh join requests.")
+    _peer_body(access, req.device_id)
+    entry, card, _ = peer_trust.trusted(req.device_id, "coordinate")
+    if req.tli_port != urlsplit(card["origin"]).port or (req.identity_fingerprint and req.identity_fingerprint != card["identity_fingerprint"]):
+        raise HTTPException(409, "The joining computer's address or identity changed. Review its card again.")
+    # The reviewed record is authoritative; unsigned names/IPs never migrate approval.
+    return MeshDeviceEntry(device_id=req.device_id, display_name=card["name"], ip=entry["ip"], tli_port=entry["tli_port"],
+                           status=MeshDeviceStatusEnum.allowed, labels=entry.get("labels") or [], notes=entry.get("notes"),
+                           **peer_trust.public_trust(req.device_id))
 
 
 @router.delete("/mesh/devices/{device_id}")
+@peer_trust.directory_locked
 def delete_mesh_device(device_id: str, _session=Depends(require_session)):
     node_cfg = S.load_node_config()
     if node_cfg.role != "host":
@@ -690,6 +646,7 @@ def delete_mesh_device(device_id: str, _session=Depends(require_session)):
 
 
 @router.post("/mesh/directory/{device_id}/action")
+@peer_trust.directory_locked
 def mesh_directory_action(device_id: str, body: MeshDirectoryAction, _session=Depends(require_session)):
     node_cfg = S.load_node_config()
     if node_cfg.role != "host":
@@ -704,7 +661,7 @@ def mesh_directory_action(device_id: str, body: MeshDirectoryAction, _session=De
             S.save_mesh_directory(directory)
         return {"ok": True, "action": body.action, "removed": existed}
     if body.action == "allow":
-        new_status = MeshDeviceStatusEnum.allowed
+        raise HTTPException(409, {"code": "review_required", "message": "Import and review this computer’s signed card to allow it."})
     elif body.action == "block":
         new_status = MeshDeviceStatusEnum.blocked
     else:
@@ -728,6 +685,7 @@ def mesh_directory_action(device_id: str, body: MeshDirectoryAction, _session=De
 
 
 @router.post("/mesh/kill_all")
+@peer_trust.directory_locked
 def mesh_kill_all(_session=Depends(require_session)):
     node_cfg = S.load_node_config()
     if node_cfg.role != "host":
@@ -765,65 +723,26 @@ def get_mesh_device(device_id: str, _session=Depends(require_session)):
 def _resolve_mesh_target(device_id: str) -> tuple[str, int]:
     """Shared helper: look up a device and return (ip, tli_port)."""
     node_cfg = S.load_node_config()
-    if node_cfg.role != "host":
-        raise HTTPException(status_code=403, detail="Only the Host node may call this endpoint.")
-    directory = S.load_mesh_directory()
-    target = directory.get(device_id)
-    if not target:
-        raise HTTPException(status_code=404, detail=f"No device with id={device_id!r} in mesh directory.")
-    ip = target.get("ip")
-    if not ip:
-        raise HTTPException(status_code=400, detail="No IP address recorded for this device.")
-    tli_port = int(target.get("tli_port", 8000))
-    return ip, tli_port
+    _, card, _ = peer_trust.trusted(device_id, "coordinate")
+    parsed = urlsplit(card["origin"])
+    return parsed.hostname, parsed.port
+
 
 
 @router.post("/mesh/directory/{device_id}/ping")
 def mesh_ping_device(device_id: str, _session=Depends(require_session), _l=Depends(_gate("peer_nodes"))):
-    ip, tli_port = _resolve_mesh_target(device_id)
-    try:
-        resp = _node_get(f"{ip}:{tli_port}", "/agent/ping", timeout=5.0)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact node at {ip}:{tli_port}: {e!r}")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Node returned HTTP {resp.status_code}")
-    try:
-        ping_data = resp.json()
-    except Exception:
-        ping_data = {"raw": resp.text}
-    return {"ok": True, "device_id": device_id, "ping": ping_data}
+    return {"ok": True, "device_id": device_id, "ping": peer_trust.health(device_id)}
 
 
 @router.post("/mesh/directory/{device_id}/info")
 def mesh_node_info(device_id: str, _session=Depends(require_session), _l=Depends(_gate("peer_nodes"))):
-    ip, tli_port = _resolve_mesh_target(device_id)
-    try:
-        resp = _node_get(f"{ip}:{tli_port}", "/agent/info", timeout=8.0)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact node: {e!r}")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Node returned HTTP {resp.status_code}")
-    try:
-        info_data = resp.json()
-    except Exception:
-        info_data = {"raw": resp.text}
-    return {"ok": True, "device_id": device_id, "info": info_data}
+    return {"ok": True, "device_id": device_id, "info": peer_trust.health(device_id)}
 
 
 @router.post("/mesh/directory/{device_id}/diagnostics")
 def mesh_node_diagnostics(device_id: str, _session=Depends(require_session), _l=Depends(_gate("peer_nodes"))):
-    ip, tli_port = _resolve_mesh_target(device_id)
-    try:
-        resp = _node_get(f"{ip}:{tli_port}", "/agent/system_summary", timeout=8.0)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to contact node: {e!r}")
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Node returned HTTP {resp.status_code}")
-    try:
-        diag = resp.json()
-    except Exception:
-        diag = {"raw": resp.text}
-    return {"ok": True, "device_id": device_id, "diagnostics": diag}
+    cap = peer_trust.capability(device_id)
+    return {"ok": True, "device_id": device_id, "diagnostics": peer_trust.observe(device_id, cap["revision"])}
 
 
 _MESH_PROXY_ALLOWED_PATHS: frozenset = frozenset({
@@ -873,27 +792,29 @@ def _proxy_get(device_id: str, path: str, params=None):
 
 @router.post("/mesh/directory/{device_id}/maintenance/refresh")
 def mesh_node_maintenance_refresh(device_id: str, _session=Depends(require_session)):
-    data = _proxy_post(device_id, "/agent/maintenance/refresh")
+    cap = peer_trust.capability(device_id)
+    data = peer_trust.observe(device_id, cap["revision"])
     return {"ok": True, "device_id": device_id, "action": "maintenance_refresh", "data": data}
 
 
 @router.post("/mesh/directory/{device_id}/maintenance/clean_temp")
 def mesh_node_maintenance_clean_temp(device_id: str, _session=Depends(require_session)):
-    data = _proxy_post(device_id, "/agent/maintenance/clean_temp")
-    return {"ok": True, "device_id": device_id, "action": "maintenance_clean_temp", "data": data}
+    raise HTTPException(409, {"code": "review_required", "message": "Open Free Space on the selected computer and review its file selection there. No cleanup ran."})
 
 
 @router.get("/mesh/directory/{device_id}/logs/recent")
 def mesh_node_logs_recent(device_id: str, limit: int = Query(default=100, ge=1, le=1000), _session=Depends(require_session)):
-    data = _proxy_get(device_id, "/agent/logs/recent", params={"limit": limit})
-    return {"ok": True, "device_id": device_id, "action": "logs_recent", "data": data}
+    raise HTTPException(409, {"code": "review_required", "message": "Open this computer’s authenticated console to review its logs. Peer observation does not grant log access."})
 
 
 @router.post("/mesh/directory/{device_id}/tasks/run")
 def mesh_node_tasks_run(device_id: str, body: MeshTaskRunRequest, _session=Depends(require_session)):
+    if body.task_id != "refresh_status":
+        raise HTTPException(409, {"code": "capability_required", "message": "This peer grant permits read-only refresh only. Review other actions on that computer."})
     if not body.task_id:
         raise HTTPException(status_code=400, detail="task_id is required.")
-    data = _proxy_post(device_id, "/agent/tasks/run", json_body=body.dict(exclude_none=True))
+    cap = peer_trust.capability(device_id)
+    data = peer_trust.observe(device_id, cap["revision"])
     return {"ok": True, "device_id": device_id, "task_id": body.task_id, "data": data}
 
 
@@ -911,22 +832,19 @@ async def mesh_presence_stream(request: Request, _session=Depends(require_sessio
     async def generate():
         try:
             # Send a snapshot of currently-online nodes immediately on connect.
-            # Mirror the /api/lan/peers dedup rules: skip self, dedup by IP.
+            # Each saved node ID is independent, including shared IPs.
             try:
                 _self_id = S.load_node_config().node_id
             except Exception:
                 _self_id = None
             raw = S.load_mesh_directory()
             now_epoch = time.time()
-            _seen_ips: set = set()
             for dev_id, d in raw.items():
                 if dev_id == _self_id:
                     continue  # skip self
                 ip = d.get("ip") or ""
                 if not ip:
                     continue
-                if ip in _seen_ips:
-                    continue  # same physical machine, different dev_id — skip
                 last_seen_str = d.get("last_seen")
                 is_online = False
                 if last_seen_str:
@@ -934,9 +852,8 @@ async def mesh_presence_stream(request: Request, _session=Depends(require_sessio
                         ls = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00")).timestamp()
                         is_online = (now_epoch - ls) < PRESENCE_TIMEOUT_SEC
                     except Exception:
-                        is_online = True
+                        is_online = False
                 if is_online:
-                    _seen_ips.add(ip)
                     payload = json.dumps({
                         "type": "node_online",
                         "node_id": dev_id,
@@ -981,7 +898,7 @@ def start_join_request(body: MeshJoinStartRequest, _session=Depends(require_sess
         ip = socket.gethostbyname(socket.gethostname())
     except Exception:
         ip = None
-    tli_port = int(os.environ.get("TLI_PORT", "8000"))
+    tli_port = S.server_port()
     payload = {"device_id": cfg.node_id, "display_name": cfg.node_name, "ip": ip, "tli_port": tli_port}
     host_address = body.host_address.strip()
     if not host_address:
@@ -1006,10 +923,10 @@ def start_join_request(body: MeshJoinStartRequest, _session=Depends(require_sess
 def get_join_status(_session=Depends(require_session)):
     cfg = S.load_node_config()
     if not cfg.host_address:
-        raise HTTPException(status_code=400, detail="This node is not joined to any host.")
+        return {"mesh_status": "not_joined", "role": cfg.role, "host_address": None}
     host_base = cfg.host_address.strip()
     try:
-        r = _node_get(host_base, f"/mesh/devices/{cfg.node_id}", timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
+        r = _node_get(host_base, "/mesh/peer/self-status", timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not contact host: {e}")
     if r.status_code == 404:
@@ -1061,12 +978,13 @@ def agent_heartbeat_loop():
         except Exception:
             time.sleep(_hb_sleep())
             continue
-        if cfg.mesh_status not in ("pending", "approved") or not cfg.host_address:
+        if cfg.mesh_status != "approved" or not cfg.host_address:
             time.sleep(_hb_sleep())
             continue
         payload = {
             "device_id": cfg.node_id, "status": "online", "agent_version": "0.1.0",
-            "capabilities": {"visualizer": True, "tools": True},
+            "tli_port": S.server_port(),
+            "capabilities": {"system_observation_v1": True, "coordination_v1": True},
         }
         try:
             resp = _node_post(cfg.host_address, "/mesh/agent_heartbeat", json=payload, timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
@@ -1117,7 +1035,7 @@ def agent_task_worker_loop():
         except Exception as e:
             error = f"Task execution error: {e!r}"
         try:
-            requests.post(f"{host_base}/agent/tasks/report", json={
+            _node_post(cfg.host_address, "/agent/tasks/report", json={
                 "device_id": cfg.node_id, "task_id": task_id, "success": success,
                 "result": result if success else None, "error": error,
             }, timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
@@ -1137,101 +1055,73 @@ def _safe_thread_path(thread_id: str):
 
 def _append_chat_msg(thread_id: str, msg: dict) -> None:
     path = _safe_thread_path(thread_id)
+    encrypted = S.encrypt_jsonl_line(msg)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(S.encrypt_jsonl_line(msg) + "\n")
+        f.write(encrypted + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
-def _forward_to_remote(to_ip: str, msg: dict) -> None:
-    """Best-effort fire-and-forget to remote node. Tries HTTPS first (self-signed OK), falls back to HTTP."""
-    for scheme in ("https", "http"):
-        try:
-            requests.post(
-                f"{scheme}://{to_ip}:8000/mesh/chat/receive",
-                json=msg,
-                timeout=3,
-                verify=False,
-            )
-            return
-        except Exception:
-            continue
+def _forward_to_remote(to_ip: str, msg: dict):
+    peer_trust.validate_message(msg)
+    entry, card, _ = peer_trust.trusted(msg["to_id"], "messages")
+    if to_ip and to_ip != entry["ip"]:
+        raise HTTPException(409, "The selected message recipient changed.")
+    response = peer_trust.request(msg["to_id"], "POST", "/mesh/chat/receive", json_body=msg, grant="messages")
+    try:
+        ack = response.json()
+        if (response.status_code != 200 or not isinstance(ack, dict) or ack.get("ok") is not True
+                or any(ack.get(key) != msg[key] for key in ("message_id", "thread_id", "from_id", "to_id"))
+                or type(ack.get("duplicate")) is not bool):
+            raise ValueError("Unmatched acknowledgment")
+    except Exception:
+        raise HTTPException(502, {"code": "message_acknowledgment_uncertain", "delivery": "uncertain",
+                            "message": "The recipient did not supply a matching acknowledgment. It may already have received this message; inspect the thread or deliberately retry the same message. No automatic retry was sent."})
+    return ack
 
 
 @router.post("/mesh/chat/send")
 def mesh_chat_send(body: ChatMessageRequest, bg: BackgroundTasks, _session=Depends(require_session)):
-    if not body.body.strip():
-        raise HTTPException(status_code=400, detail="Empty message")
-    msg = {
-        "thread_id": body.thread_id,
-        "from_id": body.from_id,
-        "from_name": body.from_name,
-        "to_id": body.to_id,
-        "body": body.body,
-        "ts": body.ts,
-        "server_ts": time.time() * 1000,
-    }
-    _append_chat_msg(body.thread_id, msg)
-    if body.to_ip:
-        bg.add_task(_forward_to_remote, body.to_ip, msg)
-    return {"ok": True}
+    cfg = S.load_node_config()
+    if not body.message_id:
+        raise HTTPException(409, {"code": "message_review_required", "message": "Refresh LAN Messages to prepare a stable delivery identifier. No message was sent."})
+    if not body.body.strip() or len(body.body.encode("utf-8")) > 32768:
+        raise HTTPException(422, "Supply a text message up to 32 KiB.")
+    if body.from_id != cfg.node_id:
+        raise HTTPException(409, "Message sender must be this computer.")
+    _safe_thread_path(body.thread_id)
+    peer_trust.trusted(body.to_id, "messages")
+    msg = {"thread_id": body.thread_id, "from_id": cfg.node_id, "from_name": cfg.node_name,
+           "to_id": body.to_id, "body": body.body, "ts": body.ts, "message_id": body.message_id, "server_ts": time.time() * 1000}
+    peer_trust.validate_message(msg)
+    _forward_to_remote(body.to_ip or "", msg)
+    duplicate = peer_trust.record_message_once(msg, "sent", lambda: _append_chat_msg(body.thread_id, msg))
+    return {"ok": True, "delivery": "acknowledged", "duplicate": duplicate, "automatic_retry": False}
 
 
 @router.post("/mesh/chat/receive")
-def mesh_chat_receive(body: ChatMessageRequest, request: Request):
-    """Called by a remote node forwarding a message to us."""
-    if not body.body.strip():
-        raise HTTPException(status_code=400, detail="Empty message")
-    msg = {
-        "thread_id": body.thread_id,
-        "from_id": body.from_id,
-        "from_name": body.from_name,
-        "to_id": body.to_id,
-        "body": body.body,
-        "ts": body.ts,
-        "server_ts": time.time() * 1000,
-    }
-    _append_chat_msg(body.thread_id, msg)
-
-    # Auto-add sender to mesh directory so they appear in /api/lan/peers
-    # This makes the sender visible in TLI Chat even without UDP beacon discovery.
-    sender_ip = (request.client.host if request.client else None) or body.to_ip or ""
-    if sender_ip and body.from_id:
-        try:
-            directory = S.load_mesh_directory()
-            entry = directory.get(body.from_id, {})
-            entry["device_id"]    = body.from_id
-            entry["display_name"] = entry.get("display_name") or body.from_name or body.from_id
-            entry["ip"]           = sender_ip
-            entry["tli_port"]     = int(entry.get("tli_port", 8000))
-            entry["last_seen"]    = S.now_iso()
-            entry.setdefault("status", "allowed")
-            entry.setdefault("is_host", False)
-            entry.setdefault("labels", [])
-            directory[body.from_id] = entry
-            S.save_mesh_directory(directory)
-
-            # Push SSE events so the frontend updates instantly (no polling lag)
-            _broadcast_presence({
-                "type":     "node_online",
-                "node_id":  body.from_id,
-                "name":     entry["display_name"],
-                "ip":       sender_ip,
-                "tli_port": entry["tli_port"],
-                "status":   "online",
-            })
-            _broadcast_presence({
-                "type":      "message_incoming",
-                "from_id":   body.from_id,
-                "from_name": entry["display_name"],
-                "thread_id": body.thread_id,
-                "ts":        body.ts,
-            })
-        except Exception:
-            pass  # best-effort — message is already stored
-
-    return {"ok": True}
+@peer_trust.directory_locked
+def mesh_chat_receive(body: ChatMessageRequest, request: Request, access=Depends(peer_trust.message_access)):
+    _peer_body(access, body.from_id)
+    _, card, _ = peer_trust.trusted(body.from_id, "messages")
+    if body.to_id != S.load_node_config().node_id or body.from_name != card["name"]:
+        raise HTTPException(409, "Message identities do not match the reviewed computers.")
+    if not body.body.strip() or len(body.body.encode("utf-8")) > 32768:
+        raise HTTPException(422, "Supply a text message up to 32 KiB.")
+    if body.body.startswith(("__TLI_FILE__", "__FILE_OFFER__:")):
+        raise HTTPException(409, {"code": "capability_required", "message": "Peer file transfer requires a separate reviewed capability."})
+    peer_trust.revalidate(access)
+    msg = {"thread_id": body.thread_id, "from_id": body.from_id, "from_name": card["name"], "to_id": body.to_id,
+           "body": body.body, "ts": body.ts, "message_id": body.message_id, "server_ts": time.time() * 1000}
+    peer_trust.validate_message(msg)
+    duplicate = peer_trust.record_message_once(msg, "received", lambda: _append_chat_msg(body.thread_id, msg))
+    _broadcast_presence({"type": "message_incoming", "from_id": body.from_id, "from_name": card["name"],
+                         "thread_id": body.thread_id, "ts": body.ts})
+    return {"ok": True, "message_id": body.message_id, "thread_id": body.thread_id,
+            "from_id": body.from_id, "to_id": body.to_id, "duplicate": duplicate}
 
 
-@router.get("/mesh/chat/messages")
+@router.get("/mesh/chat/messages", dependencies=[Depends(require_session)])
 def mesh_chat_messages(
     thread_id: str = Query(...),
     since: float = Query(0),
@@ -1248,6 +1138,8 @@ def mesh_chat_messages(
                     continue
                 if m.get("ts", 0) > since:
                     msgs.append(m)
+    except HTTPException:
+        raise
     except Exception:
         return {"messages": []}
     return {"messages": msgs}
@@ -1261,7 +1153,7 @@ _typing_state: dict = {}   # thread_id -> {from_id, from_name, ts}
 _typing_lock  = threading.Lock()
 
 
-@router.post("/mesh/chat/typing")
+@router.post("/mesh/chat/typing", dependencies=[Depends(require_session)])
 def chat_typing_send(
     thread_id: str = Query(...),
     from_id:   str = Query(...),
@@ -1273,7 +1165,7 @@ def chat_typing_send(
     return {"ok": True}
 
 
-@router.get("/mesh/chat/typing")
+@router.get("/mesh/chat/typing", dependencies=[Depends(require_session)])
 def chat_typing_get(thread_id: str = Query(...)):
     with _typing_lock:
         entry = _typing_state.get(thread_id)
@@ -1290,7 +1182,7 @@ _read_state: dict = {}   # thread_id -> {reader_id: up_to_ts}
 _read_lock  = threading.Lock()
 
 
-@router.post("/mesh/chat/read")
+@router.post("/mesh/chat/read", dependencies=[Depends(require_session)])
 def chat_read_send(
     thread_id:  str   = Query(...),
     reader_id:  str   = Query(...),
@@ -1306,7 +1198,7 @@ def chat_read_send(
     return {"ok": True}
 
 
-@router.get("/mesh/chat/read_status")
+@router.get("/mesh/chat/read_status", dependencies=[Depends(require_session)])
 def chat_read_status(thread_id: str = Query(...)):
     with _read_lock:
         receipts = dict(_read_state.get(thread_id, {}))
@@ -1314,17 +1206,8 @@ def chat_read_status(thread_id: str = Query(...)):
 
 
 def _prune_ghost_entries() -> None:
-    """Remove null-IP entries from mesh_directory on startup (dev ghosts from restarts)."""
-    try:
-        cfg = S.load_node_config()
-        directory = S.load_mesh_directory()
-        pruned = {k: v for k, v in directory.items() if v.get("ip") or k == cfg.node_id}
-        removed = len(directory) - len(pruned)
-        if removed > 0:
-            S.save_mesh_directory(pruned)
-            S.log_debug("mesh", "INFO", "Pruned ghost directory entries", removed=removed)
-    except Exception:
-        pass
+    """Legacy hook retained; missing IP/name similarity never deletes identities."""
+    return None
 
 
 def _presence_timeout_watcher() -> None:
@@ -1374,12 +1257,18 @@ def _presence_timeout_watcher() -> None:
         time.sleep(15)
 
 
+@peer_trust.directory_locked
 def _ensure_self_registered() -> None:
     """On startup: guarantee this node has an entry in its own mesh directory."""
     try:
         cfg = S.load_node_config()
+        if _refresh_own_host_address(cfg):
+            S.save_node_config(cfg)
         directory = S.load_mesh_directory()
         if cfg.node_id in directory:
+            if directory[cfg.node_id].get("tli_port") != S.server_port():
+                directory[cfg.node_id]["tli_port"] = S.server_port()
+                S.save_mesh_directory(directory)
             return  # already registered
         host_ip = "127.0.0.1"
         try:
@@ -1392,7 +1281,7 @@ def _ensure_self_registered() -> None:
             "ip": host_ip,
             "status": "allowed",
             "is_host": cfg.role == "host",
-            "tli_port": int(os.environ.get("TLI_PORT", "8000")),
+            "tli_port": S.server_port(),
             "last_seen": S.now_iso(),
             "labels": ["Host"] if cfg.role == "host" else [],
             "notes": "",
@@ -1409,33 +1298,37 @@ def _self_presence_loop() -> None:
     while True:
         try:
             cfg = S.load_node_config()
-            directory = S.load_mesh_directory()
-            now = S.now_iso()
-            fp = _ni.fingerprint()
-            if cfg.node_id in directory:
-                directory[cfg.node_id]["last_seen"] = now
-                directory[cfg.node_id]["is_host"] = (cfg.role == "host")
-                directory[cfg.node_id]["identity_fingerprint"] = fp
-            else:
-                # Re-register if the entry was somehow removed
-                host_ip = "127.0.0.1"
-                try:
-                    hostname = socket.gethostname()
-                    host_ip = socket.gethostbyname(hostname)
-                except Exception:
-                    pass
-                directory[cfg.node_id] = {
-                    "display_name": cfg.node_name,
-                    "ip": host_ip,
-                    "status": "allowed",
-                    "is_host": cfg.role == "host",
-                    "tli_port": int(os.environ.get("TLI_PORT", "8000")),
-                    "last_seen": now,
-                    "labels": ["Host"] if cfg.role == "host" else [],
-                    "notes": "",
-                    "identity_fingerprint": fp,
-                }
-            S.save_mesh_directory(directory)
+            if _refresh_own_host_address(cfg):
+                S.save_node_config(cfg)
+            with S.MESH_DIRECTORY_LOCK:
+                directory = S.load_mesh_directory()
+                now = S.now_iso()
+                fp = _ni.fingerprint()
+                if cfg.node_id in directory:
+                    directory[cfg.node_id]["last_seen"] = now
+                    directory[cfg.node_id]["is_host"] = (cfg.role == "host")
+                    directory[cfg.node_id]["identity_fingerprint"] = fp
+                    directory[cfg.node_id]["tli_port"] = S.server_port()
+                else:
+                    # Re-register if the entry was somehow removed
+                    host_ip = "127.0.0.1"
+                    try:
+                        hostname = socket.gethostname()
+                        host_ip = socket.gethostbyname(hostname)
+                    except Exception:
+                        pass
+                    directory[cfg.node_id] = {
+                        "display_name": cfg.node_name,
+                        "ip": host_ip,
+                        "status": "allowed",
+                        "is_host": cfg.role == "host",
+                        "tli_port": S.server_port(),
+                        "last_seen": now,
+                        "labels": ["Host"] if cfg.role == "host" else [],
+                        "notes": "",
+                        "identity_fingerprint": fp,
+                    }
+                S.save_mesh_directory(directory)
         except Exception as e:
             S.log_debug("mesh", "ERROR", "Self-presence loop error", error=str(e))
         time.sleep(30)
@@ -1446,78 +1339,11 @@ def _self_presence_loop() -> None:
 # ============================================
 
 @router.post("/mesh/transfer/store")
-async def transfer_store(
-    request: Request,
-    file: UploadFile = File(...),
-    thread_id: str = Query(...),
-    from_id:   str = Query(...),
-    from_name: str = Query(""),
-    to_id:     str = Query(...),
-    to_ip:     str = Query(""),
-    ts:        float = Query(0),
-    _session=Depends(require_session),
-):
-    """
-    Called by the LOCAL browser when the user shares a file.
-    Saves the file to this node's transfers directory, then appends a
-    special file-offer record to the shared chat thread so the receiver
-    discovers it on their next poll (pull-based — no firewall issues).
-    """
-    safe_name = os.path.basename(file.filename or "file") or "file"
-
-    dest = MESH_TRANSFERS_DIR / safe_name
-    counter = 1
-    stem = dest.stem
-    suffix = dest.suffix
-    while dest.exists():
-        dest = MESH_TRANSFERS_DIR / f"{stem}_{counter}{suffix}"
-        counter += 1
-
-    with dest.open("wb") as fh:
-        shutil.copyfileobj(file.file, fh)
-
-    size_bytes = dest.stat().st_size
-    token = dest.name
-
-    # Signal the receiver via the existing pull-based chat store.
-    # Body is a machine-readable prefix + JSON so old clients degrade to plain text.
-    offer_meta = json.dumps({
-        "name":  token,
-        "size":  size_bytes,
-        "token": token,
-    }, ensure_ascii=False)
-    msg = {
-        "thread_id":  thread_id,
-        "from_id":    from_id,
-        "from_name":  from_name or from_id,
-        "to_id":      to_id,
-        "body":       f"__FILE_OFFER__:{offer_meta}",
-        "ts":         ts or (time.time() * 1000),
-        "server_ts":  time.time() * 1000,
-    }
-    _append_chat_msg(thread_id, msg)
-
-    # Push server-to-server to the receiver's /mesh/chat/receive — same path
-    # as regular text messages, works regardless of receiver's client version.
-    # to_ip is passed explicitly by the frontend (same pattern as text messages).
-    _recv_ip = to_ip or ""
-    if not _recv_ip:
-        # Fallback: look up in directory
-        try:
-            _recv_ip = S.load_mesh_directory().get(to_id, {}).get("ip", "")
-        except Exception:
-            pass
-    if _recv_ip:
-        try:
-            _forward_to_remote(_recv_ip, msg)
-        except Exception:
-            pass  # best-effort — receiver will still find it on next poll
-
-    S.log_debug("mesh", "INFO", "File stored for sharing", filename=token, size=size_bytes)
-    return {"ok": True, "token": token, "size": size_bytes}
+async def transfer_store(request: Request, _session=Depends(require_session)):
+    raise HTTPException(409, {"code": "capability_required", "message": "File transfer is not available through trusted computer connections yet. Existing transfer files were preserved."})
 
 
-@router.get("/mesh/transfer/serve/{filename}")
+@router.get("/mesh/transfer/serve/{filename}", dependencies=[Depends(require_session)])
 async def transfer_serve(filename: str):
     """
     Serve a file that was stored by the sender for a peer to download.
@@ -1542,3 +1368,56 @@ def start_background_loops():
     threading.Thread(target=agent_task_worker_loop, daemon=True).start()
     threading.Thread(target=_presence_timeout_watcher, daemon=True).start()
     threading.Thread(target=_self_presence_loop, daemon=True).start()
+
+
+class PeerCardRequest(BaseModel):
+    origin: str
+
+class PeerReviewRequest(BaseModel):
+    card: dict
+    grants: List[str]
+
+class PeerApproveRequest(BaseModel):
+    review_id: str
+    identity_fingerprint: str
+    certificate_sha256: str
+
+@router.post("/mesh/trust/card")
+def mesh_trust_card(body: PeerCardRequest, _session=Depends(require_session)):
+    return {"ok": True, "protocol": peer_trust.PROTOCOL, "card": peer_trust.local_card(body.origin)}
+
+@router.post("/mesh/trust/preview")
+def mesh_trust_preview(body: PeerReviewRequest, request: Request, _session=Depends(require_session)):
+    return peer_trust.preview(body.card, body.grants, _session, request)
+
+@router.post("/mesh/trust/approve")
+def mesh_trust_approve(body: PeerApproveRequest, request: Request, _session=Depends(require_session)):
+    return peer_trust.approve(body.review_id, body.identity_fingerprint, body.certificate_sha256, _session, request)
+
+@router.get("/mesh/peer/self-status")
+def mesh_peer_self_status(access=Depends(peer_trust.coordinate_access)):
+    entry, card, _ = peer_trust.trusted(access["device_id"], "coordinate")
+    return {"device_id": access["device_id"], "status": entry["status"], "identity_fingerprint": card["identity_fingerprint"]}
+
+@router.get("/mesh/directory/{device_id}/capabilities")
+def mesh_peer_capabilities(device_id: str, _session=Depends(require_session)):
+    return peer_trust.capability(device_id)
+
+
+@router.post("/mesh/trust/{device_id}/revoke")
+@peer_trust.directory_locked
+def mesh_trust_revoke(device_id: str, _session=Depends(require_session)):
+    if device_id == S.load_node_config().node_id:
+        raise HTTPException(422, "This computer cannot revoke itself.")
+    directory = S.load_mesh_directory()
+    if device_id not in directory:
+        raise HTTPException(404, "Computer not found")
+    directory[device_id]["status"] = "blocked"
+    S.save_mesh_directory(directory)
+    return {"ok": True, "device_id": device_id, "status": "blocked", "actions_performed": False}
+
+
+def _peer_body(access, device_id):
+    if not isinstance(access, dict) or access.get("device_id") != device_id:
+        raise HTTPException(403, "The request body must identify its authenticated peer.")
+    peer_trust.revalidate(access)

@@ -8,11 +8,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
 import auto_update as _upd
+from routers.system_routes import require_session
 
 router = APIRouter(tags=["update"])
 
@@ -29,7 +30,7 @@ def update_status():
 
 
 @router.post("/update/check")
-def update_check(update_url: Optional[str] = None):
+def update_check(update_url: Optional[str] = None, _session: str = Depends(require_session)):
     """
     Trigger a manifest check against the configured (or provided) URL.
     Runs synchronously — returns result immediately.
@@ -38,7 +39,7 @@ def update_check(update_url: Optional[str] = None):
 
 
 @router.post("/update/apply")
-def update_apply():
+def update_apply(_session: str = Depends(require_session)):
     """
     Start the download + verify + extract pipeline in a background thread.
     Poll GET /update/status for progress.
@@ -58,7 +59,7 @@ def update_apply():
 
 
 @router.post("/update/settings")
-def update_settings(req: UpdateSettingsRequest):
+def update_settings(req: UpdateSettingsRequest, _session: str = Depends(require_session)):
     """Configure the update manifest URL and auto-check preference."""
     url = req.update_url.strip()
     _upd.save_settings(update_url=url, auto_check=req.auto_check)

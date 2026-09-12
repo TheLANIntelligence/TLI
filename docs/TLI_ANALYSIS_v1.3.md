@@ -1,3 +1,5 @@
+> **Historical analysis of v1.3.0-beta.** Earlier capability and acceptance claims below are preserved as a checkpoint, not current guarantees. See [current capabilities](TLI_CAPABILITIES.md) and [anniversary verification](TLI_ANNIVERSARY_FINAL.md).
+
 # TheLANIntelligence (TLI) — Technical Analysis
 ## v1.3.0-beta · April 2026
 

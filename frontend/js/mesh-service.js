@@ -3,6 +3,8 @@
 // Presence • Authority • Routing • Context
 // =====================================================
 window.MeshService = (function () {
+  let epoch=0,locked=false;
+  const current=t=>!locked&&t===epoch;
   const _state = {
     lastNodeFetchMs: 0,
     lastDirFetchMs: 0,
@@ -26,12 +28,11 @@ window.MeshService = (function () {
   }
 
   function _consoleUrl(device, panel) {
-    const ip = _pickIp(device);
-    const port = _pickPort(device);
-    if (!ip) return null;
-    const p = (panel || "").trim();
-    const qs = p ? `?panel=${encodeURIComponent(p)}` : "";
-    return `http://${ip}:${port}/${qs}`;
+    const record=device?.raw||device;
+    if(locked||record?.status!=='allowed'||record?.trust_state!=='verified')return null;
+    try {const url=new URL(record.origin);if(url.protocol!=='https:'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)return null;
+      return url.origin+'/?panel='+encodeURIComponent((panel||'').trim());
+    }catch{return null;}
   }
 
   function _parseLastSeenMs(v) {
@@ -51,10 +52,12 @@ window.MeshService = (function () {
   }
 
   async function fetchNode({ force = false } = {}) {
+    if(locked)throw Error("Unlock TLI first.");const token=epoch;
     if (!force && _isFresh(_state.lastNodeFetchMs) && currentNodeConfig) return currentNodeConfig;
     const res = await fetch("/mesh/node", { headers: { "Accept": "application/json" }, cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    if(!current(token))throw Error("Computer session changed; response ignored.");
     currentNodeConfig = data;
     // Backward-compat for older code paths
     window.currentNodeConfig = data;
@@ -63,10 +66,12 @@ window.MeshService = (function () {
   }
 
   async function fetchDirectory({ force = false } = {}) {
+    if(locked)throw Error("Unlock TLI first.");const token=epoch;
     if (!force && _isFresh(_state.lastDirFetchMs) && meshDirectoryCache) return meshDirectoryCache;
     const res = await fetch("/mesh/directory", { headers: { "Accept": "application/json" }, cache: "no-store" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    if(!current(token))throw Error("Computer session changed; response ignored.");
     meshDirectoryCache = data;
     // Backward-compat for older code paths
     window.meshDirectoryCache = data;
@@ -115,10 +120,9 @@ window.MeshService = (function () {
     for (const d of devices) {
       const ip = _pickIp(d);
       if (!ip) continue;
-      if (seen.has(ip)) continue;
-      seen.add(ip);
-
-      const id = d.device_id || d.node_id || d.id || ip;
+      const id = d.device_id || d.node_id || d.id;
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
       const name = d.display_name || d.nickname || d.node_name || d.device_name || d.hostname || id;
       const role = String(d.role || d.nodeRole || d.node_role || "member").toLowerCase();
       const lastSeenMs = _parseLastSeenMs(d.last_seen || d.lastSeen || d.seen_at || d.updated_at || d.heartbeat);
@@ -131,7 +135,7 @@ window.MeshService = (function () {
   function openNodePanel(deviceLike, panel) {
     const url = _consoleUrl(deviceLike, panel);
     if (!url) {
-      showToast("No IP available for that node.", "warning");
+      showToast("Review this computer’s identity and HTTPS address before opening its console.", "warning");
       return;
     }
     window.open(url, "_blank", "noopener");
@@ -161,6 +165,11 @@ window.MeshService = (function () {
     pill.classList.add("mesh-online");
     pill.classList.remove("mesh-offline");
   }
+
+  window.addEventListener('tli-session-locked',()=>{locked=true;epoch++;_state.lastNodeFetchMs=0;_state.lastDirFetchMs=0;
+    if(typeof currentNodeConfig!=='undefined')currentNodeConfig=null;if(typeof meshDirectoryCache!=='undefined')meshDirectoryCache=null;
+    window.currentNodeConfig=null;window.meshDirectoryCache=null;});
+  window.addEventListener('tli-session-unlocked',()=>{locked=false;epoch++;});
 
   return {
     fetchNode,

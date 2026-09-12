@@ -16,7 +16,9 @@ import time
 import requests
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
-from difflib import SequenceMatcher
+from device_resolution import resolve, label, normalize, DEFAULT_ALIASES
+from .status_answers import is_status_question
+from action_results import driver_succeeded
 
 
 # ==================================================================
@@ -34,90 +36,13 @@ def _log_action(event: str, **kwargs) -> None:
 #  Device alias resolver
 # ==================================================================
 
-DEVICE_ALIASES: Dict[str, List[str]] = {
-    "external hdd": [
-        "drive", "hard drive", "external drive", "hdd",
-        "external", "usb drive", "storage drive", "backup drive",
-    ],
-    "charger": [
-        "charger plug", "phone charger", "charging",
-        "charge", "charger outlet",
-    ],
-}
-
-
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+DEVICE_ALIASES = DEFAULT_ALIASES
 
 
 def resolve_device(query: str, registry: List[Dict]) -> Tuple[Optional[Dict], List[str]]:
-    """
-    4-stage resolution: alias exact → IP match → substring containment → fuzzy similarity.
-    Returns (matched_device_or_None, list_of_all_device_names).
-    """
-    all_names = [d.get("name", "") for d in registry if isinstance(d, dict)]
-    if not registry or not query:
-        return None, all_names
-
-    q = query.lower().strip()
-
-    # Stage 1: alias exact match
-    for canonical, aliases in DEVICE_ALIASES.items():
-        if q == canonical or q in aliases:
-            for dev in registry:
-                if not isinstance(dev, dict):
-                    continue
-                if dev.get("name", "").lower().strip() == canonical:
-                    _log_action("device_resolved", query=query, stage="alias", device=dev.get("name"))
-                    return dev, all_names
-
-    # Stage 2: IP exact match
-    for dev in registry:
-        if not isinstance(dev, dict):
-            continue
-        ip = dev.get("ip", "").lower().strip()
-        if q == ip:
-            _log_action("device_resolved", query=query, stage="ip_exact", device=dev.get("name"))
-            return dev, all_names
-
-    # Stage 3: substring containment (name exact + partial)
-    best: Optional[Dict] = None
-    best_score = 0.0
-    for dev in registry:
-        if not isinstance(dev, dict):
-            continue
-        name = dev.get("name", "").lower().strip()
-
-        if q == name:
-            _log_action("device_resolved", query=query, stage="name_exact", device=dev.get("name"))
-            return dev, all_names
-
-        if q in name or name in q:
-            score = _similarity(q, name) + 0.2  # bonus for substring
-            if score > best_score:
-                best_score = score
-                best = dev
-
-    if best:
-        _log_action("device_resolved", query=query, stage="substring", device=best.get("name"))
-        return best, all_names
-
-    # Stage 4: fuzzy similarity (cutoff 0.5)
-    for dev in registry:
-        if not isinstance(dev, dict):
-            continue
-        name = dev.get("name", "").lower().strip()
-        score = _similarity(q, name)
-        if score > best_score and score >= 0.5:
-            best_score = score
-            best = dev
-
-    if best:
-        _log_action("device_resolved", query=query, stage="fuzzy", device=best.get("name"))
-        return best, all_names
-
-    _log_action("device_unresolved", query=query, candidates=all_names)
-    return None, all_names
+    """Compatibility adapter; fuzzy matches are suggestions, never targets."""
+    result = resolve(query, registry, DEVICE_ALIASES)
+    return result.device, [label(d) for d in result.candidates]
 
 
 # ==================================================================
@@ -202,10 +127,45 @@ _SHELLY_TOGGLE_PATTERNS = [
 
 _SHELLY_STATUS_PATTERNS = [
     r"(?:is|are)\s+(?:the\s+)?(.+?)\s+(?:on|off|running|active)",
-    r"(?:check(?!\s+out)(?!\s+if)(?!\s+whether)|status|power|watt|energy)\s+(?:of\s+)?(?:the\s+)?(.+)",
-    r"how\s+much\s+(?:power|energy|watts?)\s+(?:is|does)\s+(?:the\s+)?(.+?)(?:\s+(?:use|using|draw|consuming))?",
+    r"(?:check(?!\s+out)(?!\s+if)(?!\s+whether)|status|power(?!\s+(?:on|off)\b)|watt|energy)\s+(?:of\s+)?(?:the\s+)?(.+)",
+    r"how\s+much\s+(?:power|energy|watts?)\s+(?:is|does)\s+(?:the\s+)?(.+?)(?:\s+(?:use|using|draw|drawing|consume|consuming))?",
     r"what(?:'s| is)\s+(?:the\s+)?(.+?)\s+(?:status|power|state|wattage)",
+    r"what(?:'s| is)\s+(?:the\s+)?(?:status|power|state|wattage)\s+of\s+(?:the\s+)?(.+)",
 ]
+
+
+def _shelly_status_target(text: str, registry: List[Dict]) -> Optional[str]:
+    """Recognize a complete status request, not a clause inside explanation.
+
+    Normalize only ordinary request framing. Device names/IDs still go through
+    the existing resolver, including its unknown and ambiguous outcomes.
+    """
+    query = text.strip().lower().replace("\u2019", "'").rstrip("?!. ").strip()
+    query = re.sub(r"^(?:hey|hi|hello)(?:,\s*|\s+)", "", query, count=1)
+    query = re.sub(r"^(?:please[\s,]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please[\s,]+)?", "", query, count=1)
+    query = re.sub(r"(?:,\s*|\s+)please$", "", query).strip()
+    for pattern in _SHELLY_STATUS_PATTERNS:
+        match = re.fullmatch(pattern, query)
+        if match:
+            target = match.group(1).strip()
+            if re.search(r"\b(?:compared\s+(?:with|to)|because|while|when|whether)\b", target):
+                # A comparison/causal clause is not part of a device request.
+                # Preserve explicitly named devices/aliases that happen to
+                # contain these ordinary words, without accepting a substring.
+                exact_names = set()
+                for device in registry:
+                    if not isinstance(device, dict):
+                        continue
+                    aliases = device.get("aliases") or []
+                    aliases = [aliases] if isinstance(aliases, str) else aliases if isinstance(aliases, list) else []
+                    exact_names.update(normalize(v) for v in [device.get("name"), device.get("label"),
+                        device.get("id"), device.get("device_id"), *aliases,
+                        *DEVICE_ALIASES.get(normalize(device.get("name")), [])] if v)
+                if normalize(target) not in exact_names:
+                    return None
+            return target
+    return None
+
 
 _TOOL_PATTERNS = {
     "sys_snapshot": [
@@ -356,13 +316,20 @@ def detect_intent(text: str, shelly_registry: List[Dict]) -> IntentResult:
     if not text:
         return IntentResult.no_match()
 
+    # AI readiness belongs to the read-only chat fast path, never a relay lookup.
+    if is_status_question(text):
+        return IntentResult.no_match()
+
+    from intelligence.devices import with_context
+    shelly_registry = with_context(shelly_registry)
     q = text.strip()
     q_lower = q.lower()
 
     _log_action("intent_detected", text_preview=q_lower[:80])
 
     # Guard: short-circuit clearly conversational messages before pattern matching
-    if _is_conversational(q, shelly_registry):
+    status_target = _shelly_status_target(q, shelly_registry)
+    if status_target is None and _is_conversational(q, shelly_registry):
         return IntentResult.no_match()
 
     # --- Diagnostic ---
@@ -370,53 +337,60 @@ def detect_intent(text: str, shelly_registry: List[Dict]) -> IntentResult:
         if re.search(pat, q_lower):
             return IntentResult.matched({"type": "diagnostic"})
 
+    # A complete read-only status request takes precedence over words inside
+    # its device name, such as "Start Lamp" or "Stop Fan". Direct power on/off
+    # commands are explicitly excluded by the status grammar above.
+    if status_target is not None:
+        resolution = resolve(status_target, shelly_registry, DEVICE_ALIASES)
+        device = resolution.device
+        candidates = [label(d) for d in resolution.candidates]
+        if device:
+            intent = {"type": "shelly_status", "target": status_target, "device": device}
+            return IntentResult.matched(intent)
+        _log_action("intent_failed", action="check status", target=status_target, candidates=candidates)
+        return IntentResult(status="failed", error=resolution.message(status_target))
+
     # --- Shelly ON ---
     for pat in _SHELLY_ON_PATTERNS:
         m = re.search(pat, q_lower)
         if m:
             target = m.group(1).strip().rstrip("?!.")
-            device, candidates = resolve_device(target, shelly_registry)
+            resolution = resolve(target, shelly_registry, DEVICE_ALIASES)
+            device = resolution.device
+            candidates = [label(d) for d in resolution.candidates]
             if device:
                 intent = {"type": "shelly_control", "action": "on", "target": target, "device": device}
                 return IntentResult.matched(intent)
             _log_action("intent_failed", action="turn on", target=target, candidates=candidates)
-            return IntentResult.device_not_found(target, candidates, "turn on")
+            return IntentResult(status="failed", error=resolution.message(target))
 
     # --- Shelly OFF ---
     for pat in _SHELLY_OFF_PATTERNS:
         m = re.search(pat, q_lower)
         if m:
             target = m.group(1).strip().rstrip("?!.")
-            device, candidates = resolve_device(target, shelly_registry)
+            resolution = resolve(target, shelly_registry, DEVICE_ALIASES)
+            device = resolution.device
+            candidates = [label(d) for d in resolution.candidates]
             if device:
                 intent = {"type": "shelly_control", "action": "off", "target": target, "device": device}
                 return IntentResult.matched(intent)
             _log_action("intent_failed", action="turn off", target=target, candidates=candidates)
-            return IntentResult.device_not_found(target, candidates, "turn off")
+            return IntentResult(status="failed", error=resolution.message(target))
 
     # --- Shelly TOGGLE ---
     for pat in _SHELLY_TOGGLE_PATTERNS:
         m = re.search(pat, q_lower)
         if m:
             target = m.group(1).strip().rstrip("?!.")
-            device, candidates = resolve_device(target, shelly_registry)
+            resolution = resolve(target, shelly_registry, DEVICE_ALIASES)
+            device = resolution.device
+            candidates = [label(d) for d in resolution.candidates]
             if device:
                 intent = {"type": "shelly_control", "action": "toggle", "target": target, "device": device}
                 return IntentResult.matched(intent)
             _log_action("intent_failed", action="toggle", target=target, candidates=candidates)
-            return IntentResult.device_not_found(target, candidates, "toggle")
-
-    # --- Shelly STATUS ---
-    for pat in _SHELLY_STATUS_PATTERNS:
-        m = re.search(pat, q_lower)
-        if m:
-            target = m.group(1).strip().rstrip("?!.")
-            device, candidates = resolve_device(target, shelly_registry)
-            if device:
-                intent = {"type": "shelly_status", "target": target, "device": device}
-                return IntentResult.matched(intent)
-            _log_action("intent_failed", action="check status", target=target, candidates=candidates)
-            return IntentResult.device_not_found(target, candidates, "check status of")
+            return IntentResult(status="failed", error=resolution.message(target))
 
     # --- Disk cleanup ---
     for pat in _CLEANUP_PATTERNS:
@@ -480,7 +454,8 @@ def execute_action(base_url: str, intent: Dict[str, Any]) -> ActionResult:
 def _exec_shelly_control(base: str, intent: Dict, t0: float) -> ActionResult:
     device = intent["device"]
     action = intent["action"]
-    ip = device.get("ip", "")
+    ip = device.get("ip") or device.get("host") or ""
+    relay = int(device.get("relay") or 0)
     name = device.get("name") or ip
 
     if not ip:
@@ -489,14 +464,16 @@ def _exec_shelly_control(base: str, intent: Dict, t0: float) -> ActionResult:
     try:
         r = requests.post(
             base + "shelly/relay",
-            json={"ip": ip, "action": action, "relay": 0},
+            json={"ip": ip, "action": action, "relay": relay},
             timeout=_SHELLY_TIMEOUT,
         )
         elapsed = int((time.time() - t0) * 1000)
 
         if r.ok:
             data = r.json()
-            summary = data.get("summary") or {}
+            if not driver_succeeded(data):
+                return ActionResult.fail(f"Failed to control **{name}**: the device did not report success.", elapsed_ms=elapsed)
+            summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
             is_on = summary.get("is_on")
             power = summary.get("power_w")
 
@@ -506,13 +483,8 @@ def _exec_shelly_control(base: str, intent: Dict, t0: float) -> ActionResult:
             action_past = {"on": "turned ON", "off": "turned OFF", "toggle": "toggled"}
             verb = action_past.get(action, action)
 
-            already_msg = ""
-            if action == "on" and is_on is True:
-                already_msg = " (was already on)"
-            elif action == "off" and is_on is False:
-                already_msg = " (was already off)"
-
-            msg = f"Done. **{name}** {verb}{already_msg} — currently {state}{pw}."
+            msg = (f"**{name}** {verb} — currently {state}{pw}." if is_on is not None else
+                   f"**{name}** accepted the {action} command. Current state has not been verified.")
             return ActionResult.ok(msg, data=summary, elapsed_ms=elapsed)
         else:
             detail = ""
@@ -539,7 +511,8 @@ def _exec_shelly_control(base: str, intent: Dict, t0: float) -> ActionResult:
 
 def _exec_shelly_status(base: str, intent: Dict, t0: float) -> ActionResult:
     device = intent["device"]
-    ip = device.get("ip", "")
+    ip = device.get("ip") or device.get("host") or ""
+    relay = int(device.get("relay") or 0)
     name = device.get("name") or ip
 
     if not ip:
@@ -547,7 +520,7 @@ def _exec_shelly_status(base: str, intent: Dict, t0: float) -> ActionResult:
 
     try:
         r = requests.get(
-            base + f"shelly/status?ip={ip}&relay=0",
+            base + "shelly/status", params={"ip": ip, "relay": relay},
             timeout=_SHELLY_TIMEOUT,
         )
         elapsed = int((time.time() - t0) * 1000)
@@ -651,116 +624,14 @@ def _exec_diagnostic(base: str, intent: Dict, t0: float) -> ActionResult:
 
 
 def _exec_cleanup_run(base: str, intent: Dict, t0: float) -> ActionResult:
-    """
-    Run the Safe Cleanup — moves auto-safe temp/cache files to quarantine.
-    Calls GET /cleanup/scan first to check what's available, then POST /cleanup/clean_safe.
-    """
-    _CLEANUP_TIMEOUT = 60  # cleanup can take a moment on large disks
-
-    try:
-        # Step 1: Check scan summary — see what's available to reclaim.
-        scan_r = requests.get(base + "cleanup/scan", timeout=15)
-        elapsed = int((time.time() - t0) * 1000)
-
-        if not scan_r.ok:
-            return ActionResult.fail(
-                "I tried to scan for safe-to-delete files but the cleanup scanner returned an error. "
-                "You can run it manually from the Dashboard.",
-                elapsed_ms=elapsed,
-            )
-
-        scan = scan_r.json()
-        auto_gb = round(scan.get("auto_cleanable_gb", 0) or 0, 2)
-        total_gb = round(scan.get("total_gb", 0) or 0, 2)
-
-        if auto_gb < 0.01:
-            # Still surface connected drives even when nothing to auto-clean
-            drive_note = ""
-            try:
-                usb_r = requests.get(base + "devices/usb", timeout=5)
-                if usb_r.ok:
-                    drives = (usb_r.json().get("devices") or [])
-                    if drives:
-                        drive_names = ", ".join(
-                            f"{d.get('name', 'Drive')} ({d.get('mount_path', '?').rstrip(chr(92))})"
-                            for d in drives[:6]
-                        )
-                        drive_note = (
-                            f"\n\n📦 I can see **{len(drives)} external drive{'s' if len(drives) != 1 else ''} "
-                            f"connected**: {drive_names}. "
-                            f"Open **Files** to browse those drives."
-                        )
-            except Exception:
-                pass
-            return ActionResult.ok(
-                f"**Scan complete** — no safe-to-remove files found right now.\n\n"
-                f"Total reclaimable (including files that need manual review): **{total_gb} GB**.\n"
-                f"Open the **File Visualizer** to review and manually remove those."
-                + drive_note,
-                elapsed_ms=elapsed,
-            )
-
-        # Step 2: Run the cleanup.
-        clean_r = requests.post(base + "cleanup/clean_safe", timeout=_CLEANUP_TIMEOUT)
-        elapsed = int((time.time() - t0) * 1000)
-
-        if not clean_r.ok:
-            return ActionResult.fail(
-                f"Cleanup found **{auto_gb} GB** to reclaim but the cleanup run failed "
-                f"(HTTP {clean_r.status_code}). Try from the Dashboard ActionCard.",
-                elapsed_ms=elapsed,
-            )
-
-        receipt = clean_r.json()
-        gb = round(receipt.get("gb_reclaimed", 0) or 0, 2)
-        moved = receipt.get("files_moved", 0)
-        failed = receipt.get("files_failed", 0)
-
-        cats_raw = receipt.get("categories", {}) or {}
-        cats_summary = ", ".join(
-            f"{k.replace('_', ' ').title()} ({round(v / 1e9, 1)} GB)"
-            for k, v in sorted(cats_raw.items(), key=lambda x: x[1], reverse=True)
-            if v > 0
-        ) if cats_raw else ""
-
-        lines = [f"**Done. Reclaimed {gb} GB** across {moved} files — moved to quarantine (not permanently deleted)."]
-        if cats_summary:
-            lines.append(f"\n**Cleaned:** {cats_summary}")
-        if failed:
-            lines.append(f"\n⚠️ {failed} file(s) couldn't be moved (in use or locked).")
-        lines.append("\nYour files are in `data/cleanup_quarantine/` if you need to recover anything.")
-
-        # Surface connected external drives so the AI feels aware of the system
-        try:
-            usb_r = requests.get(base + "devices/usb", timeout=5)
-            if usb_r.ok:
-                usb_data = usb_r.json()
-                drives = usb_data.get("devices") or []
-                if drives:
-                    drive_names = ", ".join(
-                        f"{d.get('name', 'Drive')} ({d.get('mount_path', '?').rstrip(chr(92))})"
-                        for d in drives[:6]
-                    )
-                    lines.append(
-                        f"\n📦 I also see **{len(drives)} external drive{'s' if len(drives) != 1 else ''} connected**: "
-                        f"{drive_names}. "
-                        f"Open **Files** to browse or clean those drives manually."
-                    )
-        except Exception:
-            pass
-
-        return ActionResult.ok("\n".join(lines), elapsed_ms=elapsed)
-
-    except requests.Timeout:
-        return ActionResult.fail(
-            "Cleanup is taking longer than expected. Check the Dashboard — it may still be running.",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    except requests.ConnectionError:
-        return ActionResult.fail(
-            "Couldn't reach the cleanup endpoint. Is TLI running?",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
+    """Legacy cleanup intent now directs the user to explicit file review only."""
+    return ActionResult.ok(
+        "Open **Free Space** to choose a location and explicitly start a scan. "
+        "Select individual files, review the exact paths, then choose whether to move them to Trash. "
+        "No scan was started and nothing was moved or deleted. File sizes are not measured freed space.",
+        data={"review_required": True, "navigate_to": "panel-visualizer", "code": "review_required"},
+        elapsed_ms=int((time.time() - t0) * 1000),
+    )
 
 
 def _format_diagnostic_report(report: Dict) -> str:

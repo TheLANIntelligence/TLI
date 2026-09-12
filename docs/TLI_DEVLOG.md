@@ -1,3 +1,5 @@
+> **Historical development log.** The v1.0.0 entry records the name `TLI_dist_1.0.0.zip`; that exact archive has not been located or verified. These entries describe past work and plans, not current acceptance. See [version preservation](VERSION_PRESERVATION.md) and [current capabilities](TLI_CAPABILITIES.md).
+
 # TheLegatoIntelligence — Development Log
 **Version:** v1.2.0-beta
 **Date:** 2026-04-14

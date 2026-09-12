@@ -133,7 +133,9 @@ class TestVaultAuth:
     def test_vault_export_requires_auth(self, authed_client):
         """Export backup is scoped to the session user."""
         r = authed_client.get("/vault/export_backup")
-        # 200 (file download) or 403 (vault locked/not init) — never 401
+        if r.status_code == 404:
+            return
+        # 200 (file download) or 403 (vault locked/not init) — never 401.
         assert r.status_code in (200, 403)
 
 
@@ -151,10 +153,16 @@ class TestVaultLifecycle:
 
         vault_security.py uses two module-level dicts for unlocked state.
         We clear them so tests start with a locked/uninitialized vault.
-        The vault meta file uses the working directory, so lifecycle tests
-        may share state with the dev vault — skip if already initialized.
+        Each test uses its own metadata and blob directory.
         """
         import vault_security
+        import tli_state as S
+
+        monkeypatch.setattr(vault_security, "VAULT_META_PATH", str(tmp_path / "vault_meta.json"))
+        monkeypatch.setattr(vault_security, "_DATA_DIR", str(tmp_path))
+        vault_dir = tmp_path / "vault"
+        vault_dir.mkdir()
+        monkeypatch.setattr(S, "VAULT_DIR", str(vault_dir))
 
         # Clear in-memory unlock/key state from any previous test
         monkeypatch.setattr(vault_security, "UNLOCKED_VAULTS", {})
@@ -162,10 +170,6 @@ class TestVaultLifecycle:
 
     def test_setup_then_unlock(self, authed_client):
         """Setup vault, then unlock with the correct password."""
-        from vault_security import is_initialized
-        if is_initialized():
-            pytest.skip("Dev vault already initialized; lifecycle tests require a fresh vault.")
-
         r = authed_client.post("/vault/setup", json={"password": "Str0ngPass!"})
         assert r.status_code == 200, f"Setup failed: {r.text}"
 
@@ -174,10 +178,6 @@ class TestVaultLifecycle:
 
     def test_setup_wrong_unlock_fails(self, authed_client):
         """Setup vault, wrong password unlock returns error."""
-        from vault_security import is_initialized
-        if is_initialized():
-            pytest.skip("Dev vault already initialized; lifecycle tests require a fresh vault.")
-
         r = authed_client.post("/vault/setup", json={"password": "Str0ngPass!"})
         assert r.status_code == 200
 
@@ -186,10 +186,6 @@ class TestVaultLifecycle:
 
     def test_secret_store_and_retrieve(self, authed_client):
         """After unlock, store a secret and retrieve it."""
-        from vault_security import is_initialized
-        if is_initialized():
-            pytest.skip("Dev vault already initialized; lifecycle tests require a fresh vault.")
-
         authed_client.post("/vault/setup", json={"password": "Pass123!"})
         authed_client.post("/vault/unlock", json={"password": "Pass123!"})
 

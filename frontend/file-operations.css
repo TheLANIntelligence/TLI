@@ -1,0 +1,42 @@
+/* File reviews must fit their panel even with long, unbroken host paths. */
+#panel-files .fo-grid {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+#panel-files .fo-main,
+#panel-files .fo-sidebar,
+#panel-files .card-section {
+  min-width: 0;
+  max-width: 100%;
+}
+#panel-files .fo-path-row input,
+#panel-files .fo-scan-row input {
+  min-width: 0;
+}
+#panel-files .files-bucket-main { flex-wrap: wrap; }
+#filesStatus,
+#files-operation-review {
+  overflow-wrap: anywhere;
+}
+#files-operation-review {
+  width: 100%;
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.5;
+}
+#files-operation-review h4 { margin: 18px 0 8px; font-size: 14px; }
+#files-operation-review p { margin: 8px 0 12px; }
+#files-operation-review select {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 8px;
+  color: var(--text-main);
+  background: var(--bg-elevated-alt);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+#files-operation-review button { max-width: 100%; white-space: normal; }
+@media (max-width: 900px) {
+  #panel-files .fo-grid { grid-template-columns: minmax(0, 1fr); }
+  #panel-files .fo-path-row { flex-wrap: wrap; }
+}

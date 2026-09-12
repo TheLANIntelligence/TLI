@@ -52,8 +52,5 @@ for r in getattr(app, "routes", []):
 if not found_any:
     print("  (no /visualizer /debug /health routes found)")
 
-import uvicorn
-host = os.environ.get("TLI_HOST", "0.0.0.0")
-port = int(os.environ.get("TLI_PORT", "8000"))
-print(f"\nStarting uvicorn at http://{host}:{port}")
-uvicorn.run(app, host=host, port=port, log_level="info")
+# Use the same preflight, saved choices and TLS policy as every normal launcher.
+mod._tli_run_server()

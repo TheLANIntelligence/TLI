@@ -20,15 +20,60 @@
   <link rel="apple-touch-icon" sizes="512x512" href="/tli-icon-512.png" />
 
   <!-- Load external CSS -->
-  <link rel="stylesheet" href="/style.css?v=r4">
-  <link rel="stylesheet" href="/chat_enhanced.css">
-  <link rel="stylesheet" href="/settings_enhanced.css?v=r1">
-  <link rel="stylesheet" href="/builder.css?v=r9">
-  <link rel="stylesheet" href="/nerve.css">
+  <link rel="stylesheet" href="/style.css?v=workspace-cohesion-1">
+  <link rel="stylesheet" href="/themes.css?v=continuity-20260908">
+  <script src="/js/theme-catalog.js?v=continuity-20260908"></script>
+  <script src="/js/interface-style.js?v=1"></script>
+  <link rel="stylesheet" href="/chat_enhanced.css?v=themes-1">
+  <link rel="stylesheet" href="/settings_enhanced.css?v=themes-1">
+  <link rel="stylesheet" href="/builder.css?v=themes-1">
+  <link rel="stylesheet" href="/nerve.css?v=themes-1">
+  <link rel="stylesheet" href="/shell-refinement.css?v=continuity-20260908">
+  <link rel="stylesheet" href="/release-status.css?v=dependable-computers-1">
+  <link rel="stylesheet" href="/activity-summary.css?v=dashboard-workspace-1">
+  <link rel="stylesheet" href="/storage-cleanup.css?v=free-space-2">
+  <link rel="stylesheet" href="/native-companion.css?v=remote-readiness-1">
   <script src="/assets/d3.v7.min.js" defer></script>
+<link rel="stylesheet" href="/intelligence.css?v=screenshot-guidance-1" />
+<link rel="stylesheet" href="/report-facts.css?v=evidence-led-1" />
+<link rel="stylesheet" href="/notebook.css?v=section-clarity-1" />
+<link rel="stylesheet" href="/memory-continuity.css?v=troubleshooting-20260908" />
+<link rel="stylesheet" href="/document-context.css?v=useful-answers-1" />
+<link rel="stylesheet" href="/file-operations.css?v=1" />
+<link rel="stylesheet" href="/data-recovery.css?v=separate-copy-1" />
+<link rel="stylesheet" href="/saved-places.css?v=dashboard-workspace-1" />
+<link rel="stylesheet" href="/storage-history.css?v=1" />
+<link rel="stylesheet" href="/chat-workspace.css?v=useful-answers-1" />
+<link rel="stylesheet" href="/settings-workspace.css?v=themes-1" />
+<link rel="stylesheet" href="/storage-workspace.css?v=free-space-2" />
+<link rel="stylesheet" href="/network-workspace.css?v=section-clarity-1" />
+<link rel="stylesheet" href="/peer-transfers.css?v=finish-fix-1" />
+<link rel="stylesheet" href="/ui-foundation.css?v=workspace-cohesion-1" />
+<link rel="stylesheet" href="/theme-library.css?v=1" />
+<link rel="stylesheet" href="/vault-workspace.css?v=1" />
+<link rel="stylesheet" href="/vault-backups.css?v=continuity-20260908" />
+<link rel="stylesheet" href="/troubleshooting.css?v=workspace-cohesion-2" />
+<link rel="stylesheet" href="/case-exports.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/report-review.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/device-details.css?v=device-details-1" />
+<link rel="stylesheet" href="/room-display.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/case-context.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/routine-workspace.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/mcp-bridge.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/mcp-client.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/note-search.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/local-voice.css?v=anniversary-completion-2" />
+<link rel="stylesheet" href="/home-assistant.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/case-guides.css?v=anniversary-completion-2" />
+<link rel="stylesheet" href="/note-links.css?v=anniversary-completion-1" />
+<link rel="stylesheet" href="/dashboard-workspace.css?v=workspace-cohesion-1" />
+<link rel="stylesheet" href="/css/performance-workspace.css?v=workspace-cohesion-1">
+<link rel="stylesheet" href="/classic-interface.css?v=workspace-cohesion-1">
+<link rel="stylesheet" href="/free-space-workspace.css?v=workspace-cohesion-1">
 </head>
 
 <body>
+  <p id="tli-interface-notice" class="interface-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
   <!-- =====================================================
      First-Run Onboarding + Optional Intro Audio
      (same experience across Windows/Mac/Linux)
@@ -41,7 +86,7 @@
   <div class="tli-lock-card">
     <div class="tli-lock-logo">TLI</div>
     <div class="tli-lock-title">TheLANIntelligence</div>
-    <div class="tli-lock-subtitle">LAN Console · Private · Local · No cloud</div>
+    <div class="tli-lock-subtitle">Your home console · Protected access</div>
     <div class="tli-lock-prompt">Enter PIN to continue</div>
     <input
       id="tli-lock-input"
@@ -55,11 +100,11 @@
     />
     <div class="tli-lock-error" id="tli-lock-error" aria-live="polite"></div>
     <button class="btn-primary tli-lock-btn" id="tli-lock-submit">Unlock</button>
-    <button class="tli-lock-forgot-btn" id="tli-lock-forgot" type="button">Forgot PIN?</button>
-    <div id="tli-lock-reset-panel" class="tli-lock-reset-panel hidden">
-      <div class="tli-lock-reset-warn">Removing the PIN allows anyone on your network to access TLI until a new PIN is set.</div>
-      <button class="btn btn-danger btn-sm" id="tli-lock-reset-confirm-btn" type="button">Remove PIN &amp; Unlock</button>
-      <button class="btn btn-ghost btn-sm" id="tli-lock-reset-cancel-btn" type="button">Cancel</button>
+    <button class="tli-lock-forgot-btn" id="tli-lock-forgot" type="button" aria-expanded="false" aria-controls="tli-lock-reset-panel">Forgot PIN?</button>
+    <div id="tli-lock-reset-panel" class="tli-lock-reset-panel hidden" aria-hidden="true">
+      <div class="tli-lock-reset-warn">This screen cannot remove or bypass your PIN. If saved security files are unavailable, stop TLI and preserve the existing files. Restore a matching backup using the original operating-system account; Windows-protected keys may also require the original computer. Do not run setup over this installation.</div>
+      <button class="btn btn-outline btn-sm" id="tli-lock-reset-confirm-btn" type="button">Recheck access status</button>
+      <button class="btn btn-ghost btn-sm" id="tli-lock-reset-cancel-btn" type="button">Back to PIN</button>
     </div>
   </div>
 </div>
@@ -71,10 +116,10 @@
 <div id="tli-sat-join" class="tli-sat-join hidden" aria-hidden="true">
   <div class="tli-sat-join-card">
     <div class="tli-sat-join-logo">📱</div>
-    <div class="tli-sat-join-title">Join as TLI Satellite</div>
+    <div class="tli-sat-join-title">Connect this browser</div>
     <div class="tli-sat-join-sub">
-      Your phone will appear in the Mesh panel on your desktop.
-      You'll have full access to TLI from here, with AI powered by the host.
+      This browser will appear under Browser satellites in Computers.
+      This is separate from pairing the native Phone Companion app. AI access depends on the host’s available provider.
     </div>
     <div class="tli-sat-join-form">
       <label class="tli-sat-join-label" for="tli-sat-join-name">Device name</label>
@@ -83,8 +128,8 @@
              autocomplete="off" spellcheck="false" />
     </div>
     <div id="tli-sat-join-error" class="tli-sat-join-error" hidden></div>
-    <button class="btn-primary tli-sat-join-btn" id="tli-sat-join-btn">Join Mesh</button>
-    <div class="tli-sat-join-footer">TLI · Local network only · No cloud</div>
+    <button class="btn-primary tli-sat-join-btn" id="tli-sat-join-btn">Connect browser satellite</button>
+    <div class="tli-sat-join-footer">Browser access to this TLI host</div>
   </div>
 </div>
 
@@ -92,10 +137,10 @@
      Satellite QR Code Modal  (desktop "Add Phone" flow)
      ===================================================== -->
 <div id="tli-sat-qr-modal" class="tli-sat-qr-modal hidden"
-     aria-modal="true" role="dialog" aria-label="Add satellite phone">
+     aria-modal="true" role="dialog" aria-label="Browser satellite invitation">
   <div class="tli-sat-qr-card">
     <div class="tli-sat-qr-head">
-      <div class="tli-sat-qr-title">Add Satellite Phone</div>
+      <div class="tli-sat-qr-title">Browser satellite invitation</div>
       <button class="tli-sat-qr-close" id="tli-sat-qr-close" aria-label="Close">✕</button>
     </div>
     <div class="tli-sat-qr-body">
@@ -103,7 +148,7 @@
         <div class="tli-sat-qr-loading">Generating…</div>
       </div>
       <div class="tli-sat-qr-hint">
-        Scan with your phone's camera, or open the link manually.
+        Open this link in a browser, or scan it with the phone camera. For the native TLI app, use Phone Companion instead. Hiding this code does not revoke the invitation.
       </div>
       <div class="tli-sat-qr-url-row">
         <code id="tli-sat-qr-url" class="tli-sat-qr-url"></code>
@@ -193,149 +238,136 @@
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <div>
-        <!-- Neutral logo: no fox here -->
-        <div class="sidebar-logo"><div class="sidebar-logo-inner">TLI</div></div>
+        <div class="sidebar-logo" role="img" aria-label="TLI — TheLANIntelligence"><span aria-hidden="true">tli</span></div>
         <div class="sidebar-label">LAN AI</div>
       </div>
 
 <!-- Toast notifications container (global, overlays all panels) -->
 <div id="toastContainer" class="tli-toast-container" aria-live="polite" aria-atomic="true"></div>
 
-      <div class="sidebar-nav">
-        <button
-          class="side-nav-button active"
-          data-panel-target="panel-main"
-        >
-          <div class="side-nav-button-icon">💬</div><span>Main</span>
-        </button>
-        <button
+      <nav class="sidebar-nav" aria-label="Main navigation">
+        <div class="tli-nav-group" role="group" aria-labelledby="nav-group-0">
+          <div class="sidebar-section-title" id="nav-group-0">Everyday</div>
+<button
           class="side-nav-button"
           data-panel-target="panel-dashboard2"
         >
           <div class="side-nav-button-icon">🧭</div><span>Dashboard</span>
         </button>
-
-        <button
+<button
+          class="side-nav-button active"
+          data-panel-target="panel-main"
+        >
+          <div class="side-nav-button-icon">💬</div><span>AI Chat</span>
+        </button>
+<button
           class="side-nav-button"
           data-panel-target="panel-builder"
         >
           <div class="side-nav-button-icon">🛠️</div><span>Builder</span>
         </button>
-
 <button
-  class="side-nav-button"
-  data-panel-target="panel-tli-chat"
->
-  <div class="side-nav-button-icon">🗨️</div>
-  <span>TLI Chat</span>
-</button>
-
-        <button
           class="side-nav-button"
           data-panel-target="panel-vault"
         >
           <div class="side-nav-button-icon">🔐</div><span>Vault</span>
         </button>
-
-                <!-- Home Automation (Shelly) -->
-        <button
+        </div>
+        <div class="tli-nav-group" role="group" aria-labelledby="nav-group-1">
+          <div class="sidebar-section-title" id="nav-group-1">Home &amp; Network</div>
+<button
           class="side-nav-button"
           data-panel-target="panel-homeauto"
         >
           <div class="side-nav-button-icon">🏠</div>
           <span>Home Automation</span>
         </button>
-
-
-        
 <button
   class="side-nav-button"
   data-panel-target="panel-automations"
 >
   <div class="side-nav-button-icon">⚡</div><span>Automations</span>
 </button>
-
+<button
+          class="side-nav-button"
+          data-panel-target="panel-devices"
+        >
+          <div class="side-nav-button-icon">🔌</div><span>Devices</span>
+        </button>
+<button
+          class="side-nav-button"
+          data-panel-target="panel-mesh"
+        >
+          <div class="side-nav-button-icon">🕸️</div><span>Computers</span>
+        </button>
+<button class="side-nav-button" data-panel-target="panel-companion">
+  <div class="side-nav-button-icon">▯</div><span>Phone Companion</span>
+</button>
+<button
+  class="side-nav-button"
+  data-panel-target="panel-tli-chat"
+>
+  <div class="side-nav-button-icon">🗨️</div>
+  <span>LAN Chat</span>
+</button>
+        </div>
+        <div class="tli-nav-group" role="group" aria-labelledby="nav-group-2">
+          <div class="sidebar-section-title" id="nav-group-2">Tools</div>
+<button
+          class="side-nav-button"
+          data-panel-target="panel-files"
+        >
+          <div class="side-nav-button-icon">📁</div><span>Files</span>
+        </button>
 <button
   class="side-nav-button"
   data-panel-target="panel-visualizer"
 >
   <div class="side-nav-button-icon">📊</div><span>Visualizer</span>
 </button>
-
+<button
+  class="side-nav-button"
+  data-panel-target="panel-games"
+>
+  <div class="side-nav-button-icon">🎮</div><span>Performance &amp; apps</span>
+</button>
+<button
+          class="side-nav-button"
+          data-panel-target="panel-printshop"
+        >
+          <div class="side-nav-button-icon">🖨️</div><span>Print & Scan</span>
+        </button>
+<button
+          class="side-nav-button"
+          data-panel-target="panel-tools"
+        >
+          <div class="side-nav-button-icon">🧰</div><span>Tools</span>
+        </button>
+<button
+          class="side-nav-button"
+          data-panel-target="panel-scripts"
+        >
+          <div class="side-nav-button-icon">📜</div><span>Scripts</span>
+        </button>
 <button
   class="side-nav-button tli-hub-nav-btn"
   data-panel-target="panel-hub"
 >
   <div class="side-nav-button-icon">🌐</div><span>TLI Hub</span>
 </button>
-
-<button
-  class="side-nav-button"
-  data-panel-target="panel-games"
->
-  <div class="side-nav-button-icon">🎮</div><span>Game Optimizer</span>
-</button>
-
-
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-files"
-        >
-          <div class="side-nav-button-icon">📁</div><span>Files</span>
-        </button>
-
-        <!-- NEW: Devices tab -->
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-devices"
-        >
-          <div class="side-nav-button-icon">🔌</div><span>Devices</span>
-        </button>
-
-        <!-- Print & Scan Studio tab -->
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-printshop"
-        >
-          <div class="side-nav-button-icon">🖨️</div><span>Print & Scan</span>
-        </button>
-
-        <!-- Home Mesh / Nodes tab -->
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-mesh"
-        >
-          <div class="side-nav-button-icon">🕸️</div><span>Mesh</span>
-        </button>
-
-        <!-- Tools Tab -->
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-tools"
-        >
-          <div class="side-nav-button-icon">🧰</div><span>Tools</span>
-        </button>
-
-        <button
-          class="side-nav-button"
-          data-panel-target="panel-scripts"
-        >
-          <div class="side-nav-button-icon">📜</div><span>Scripts</span>
-        </button>
-
-        <!-- Settings tab -->
-        <button
+        </div>
+        <div class="tli-nav-settings"><button
           class="side-nav-button"
           data-panel-target="panel-settings"
         >
           <div class="side-nav-button-icon">⚙️</div><span>Settings</span>
-        </button>
-      </div>
+        </button></div>
+      </nav>
 
       <div class="sidebar-footer">
         <div>Device:</div>
-        <div class="sidebar-footer-device" id="footer-device">RyzenUppercut</div>
-        <div>No cloud, no tracking.</div>
+        <div class="sidebar-footer-device" id="footer-device">Not confirmed</div>
+        <div>Your private home console.</div>
       </div>
     </aside>
 
@@ -353,16 +385,24 @@
               </div>
             </div>
           </div>
-          <div class="device-chip">
-            <div>
-              <div class="device-chip-label">Device</div>
-              <div class="device-chip-name" id="device-name-chip">—</div>
+          <div class="tli-device-menu">
+            <button class="device-chip" id="tli-device-trigger" type="button" aria-expanded="false" aria-controls="tli-device-popover">
+              <span><span class="device-chip-label">Device</span><span class="device-chip-name" id="device-name-chip">—</span></span>
+              <span aria-hidden="true">⌄</span>
+            </button>
+            <div id="tli-device-popover" class="tli-shell-popover" hidden>
+              <button id="rename-device-btn" type="button">Rename device</button>
+              <form id="tli-rename-form" hidden>
+                <label for="tli-rename-input">Device name</label>
+                <input id="tli-rename-input" class="field-input" maxlength="32" required autocomplete="off">
+                <div class="tli-rename-actions"><button type="submit">Save</button><button id="tli-rename-cancel" type="button">Cancel</button></div>
+                <p id="tli-rename-error" class="tli-shell-empty" role="status" hidden></p>
+              </form>
             </div>
-            <button id="rename-device-btn">Rename</button>
           </div>
         </div>
 
-        <!-- MODE and UI selects kept in DOM for JS — hidden from header -->
+        <!-- Chat response style stays available to its existing controller. -->
         <div style="display:none;">
           <select id="mode-select">
             <option value="default" selected>Default</option>
@@ -370,18 +410,18 @@
             <option value="step">Step-by-step</option>
             <option value="dev">Developer</option>
           </select>
-          <select id="ui-mode-select">
-            <option value="classic">Classic</option>
-            <option value="dash2" selected>Dashboard</option>
-          </select>
         </div>
 
 <div class="header-right">
-  <div class="lan-pill ai-offline" id="ai-source-pill" title="AI route not checked yet">
-    <span id="ai-source-text">AI: Off</span>
-  </div>
-
-  <button id="ai-manage-btn" class="ai-fix-btn ai-manage-btn" title="Manage AI">Manage</button>
+  <label class="interface-controls" for="tli-interface-select"><span>View</span>
+    <select id="tli-interface-select" aria-label="TLI interface"><option value="modern">Modern UI</option><option value="classic">Classic UI</option></select>
+  </label>
+  <button id="tli-search-launcher" class="tli-shell-button" type="button" aria-label="Search TLI" aria-haspopup="dialog">
+    <span aria-hidden="true">⌕</span><span class="tli-search-label">Search TLI…</span><kbd>Ctrl+K</kbd>
+  </button>
+  <button type="button" class="lan-pill ai-offline" id="ai-source-pill" aria-label="Manage AI model" title="Manage AI model">
+    <span id="ai-source-text">AI: Checking…</span>
+  </button>
 
   <!-- Node Switcher — jump to any peer TLI instance -->
   <div class="node-switcher" id="node-switcher">
@@ -398,24 +438,26 @@
     </div>
   </div>
 
-  <!-- Ambient alert bell -->
-  <button id="tli-alert-bell" class="tli-alert-bell-btn" title="Alerts" aria-label="Alerts" hidden>
-    🔔<span class="tli-alert-badge" id="tli-alert-badge">0</span>
-  </button>
-  <!-- Alert panel (desktop popover) -->
-  <div class="tli-alert-panel" id="tli-alert-panel" hidden>
-    <div class="tli-alert-panel-head">
-      <span>Alerts</span>
-      <button class="tli-alert-dismiss-all" id="tli-alert-dismiss-all">Dismiss all</button>
-    </div>
-    <div id="tli-alert-list" class="tli-alert-list"></div>
+  <div class="tli-activity-wrap">
+    <button id="tli-activity-trigger" class="tli-shell-button" type="button" aria-expanded="false" aria-controls="tli-activity-panel">
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M10 21h4"/></svg><span>Activity</span><span id="tli-alert-badge" class="tli-count-badge" hidden>0</span>
+    </button>
+    <section id="tli-activity-panel" class="tli-shell-popover" aria-label="Notifications" hidden>
+      <div class="tli-activity-tabs" role="tablist" aria-label="Notifications">
+        <button id="tli-alerts-tab" role="tab" aria-selected="true" aria-controls="tli-alerts-content" type="button">Alerts</button>
+        <button id="tli-events-tab" role="tab" aria-selected="false" aria-controls="tli-events-content" tabindex="-1" type="button">Activity <span id="tli-feed-badge" class="tli-count-badge" style="display:none">0</span></button>
+        <button id="tli-activity-close" type="button" aria-label="Close notifications">✕</button>
+      </div>
+      <div id="tli-alerts-content" role="tabpanel" aria-labelledby="tli-alerts-tab">
+        <div class="tli-alert-panel-head"><span>Needs attention</span><button id="tli-alert-dismiss-all" type="button" disabled>Dismiss all</button></div>
+        <div id="tli-alert-list"><p class="tli-shell-empty">Checking alerts…</p></div>
+        <p id="tli-alert-error" class="tli-shell-empty" role="status" hidden></p>
+      </div>
+      <div id="tli-events-content" role="tabpanel" aria-labelledby="tli-events-tab" hidden>
+        <p class="tli-shell-empty" id="tli-events-empty">No recent activity.</p>
+      </div>
+    </section>
   </div>
-
-  <!-- Live Feed notification bell -->
-  <button id="tli-feed-bell" class="tli-feed-bell" title="Live Activity" aria-label="Live activity feed">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-    <span id="tli-feed-badge" class="tli-feed-badge" style="display:none">0</span>
-  </button>
 
   <button id="tli-lock-btn" class="tli-lock-header-btn" title="Lock TLI" aria-label="Lock" hidden>🔒</button>
 </div>
@@ -479,20 +521,30 @@
       </div>
 
       <main class="main-scroll">
+        <aside id="tli-release-notice" class="tli-release-notice" role="status" hidden>
+          <strong>TLI update needs attention</strong>
+          <p id="tli-release-message"></p>
+          <button id="tli-release-recheck" class="chip-button" type="button">Check again</button>
+          <details><summary>Version details</summary><p id="tli-release-detail"></p></details>
+        </aside>
         <!-- MAIN PANEL -->
         <section class="panel-container active" id="panel-main">
-          <div class="main-columns">
+          <div class="main-columns chat-workspace">
             <!-- Chat -->
-            <div class="card">
+            <div class="card chat-workspace-card" id="ai-chat-card">
               <div class="card-header-row">
                 <div>
                   <div class="card-title">
-                    Main Chat
-                    <span id="ai-source-badge" class="badge badge-em">Offline LM Studio</span>
+                    AI Chat
                   </div>
                   <div class="card-subtitle">
-                    Ask your AI anything. Use files, tools, and vault as needed. Replies come from your local models.
+                    Your computer, your context, your conversation.
                   </div>
+                </div>
+                <div id="chat-header-actions" class="chat-header-actions">
+                  <button type="button" id="chat-runtime-button" class="chat-runtime-button" aria-label="Open AI model library"><span id="ai-source-badge" class="badge badge-em">AI: Checking…</span><span aria-hidden="true">⌄</span></button>
+                  <button class="chip-button" id="chat-history-btn" type="button">History</button>
+                  <button class="chip-button" id="new-chat-btn" type="button">＋ New chat</button>
                 </div>
               </div>
 
@@ -508,6 +560,12 @@
               </div>
 
               <div class="chat-card-body">
+                <div id="chat-welcome" class="chat-welcome">
+                  <div class="chat-welcome-mark" aria-hidden="true">tli</div>
+                  <h2>What would you like to understand?</h2>
+                  <p>Ask about your computer, bring a note, or pick up an earlier conversation.</p>
+                  <div id="chat-starters-slot"></div>
+                </div>
                 <div class="chat-output" id="chat-output">
                   <div class="chat-output-empty">
                     Ready when you are. Ask a question, or say "What can you do offline?"
@@ -541,28 +599,42 @@
 <!-- No-AI nudge banner — shown only when no model is downloaded and LM Studio is offline -->
 <div id="tli-no-ai-banner" class="tli-no-ai-banner hidden">
   <div class="tli-no-ai-banner-left">
-    <div class="tli-no-ai-banner-title">No AI downloaded</div>
-    <div class="tli-no-ai-banner-sub">Download Qwen2.5 to start chatting — runs 100% on your machine, no internet after download.</div>
+    <div class="tli-no-ai-banner-title">Check AI availability</div>
+    <div class="tli-no-ai-banner-sub">Open the model library to check your local AI, or choose an available provider in AI &amp; chat settings.</div>
   </div>
-  <button class="tli-no-ai-banner-btn" id="tli-no-ai-download-btn">Download Qwen2.5</button>
+  <button class="tli-no-ai-banner-btn" id="tli-no-ai-download-btn">Open model library</button>
 </div>
+<div id="chat-response-status" class="chat-response-status" role="status" aria-live="polite" aria-atomic="true" hidden>
+  <span class="chat-response-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+  <span id="chat-response-status-text"></span>
+</div>
+<div class="chat-composer-shell" id="chat-composer-shell">
+  <div class="chat-context-toolbar">
+    <button id="chat-context-toggle" type="button" aria-expanded="false" aria-controls="chat-context-details">＋ Context</button>
+    <div id="chat-context-summary" aria-label="Context for your next question"></div>
+    <div id="chat-memory-slot"></div>
+  </div>
+  <div id="chat-context-details" hidden></div>
 <div id="chat-image-preview" class="chat-image-preview hidden">
   <img id="chat-image-thumb" src="" alt="Attached image" />
-  <button id="chat-image-remove" title="Remove image">✕</button>
+  <button id="chat-image-remove" type="button" title="Remove image" aria-label="Remove image">✕</button>
 </div>
 <div class="chat-input-row">
-                  <button id="chat-attach-btn" class="chat-attach-btn" title="Attach image">📎</button>
-                  <input type="file" id="chat-image-input" accept="image/*" style="display:none" />
+                  <button id="chat-attach-btn" type="button" class="chat-attach-btn" title="Attach image" aria-label="Attach image">📎</button>
+                  <input type="file" id="chat-image-input" accept="image/jpeg,image/png" style="display:none" />
                   <button id="chat-mic-btn" class="chat-mic-btn" title="Voice input">🎤</button>
-                  <textarea id="chat-input" placeholder="Ask your AI anything..."></textarea>
-                  <button id="chat-send-btn"><span>Send</span> <span>↗</span></button>
+                  <textarea id="chat-input" aria-label="Message TLI" placeholder="Ask TLI a question…"></textarea>
+                  <button id="chat-send-btn" type="button"><span>Send</span> <span aria-hidden="true">↑</span></button>
                 </div>
 
+                <div class="chat-composer-bottom">
+                  <span class="chat-sharing-hint">Review what you include before sending.</span>
+                  <button class="chip-button" id="abort-chat-btn" type="button" disabled>Stop reply</button>
+                  <details id="chat-options" class="chat-options"><summary>Options</summary>
                 <div class="chat-actions-row">
                   <div>
-                    <button class="chip-button" id="new-chat-btn">New Chat</button>
-                    <button class="chip-button" id="chat-history-btn">History</button>
-                    <button class="chip-button" id="abort-chat-btn" disabled>Abort</button>
+                    <button class="chip-button" id="notebook-open" type="button">Notes &amp; fixes</button>
+                    <button class="chip-button" id="documents-open" type="button">Ask about documents</button>
                     <button class="toggle-pill" id="teaching-toggle" title="Explain in more detail">
                       <span class="toggle-pill-dot"></span><span>Teaching</span>
                     </button>
@@ -602,32 +674,35 @@
                     </div>
                   </div>
                 </div>
+                  </details>
+                </div>
+              </div>
               </div>
             </div>
 
-            <!-- Right column -->
-            <div style="display:flex; flex-direction:column; gap:12px;">
+            <!-- Conversation resumption stays inside AI Chat. -->
+            <div class="chat-companion-column" style="display:flex; flex-direction:column; gap:12px;">
 
-              <!-- Quick start -->
-              <div class="card right-column-card">
-                <div class="card-title" style="margin-bottom:10px;">Quick Start</div>
+              <!-- Same starter controls move between Modern's welcome and Classic's side card. -->
+              <div class="card right-column-card" id="chat-starters" hidden>
+                <div class="card-title" style="margin-bottom:10px;">Start with a question</div>
                 <div style="display:flex; flex-direction:column; gap:6px;">
                   <div style="font-size:12px; color:var(--text-muted); font-weight:600; text-transform:uppercase; letter-spacing:.05em; margin-bottom:2px;">Try asking</div>
                   <div style="display:flex; flex-wrap:wrap; gap:6px;" id="quickstart-chips">
                     <button class="chip-button" data-q="What can you do offline?">What can you do?</button>
-                    <button class="chip-button" data-q="Show me top running processes">Top processes</button>
+                    <button class="chip-button" data-q="Is the AI running?">Check AI status</button>
                     <button class="chip-button" data-q="Check network health on this device">Network health</button>
-                    <button class="chip-button" data-q="Turn on the living room lights">Control devices</button>
+                    <button class="chip-button" data-q="Help me understand my storage">Understand storage</button>
                     <button class="chip-button" data-q="Write a PowerShell script to list large files in C:\Users">Write a script</button>
                   </div>
                   <div style="margin-top:10px; display:flex; flex-direction:column; gap:8px;">
                     <div style="display:flex; gap:8px; align-items:flex-start;">
                       <span style="font-size:15px; flex-shrink:0;">🔒</span>
-                      <span style="font-size:12px; color:var(--text-muted);"><strong style="color:var(--text-main);">100% offline.</strong> Your data never leaves this network.</span>
+                      <span style="font-size:12px; color:var(--text-muted);"><strong style="color:var(--text-main);">You choose what to share.</strong> Selected providers receive the context you send. Online search uses a separate service.</span>
                     </div>
                     <div style="display:flex; gap:8px; align-items:flex-start;">
                       <span style="font-size:15px; flex-shrink:0;">🏠</span>
-                      <span style="font-size:12px; color:var(--text-muted);"><strong style="color:var(--text-main);">Home Automation</strong> — control lights, plugs, and scenes by name.</span>
+                      <span style="font-size:12px; color:var(--text-muted);"><strong style="color:var(--text-main);">Smart devices</strong> — available controls depend on the devices registered with this host.</span>
                     </div>
                     <div style="display:flex; gap:8px; align-items:flex-start;">
                       <span style="font-size:15px; flex-shrink:0;">🧑‍🏫</span>
@@ -660,14 +735,20 @@
           </div>
         </section>
 
-        <!-- DASHBOARD 2.0 (PREVIEW) PANEL -->
+        <!-- Dashboard: observed state, deliberate actions and saved work. -->
         <section class="panel-container" id="panel-dashboard2" hidden>
+          <div class="page-header dashboard-page-header">
+            <div><h1 class="page-title">Dashboard</h1><p class="page-subtitle">Your home, in focus. Pick up where you left off.</p></div>
+            <button type="button" class="btn-primary dashboard-chat-launch" data-panel-target="panel-main"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"/><path d="M7 10h8M7 14h5"/></svg>Ask TLI<span aria-hidden="true">↗</span></button>
+          </div>
           <div class="nd-wrap">
-
-            <!-- 1. Narrator Block -->
+            <div id="dashboard-access" class="dashboard-access" role="status" hidden><div><strong>Your saved work is locked</strong><p>Unlock TLI to view recent activity and saved places.</p></div><button id="dashboard-unlock" type="button" class="btn-primary">Unlock TLI</button></div>
+            <section class="dashboard-attention" id="nd-attention" aria-label="Latest TLI observation">
             <div class="nd-narrator" id="nd-narrator">
+              <div class="dashboard-section-heading"><span class="dashboard-eyebrow">TLI NARRATOR</span><span class="dashboard-section-hint">The latest useful observation</span></div>
               <div class="nd-narrator__lead">
                 <div class="nd-orb-wrap" aria-hidden="true">
+                  <svg class="nd-beacon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="36" height="36" rx="12"/><path d="M13 25h6l3-8 5 15 3-7h5" stroke-linecap="round" stroke-linejoin="round"/></svg>
                   <div class="nd-orb" id="nd-orb"></div>
                   <div class="nd-status-label" id="nd-status-label">ASSESSING&hellip;</div>
                 </div>
@@ -684,76 +765,96 @@
                 </div>
               </div>
             </div>
+            <div class="dashboard-attention-footer"><div id="nd-narrator-controls"></div></div>
+            </section>
+            <div id="nd-action-card" class="nd-action-card" aria-label="Suggested action for its recorded target" hidden></div>
 
-            <!-- TLI v1.3 — ActionCard: top-scored pending action -->
-            <div id="nd-action-card" class="nd-action-card">
-              <div class="ac-idle">No actions needed right now.</div>
-            </div>
-
-            <!-- Quick Read findings -->
-            <div id="nd-quickread" class="nd-quickread" hidden></div>
-
-            <!-- 2. Vitals Strip -->
+            <div class="dashboard-section-heading dashboard-health-heading"><h2>At a glance</h2><span class="dashboard-section-hint">Host, storage, devices &amp; AI</span></div>
             <div class="nd-vitals" role="list" aria-label="System vitals">
               <div class="nd-vital" role="listitem">
+                <div class="nd-vital__label"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>TLI host</div>
                 <div class="nd-vital__val" id="ndv-node-val">&mdash;</div>
-                <div class="nd-vital__label">Node</div>
                 <div class="nd-vital__sub" id="ndv-node-sub">Connecting&hellip;</div>
+                <div class="nd-vital__detail" id="ndv-node-metrics"></div>
               </div>
               <div class="nd-vital" id="nd-storage-vital-tile" role="listitem">
+                <div class="nd-vital__label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 4-3 11v5h20v-5L19 4Z M2 15h20 M6 18h.01M10 18h.01"/></svg>Storage</div>
                 <div class="nd-vital__val" id="ndv-storage-val">&mdash;</div>
-                <div class="nd-vital__label">Storage</div>
                 <div class="nd-vital__sub" id="ndv-storage-sub">Loading&hellip;</div>
+                <meter id="ndv-storage-meter" class="dashboard-storage-meter" min="0" max="100" low="85" high="95" optimum="50" aria-label="Observed system drive percentage used" hidden></meter>
+                <div class="nd-vital__detail" id="ndv-storage-scope"></div>
               </div>
               <div class="nd-vital" role="listitem">
+                <div class="nd-vital__label"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0Z M12 17v4"/></svg>Smart devices</div>
                 <div class="nd-vital__val" id="ndv-smart-val">&mdash;</div>
-                <div class="nd-vital__label">Smart Home</div>
                 <div class="nd-vital__sub" id="ndv-smart-sub">Loading&hellip;</div>
               </div>
               <div class="nd-vital" role="listitem">
+                <div class="nd-vital__label"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="3"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/><rect x="10" y="10" width="4" height="4" rx="1"/></svg>AI availability</div>
                 <div class="nd-vital__val" id="ndv-ai-val">&mdash;</div>
-                <div class="nd-vital__label">AI Runtime</div>
                 <div class="nd-vital__sub" id="ndv-ai-sub">Loading&hellip;</div>
               </div>
             </div>
 
-            <!-- Suggestions strip -->
-            <div id="nd-suggestions" class="nd-suggestions" hidden></div>
-
-            <!-- 3. Mesh Node Strip (visible only when peers exist) -->
+            <div id="nd-quickread" class="nd-quickread dashboard-legacy-summary" aria-label="System findings" hidden></div>
+            <div class="dashboard-workspace-grid">
+            <div class="dashboard-primary-column">
+            <section id="activity-catchup" class="activity-catchup" aria-labelledby="activity-catchup-title">
+              <div class="activity-catchup-head">
+                <h2 id="activity-catchup-title">Recent activity</h2>
+                <div class="activity-catchup-actions">
+                  <button id="activity-refresh" type="button" class="chip-button">Refresh activity</button>
+                  <button id="activity-review" type="button" class="chip-button" disabled>Mark summary reviewed</button>
+                </div>
+              </div>
+              <p id="activity-count">Loading recorded changes&hellip;</p>
+              <small id="activity-checked-at"></small>
+              <p id="activity-error" role="status"></p>
+              <p id="activity-new" role="status" hidden>New activity is available. Refresh when you are ready.</p>
+              <ol id="activity-groups" aria-label="Activity summary"></ol>
+              <small id="activity-more"></small>
+              <details id="activity-history-details" hidden>
+                <summary id="activity-history-title">View recorded events</summary>
+                <ol id="activity-history" aria-label="Recorded activity"></ol>
+              </details>
+              <details id="activity-coverage-details" class="dashboard-coverage"><summary id="activity-coverage-summary">Coverage &amp; retention</summary><p id="activity-coverage" class="activity-coverage"></p><small id="activity-reviewed-at"></small><p id="activity-history-note" class="activity-history-note"></p></details>
+            </section>
+            <details class="ui-live-detail dashboard-live"><summary><span>Live activity feed</span><span class="dashboard-disclosure-hint">During this visit</span></summary><div class="nd-bottom"><div class="nd-pane"><div id="nd-feed" class="nd-feed" role="log" aria-live="polite"></div></div></div></details>
             <div id="nd-mesh-strip" class="nd-mesh-strip" hidden>
-              <div class="nd-mesh-strip__head">Network <span class="nd-live-dot" aria-hidden="true"></span></div>
+              <div class="nd-mesh-strip__head">Your TLI computers</div>
               <div id="nd-mesh-nodes" class="nd-mesh-nodes"></div>
             </div>
-
-            <!-- 4 + 5. Bottom Row: Suggested Actions + Activity Feed -->
-            <div class="nd-bottom">
-              <div class="nd-pane">
-                <div class="nd-pane__head">Suggested Actions</div>
-                <div id="nd-actions" class="nd-actions"></div>
-              </div>
-              <div class="nd-pane">
-                <div class="nd-pane__head">Live Activity <span class="nd-live-dot" aria-hidden="true"></span></div>
-                <div id="nd-feed" class="nd-feed" role="log" aria-live="polite"></div>
-              </div>
             </div>
-
+            <aside class="dashboard-secondary-column" aria-label="Saved places and useful destinations">
+              <section id="dashboard-places-mount" class="dashboard-saved-places"></section>
+              <section class="dashboard-explore" aria-labelledby="nd-suggested-title">
+                <div class="dashboard-section-heading"><h2 id="nd-suggested-title">Make the next move</h2></div>
+                <p>Your everyday tools, close at hand.</p>
+                <div class="dashboard-destinations">
+                  <button type="button" data-panel-target="panel-files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg><span><strong>Files</strong><small>Prepare &amp; review changes</small></span><span aria-hidden="true">↗</span></button>
+                  <button type="button" data-panel-target="panel-visualizer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 4-3 11v5h20v-5L19 4ZM2 15h20M6 18h.01M10 18h.01"/></svg><span><strong>Free Space</strong><small>Find what’s taking space</small></span><span aria-hidden="true">↗</span></button>
+                  <button type="button" data-panel-target="panel-vault"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="12" rx="3"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 15v3"/></svg><span><strong>Vault</strong><small>Open your private workspace</small></span><span aria-hidden="true">↗</span></button>
+                </div>
+                <details class="nd-shortcuts"><summary>More shortcuts</summary><div class="button-row"><button class="btn-outline" type="button" data-open-notes>Notes &amp; fixes</button><button class="btn-outline" type="button" data-panel-target="panel-companion">Connect Phone Companion</button></div><div id="nd-actions" class="nd-actions"></div><div id="nd-suggestions" class="nd-suggestions" hidden></div></details>
+              </section>
+            </aside>
+            </div>
           </div>
         </section>
 
 <section class="panel-container" id="panel-tli-chat" hidden>
   <div class="main-columns">
 
-    <!-- LEFT: TLI Chat (Messenger) -->
+    <!-- LEFT: LAN Chat (Messenger) -->
     <div class="card tli-chat-card">
       <div class="card-header-row">
         <div class="tli-chat-titleblock">
           <div class="card-title">
-            TLI Chat <span class="badge">LAN-only</span>
+            LAN Chat <span class="badge">LAN-only</span>
             <span class="tli-chat-subpill" id="tli-chat-live-pill">Waiting for nodes</span>
           </div>
           <div class="card-subtitle">
-            Local presence + messaging across your Home Mesh. No cloud. No copies.
+            Messages and file sharing between your TLI computers. Conversations are stored by participating hosts.
           </div>
         </div>
 
@@ -915,144 +1016,154 @@
 
 
 
-        <!-- VAULT PANEL -->
+        <!-- VAULT PANEL: existing encrypted stores, one feature controller. -->
         <section class="panel-container" id="panel-vault" hidden>
-
-          <!-- Auth / status card -->
-          <div class="card vault-auth-card">
-            <div class="vault-header-row">
-              <div class="vault-header-left">
-                <div class="vault-lock-icon" id="vault-icon-glyph">🔒</div>
-                <div>
-                  <div class="card-title" style="margin-bottom:2px;">Secure Vault</div>
-                  <div class="card-subtitle" style="margin:0;">AES-256 · local only · no cloud</div>
-                </div>
-                <span id="vault-status-pill" class="vault-pill" data-state="locked" style="margin-left:10px;">Locked</span>
+          <div class="card vault-auth-card" data-state="loading">
+            <div class="vault-introduction">
+              <div class="vault-lock-icon" id="vault-icon-glyph" aria-hidden="true">
+                <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="7" width="46" height="50" rx="9"/><path d="M17 7v50M9 21h8M9 43h8"/>
+                  <circle cx="36" cy="32" r="11"/><circle cx="36" cy="32" r="3"/>
+                  <path d="M36 21v8M36 35v8M25 32h8M39 32h8M28 24l6 6M38 34l6 6M28 40l6-6M38 30l6-6"/>
+                </svg>
               </div>
-              <button class="btn-outline vault-lock-topbtn" id="vault-lock-btn" style="display:none;">Lock vault</button>
+              <div class="vault-intro-copy">
+                <p class="vault-eyebrow">YOUR PRIVATE WORKSPACE</p>
+                <h2 class="vault-intro-title">A place for what’s private.</h2>
+                <p class="card-subtitle">Keep personal files, important secrets and private notes behind your Vault passphrase.</p>
+              </div>
+              <ul class="vault-intro-features">
+                <li><span class="vault-feature-icon" aria-hidden="true">↳</span><div><strong>Files worth keeping safe</strong><span>Documents, records and personal files.</span></div></li>
+                <li><span class="vault-feature-icon" aria-hidden="true">∗</span><div><strong>Secrets within reach</strong><span>Passwords, keys and values you choose to reveal.</span></div></li>
+                <li><span class="vault-feature-icon" aria-hidden="true">≡</span><div><strong>Notes with their own space</strong><span>Private writing, separate from Notes &amp; fixes.</span></div></li>
+              </ul>
             </div>
 
-            <!-- Setup (first time) — form lives in Settings → Security -->
-            <div id="vault-setup-section" style="margin-top:14px; display:none;">
-              <div class="vault-setup-hint">
-                Vault not yet set up.
-                <button class="vault-forgot-link" style="display:inline;text-decoration:underline;cursor:pointer;"
-                        data-panel-target="panel-settings">
-                  Go to Settings → Security to initialize your vault.
-                </button>
-              </div>
-            </div>
-
-            <!-- Unlock (initialized, locked) -->
-            <div id="vault-auth-section" style="display:none; margin-top:14px;">
-              <div class="vault-form-row vault-unlock-row">
-                <input id="vault-password" class="field-input" type="password"
-                       autocomplete="current-password" placeholder="Enter passphrase to unlock" />
-                <button class="btn-primary" id="vault-unlock-btn">Unlock</button>
-              </div>
-              <div class="vault-auth-meta-row">
-                <div class="vault-failed-hint" id="vault-auth-hint" style="display:none;"></div>
-                <button class="vault-forgot-link" id="vault-forgot-btn" style="display:none;">Forgot passphrase?</button>
-              </div>
-
-              <!-- Emergency reset panel (hidden until forgot is clicked) -->
-              <div class="vault-reset-panel hidden" id="vault-reset-panel">
-                <div class="vault-reset-header">
-                  <span class="vault-reset-icon">⚠</span>
-                  <strong>Passphrase recovery is not possible</strong>
+            <div class="vault-access">
+              <div class="vault-header-row">
+                <div class="vault-header-left">
+                  <span id="vault-status-pill" class="vault-pill" data-state="loading" role="status">Checking…</span>
+                  <h2 id="vault-gate-title">Checking your Vault</h2>
                 </div>
-                <div class="vault-reset-body">
-                  <p>The passphrase is the only key that decrypts your data. There is no recovery mechanism — this is intentional. Your options:</p>
-                  <div class="vault-reset-options">
-                    <div class="vault-reset-option">
-                      <span class="vault-reset-step">1</span>
-                      <div>
-                        <strong>Export encrypted backup</strong>
-                        <div class="vault-reset-opt-sub">Downloads all encrypted vault files as a zip. Useless without the key — but if you ever remember your passphrase, you can restore and decrypt.</div>
-                        <button class="btn-outline vault-reset-export-btn" id="vault-export-backup-btn">Download encrypted backup</button>
+                <button type="button" class="btn-outline vault-lock-topbtn" id="vault-lock-btn" style="display:none;">Lock Vault</button>
+              </div>
+              <p id="vault-state-message" class="vault-state-message" role="status">Checking whether this Vault is ready to open.</p>
+
+              <div id="vault-setup-section" style="display:none;">
+                <p class="vault-setup-hint">Create a separate Vault passphrase in Security settings. Your TLI PIN controls access to TLI; the Vault passphrase opens its encrypted contents.</p>
+                <button type="button" class="btn-primary" id="vault-open-security" data-panel-target="panel-settings">Set up Vault</button>
+              </div>
+
+              <div id="vault-auth-section" style="display:none;">
+                <label for="vault-password" class="vault-field-label">Vault passphrase</label>
+                <div class="vault-password-field">
+                  <input id="vault-password" class="field-input" type="password" autocomplete="current-password" placeholder="Enter your passphrase" aria-describedby="vault-auth-hint vault-access-scope" />
+                  <button type="button" class="btn-ghost" id="vault-passphrase-toggle" aria-label="Show passphrase" aria-pressed="false">Show</button>
+                </div>
+                <div class="vault-failed-hint" id="vault-auth-hint" role="alert" style="display:none;"></div>
+                <button type="button" class="btn-primary vault-unlock-button" id="vault-unlock-btn">Unlock Vault <span aria-hidden="true">→</span></button>
+                <p id="vault-access-scope" class="vault-fineprint">Access opens for this TLI account for up to 30 minutes, including its other signed-in sessions.</p>
+                <div class="vault-auth-meta-row">
+                  <button type="button" class="vault-forgot-link" id="vault-forgot-btn" aria-expanded="false" aria-controls="vault-reset-panel">Passphrase help</button>
+                </div>
+
+                <div class="vault-reset-panel hidden" id="vault-reset-panel">
+                  <div class="vault-reset-header"><strong>A forgotten passphrase cannot be recovered.</strong></div>
+                  <div class="vault-reset-body">
+                    <p>TLI cannot reveal or replace it while preserving access to encrypted contents. Keep your original Vault data and installation if you may remember it later.</p>
+                    <div class="vault-reset-options">
+                      <div class="vault-reset-option">
+                        <strong>Keep a copy of encrypted files</strong>
+                        <p class="vault-reset-opt-sub">This export includes encrypted files, Vault notes and this account’s secret store. It omits saved logins and Vault metadata, so it is not a complete, restorable backup.</p>
+                        <button type="button" class="btn-outline vault-reset-export-btn" id="vault-export-backup-btn">Download encrypted copy</button>
                       </div>
-                    </div>
-                    <div class="vault-reset-option">
-                      <span class="vault-reset-step vault-step-danger">2</span>
-                      <div>
-                        <strong>Hard reset vault</strong>
-                        <div class="vault-reset-opt-sub">Permanently deletes all encrypted data and the password hash. You can then set a new passphrase. <strong>This cannot be undone.</strong></div>
-                        <div class="vault-confirm-row" style="flex-direction:column;gap:6px;align-items:stretch;">
-                          <input id="vault-reset-password-input" class="field-input vault-confirm-input"
-                                 type="password" placeholder="Current vault passphrase" autocomplete="current-password" />
-                          <input id="vault-reset-confirm-input" class="field-input vault-confirm-input"
-                                 type="text" placeholder='Type "RESET VAULT" to confirm' autocomplete="off" />
-                          <button class="btn-outline danger" id="vault-hard-reset-btn" disabled>Destroy &amp; Reset</button>
+                      <details class="vault-danger-details">
+                        <summary>Reset an existing Vault</summary>
+                        <p class="vault-reset-opt-sub">Requires the current passphrase. Permanently deletes encrypted Vault data; this cannot be undone. Resetting does not recover a forgotten passphrase.</p>
+                        <div class="vault-confirm-row">
+                          <label for="vault-reset-password-input">Current Vault passphrase</label>
+                          <input id="vault-reset-password-input" class="field-input vault-confirm-input" type="password" autocomplete="current-password" />
+                          <label for="vault-reset-confirm-input">Type RESET VAULT to confirm deletion</label>
+                          <input id="vault-reset-confirm-input" class="field-input vault-confirm-input" type="text" placeholder="RESET VAULT" autocomplete="off" />
+                          <button type="button" class="btn-outline danger" id="vault-hard-reset-btn" disabled>Delete Vault data &amp; reset</button>
                         </div>
-                      </div>
+                      </details>
                     </div>
                   </div>
                 </div>
               </div>
+              <div class="vault-status-actions"><button type="button" class="btn-ghost" id="vault-status-recheck">Check status</button></div>
             </div>
           </div>
 
-          <!-- Unlocked content area -->
+          <div id="vault-backups-mount"></div>
           <div id="vault-content-area" class="hidden">
-
-            <!-- Tab bar -->
-            <div class="vault-tab-bar">
-              <button class="vault-tab is-active" data-vault-tab="files">Files</button>
-              <button class="vault-tab" data-vault-tab="secrets">Secrets</button>
-              <button class="vault-tab" data-vault-tab="notes">Notes</button>
+            <div class="vault-workspace-top">
+              <div class="vault-tab-bar" role="tablist" aria-label="Vault contents">
+                <button type="button" class="vault-tab is-active" id="vault-tab-button-files" data-vault-tab="files" role="tab" aria-selected="true" aria-controls="vault-tab-files">Files <span class="vault-count" id="vault-files-count">—</span></button>
+                <button type="button" class="vault-tab" id="vault-tab-button-secrets" data-vault-tab="secrets" role="tab" aria-selected="false" aria-controls="vault-tab-secrets" tabindex="-1">Secrets <span class="vault-count" id="vault-secrets-count">—</span></button>
+                <button type="button" class="vault-tab" id="vault-tab-button-notes" data-vault-tab="notes" role="tab" aria-selected="false" aria-controls="vault-tab-notes" tabindex="-1">Vault notes <span class="vault-count" id="vault-notes-count">—</span></button>
+              </div>
+              <button type="button" class="btn-ghost" id="vault-refresh-content">Refresh lists</button>
             </div>
 
-            <!-- FILES tab -->
-            <div class="vault-tab-pane" id="vault-tab-files">
-              <div class="vault-pane-actions">
-                <label class="btn-outline vault-file-label" for="vault-file-input">Choose file</label>
-                <input type="file" id="vault-file-input" style="display:none;" />
-                <span id="vault-chosen-filename" class="vault-chosen-name">No file chosen</span>
-                <button class="btn-primary" id="vault-upload-btn">Upload to vault</button>
+            <div class="vault-tab-pane" id="vault-tab-files" role="tabpanel" aria-labelledby="vault-tab-button-files">
+              <div class="vault-pane-heading"><div><h3>Private files</h3><p>Keep a protected copy. Your original file stays where it is.</p></div></div>
+              <div class="vault-content-toolbar">
+                <div class="vault-search-field"><label for="vault-files-search">Find a file</label><input type="search" id="vault-files-search" placeholder="Search filenames…" autocomplete="off" /></div>
+                <div class="vault-sort-field"><label for="vault-files-sort">Sort by</label><select id="vault-files-sort"><option value="name">Name</option><option value="size">Largest first</option></select></div>
               </div>
-              <div class="small-meta" id="vault-message" style="min-height:18px;"></div>
-              <div class="vault-file-list" id="vault-files-list">
-                <!-- populated by JS -->
-              </div>
+              <details class="vault-add-disclosure" id="vault-add-file">
+                <summary><span aria-hidden="true">＋</span> Add a file</summary>
+                <div class="vault-upload-form">
+                  <label for="vault-file-input">Choose a file to encrypt</label>
+                  <input type="file" id="vault-file-input" />
+                  <div class="vault-upload-review"><span id="vault-chosen-filename" class="vault-chosen-name">No file chosen</span><button type="button" class="btn-primary" id="vault-upload-btn">Encrypt &amp; add file</button></div>
+                </div>
+              </details>
+              <p class="vault-operation-message" id="vault-message" role="status"></p>
+              <p class="vault-list-status" id="vault-files-status" role="status"></p>
+              <div class="vault-file-list" id="vault-files-list"></div>
+              <p class="vault-fineprint vault-pane-footer">Downloaded copies leave the Vault as ordinary files. Locking Vault does not remove copies you have downloaded.</p>
             </div>
 
-            <!-- SECRETS tab -->
-            <div class="vault-tab-pane hidden" id="vault-tab-secrets">
-              <div class="vault-pane-hint">Secrets can be referenced in AI chat as <code>[vault:key_name]</code>. Values are never shown in chat history.</div>
-              <div class="vault-pane-actions">
-                <input id="vault-secret-key-input" class="field-input vault-inline-input" type="text" placeholder="Key (e.g. wifi_password)" />
-                <input id="vault-secret-val-input" class="field-input vault-inline-input" type="password" placeholder="Value" />
-                <button class="btn-primary" id="vault-secret-add-btn">Add</button>
-              </div>
-              <div class="vault-secrets-list" id="vault-secrets-list">
-                <!-- populated by JS -->
-              </div>
+            <div class="vault-tab-pane hidden" id="vault-tab-secrets" role="tabpanel" aria-labelledby="vault-tab-button-secrets">
+              <div class="vault-pane-heading"><div><h3>Secrets, kept out of sight</h3><p>Find a name, then choose whether to reveal or copy its value.</p></div></div>
+              <div class="vault-content-toolbar"><div class="vault-search-field"><label for="vault-secrets-search">Find a secret</label><input type="search" id="vault-secrets-search" placeholder="Search secret names…" autocomplete="off" /></div></div>
+              <details class="vault-add-disclosure" id="vault-add-secret">
+                <summary><span aria-hidden="true">＋</span> Add a secret</summary>
+                <div class="vault-secret-form">
+                  <div><label for="vault-secret-key-input">Name</label><input id="vault-secret-key-input" class="field-input" type="text" placeholder="e.g. wifi_password" autocomplete="off" spellcheck="false" /></div>
+                  <div><label for="vault-secret-val-input">Value</label><input id="vault-secret-val-input" class="field-input" type="password" autocomplete="new-password" /></div>
+                  <button type="button" class="btn-primary" id="vault-secret-add-btn">Save secret</button>
+                </div>
+              </details>
+              <p class="vault-operation-message" id="vault-secret-status" role="status"></p>
+              <p class="vault-list-status" id="vault-secrets-status" role="status"></p>
+              <div class="vault-secrets-list" id="vault-secrets-list"></div>
+              <details class="vault-sharing-details"><summary>Using secrets outside Vault</summary><p>Copied values remain in your device’s clipboard after locking. A <code>[vault:key_name]</code> reference can share its value with the chosen tool or AI provider, and the value may appear in output or saved conversations. Review the destination before sharing.</p></details>
             </div>
 
-            <!-- NOTES tab -->
-            <div class="vault-tab-pane hidden" id="vault-tab-notes">
+            <div class="vault-tab-pane hidden" id="vault-tab-notes" role="tabpanel" aria-labelledby="vault-tab-button-notes">
+              <div class="vault-pane-heading"><div><h3>A private notebook</h3><p>Vault notes live here behind your passphrase. They are separate from Notes &amp; fixes in TLI.</p></div></div>
+              <p class="vault-list-status" id="vault-notes-status" role="status"></p>
               <div class="vault-notes-layout">
                 <div class="vault-notes-sidebar">
-                  <button class="btn-primary vault-newnote-btn" id="vault-newnote-btn">+ New note</button>
-                  <div class="vault-notes-list" id="vault-notes-list">
-                    <!-- populated by JS -->
-                  </div>
+                  <button type="button" class="btn-primary vault-newnote-btn" id="vault-newnote-btn">＋ New note</button>
+                  <label for="vault-notes-search" class="vault-field-label">Find a note</label><input type="search" id="vault-notes-search" placeholder="Search titles…" autocomplete="off" />
+                  <div class="vault-notes-list" id="vault-notes-list"></div>
                 </div>
                 <div class="vault-note-editor-area" id="vault-note-editor-area">
-                  <div class="vault-note-empty" id="vault-note-empty">Select a note or create one.</div>
+                  <div class="vault-note-empty" id="vault-note-empty"><span aria-hidden="true">≡</span><h4>Room for your private notes.</h4><p>Open a note from the list or start a new one.</p></div>
                   <div class="vault-note-editor hidden" id="vault-note-editor">
-                    <input id="vault-note-title-input" class="field-input vault-note-title-field" type="text" placeholder="Note title" />
-                    <textarea id="vault-note-body" class="vault-note-textarea" placeholder="Write your note here…"></textarea>
-                    <div class="vault-note-actions">
-                      <button class="btn-primary" id="vault-note-save-btn">Save</button>
-                      <button class="btn-outline danger" id="vault-note-delete-btn">Delete</button>
-                      <span class="vault-note-status" id="vault-note-status"></span>
-                    </div>
+                    <label for="vault-note-title-input">Note title</label><input id="vault-note-title-input" class="field-input vault-note-title-field" type="text" placeholder="Give this note a title" autocomplete="off" />
+                    <label for="vault-note-body">Your note</label><textarea id="vault-note-body" class="vault-note-textarea" placeholder="Write something worth keeping…" spellcheck="false"></textarea>
+                    <div class="vault-note-actions"><span class="vault-note-status" id="vault-note-status" role="status"></span><button type="button" class="btn-outline danger" id="vault-note-delete-btn">Delete note</button><button type="button" class="btn-primary" id="vault-note-save-btn">Save note</button></div>
+                    <p class="vault-fineprint">Changes save only when you choose Save. Save your draft before locking Vault.</p>
                   </div>
                 </div>
               </div>
             </div>
-
           </div>
         </section>
 
@@ -1074,10 +1185,12 @@
             <!-- Compact add-device strip -->
             <div class="sha-add-strip">
               <input id="shelly-ip-input" type="text" class="field-input sha-add-ip" placeholder="192.168.x.x" />
+              <label class="sha-relay-field">Relay index <input id="shelly-relay-input" type="number" min="0" max="255" step="1" value="0" class="field-input" aria-label="Shelly relay index" /></label>
               <button id="shelly-discover-btn" class="btn-outline btn-sm">Discover</button>
               <button id="shelly-status-btn" class="btn-outline btn-sm">Check Status</button>
               <input id="shelly-name-input" type="text" class="field-input sha-add-name" placeholder="Device name (optional)" />
               <button id="shelly-add-device-btn" class="btn-primary btn-sm">Add Device</button>
+              <button id="shelly-import-cache-btn" class="btn-outline btn-sm" hidden>Import browser devices</button>
             </div>
 
             <!-- Device cards — full width, no sidebar -->
@@ -1089,6 +1202,12 @@
               <pre id="shelly-status-raw"></pre>
             </details>
           </div>
+
+          <details class="card" id="home-assistant-section">
+            <summary>Optional Home Assistant connection</summary>
+            <p>Connect an existing Home Assistant server for this PIN session. Review its exact address and each light or switch action; navigation connects nothing.</p>
+            <div id="home-assistant-mount"></div>
+          </details>
 
           <!-- Hidden compat: renderShellyStatus still touches these IDs -->
           <div style="display:none;" aria-hidden="true">
@@ -1106,318 +1225,99 @@
 
 <!-- AUTOMATIONS PANEL -->
 <section class="panel-container" id="panel-automations" hidden>
-  <div class="card">
-    <div class="page-header">
-      <div>
-        <h2 class="page-title">Automations</h2>
-        <p class="page-subtitle">Bind Awareness events to local actions (LAN-only). No cloud.</p>
-      </div>
-      <div class="page-header-tags">
-        <div class="page-tag">Awareness → Actions</div>
-        <div class="page-tag">Local</div>
-      </div>
-    </div>
-
-    <div class="card-section">
-      <div class="section-heading">
-        <span>Create automation</span>
-        <span class="section-sub">Pick an event, choose a Shelly device, and save.</span>
-      </div>
-
-      <div class="auto-form-grid">
-        <div>
-          <div class="field-label">Trigger (Awareness event)</div>
-          <select id="auto-kind" class="field-input"></select>
-        </div>
-
-        <div>
-          <div class="field-label">Name (optional)</div>
-          <input id="auto-name" class="field-input" type="text" placeholder="e.g. Game started → Lights ON" />
-        </div>
-
-        <div>
-          <div class="field-label">Cooldown (sec)</div>
-          <input id="auto-cooldown" class="field-input" type="number" min="0" value="30" />
-        </div>
-
-        <div>
-          <div class="field-label">Device</div>
-          <select id="auto-device" class="field-input"></select>
-        </div>
-
-        <div>
-          <div class="field-label">Capability</div>
-          <select id="auto-capability" class="field-input">
-            <option value="switch.on">Turn ON</option>
-            <option value="switch.off">Turn OFF</option>
-            <option value="switch.toggle">Toggle</option>
-          </select>
-        </div>
-
-        <div class="auto-form-actions">
-          <button class="btn btn-primary" id="auto-create">Create & Enable</button>
-          <button class="btn btn-outline" id="auto-create-disabled">Create Disabled</button>
-        </div>
-      </div>
-
-      <div id="auto-status" class="auto-status"></div>
-    </div>
-
-    <div class="card-section">
-      <div class="section-heading">
-        <span>Active automations</span>
-        <span class="section-sub">Enable/disable or delete triggers.</span>
-      </div>
-
-      <div class="table-like" id="auto-table">
-        <div class="table-row header auto-row">
-          <div>On</div>
-          <div>Trigger</div>
-          <div>Action</div>
-          <div>Cooldown</div>
-          <div>Last fired</div>
-          <div></div>
-        </div>
-        <div id="auto-rows"></div>
-      </div>
-    </div>
-
-    <div class="card-section">
-      <div class="section-heading">
-        <span>Recent receipts</span>
-        <span class="section-sub">Latest trigger_fired / action_run receipts.</span>
-      </div>
-      <div id="auto-receipts" class="auto-receipts"></div>
-    </div>
-
-  </div>
-</section>
-
-<!-- VISUALIZER PANEL -->
-<section class="panel-container" id="panel-visualizer" hidden>
   <div class="page-header">
-    <div>
-      <h2 class="page-title">Visualizer</h2>
-      <p class="page-subtitle">
-        Storage Intelligence — find what’s big, what’s safe, and take action.
-      </p>
-    </div>
-
-    <!-- Machine-specific tags -->
-    <div class="page-header-tags">
-      <div class="page-tag">Local · Read-only</div>
-      <div class="page-tag" id="visualizer-device-tag">Device: (loading)</div>
-      <div class="page-tag" id="visualizer-role-tag">Role: —</div>
-    </div>
+    <div><h2 class="page-title">Automations</h2><p class="page-subtitle">Build a manual routine, review its exact targets and choose when to run it.</p></div>
+    <div class="page-header-tags"><span class="page-tag">Reviewed routines</span><span class="page-tag">TLI host</span></div>
   </div>
-
-  <!-- Drive tiles — auto-loaded on panel open -->
-  <div id="vis4-drives" class="vis4-drives">
-    <div class="vis4-drives-loading">Detecting drives…</div>
+  <div id="routine-workspace"></div>
+</section>
+<!-- Free Space: one workspace controller, explicit host observations -->
+<section class="panel-container" id="panel-visualizer" hidden>
+  <div class="page-header"><div><h2 class="page-title">Free Space</h2><p class="page-subtitle">Understand your storage. Review the files. Decide what to keep.</p></div>
+    <div class="page-header-tags fs-header-actions"><span class="page-tag" id="visualizer-device-tag" hidden>TLI host</span><span class="page-tag" id="visualizer-role-tag" hidden>Recorded observations</span><div id="fs-saved-places"></div></div>
   </div>
-
-  <!-- Scan input (advanced / custom folder) -->
-  <div class="card-section">
-    <div class="section-heading">
-      <span>Quick folders</span>
-      <span class="section-subhead muted">Or click a drive above to scan it instantly</span>
-    </div>
-
-    <!-- Quick folder chips — populated by JS from /visualizer/paths -->
-    <div id="vis-quick-folders" class="vis-quick-folders">
-      <button class="vis-qf-btn" data-vis-preset="downloads">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><path d="M10 3v9m0 0-3-3m3 3 3-3M4 15h12"/></svg>
-        Downloads
-      </button>
-      <button class="vis-qf-btn" data-vis-preset="desktop">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><rect x="2" y="3" width="16" height="11" rx="2"/><path d="M7 17h6M10 14v3"/></svg>
-        Desktop
-      </button>
-      <button class="vis-qf-btn" data-vis-preset="documents">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><path d="M6 2h8l4 4v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/></svg>
-        Documents
-      </button>
-      <button class="vis-qf-btn" data-vis-preset="pictures">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><rect x="2" y="4" width="16" height="13" rx="2"/><circle cx="7" cy="9" r="1.5"/><path d="m2 14 4-4 3 3 3-4 5 5"/></svg>
-        Pictures
-      </button>
-      <button class="vis-qf-btn" data-vis-preset="videos">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><rect x="2" y="4" width="16" height="12" rx="2"/><path d="M8 8l6 4-6 4V8z"/></svg>
-        Videos
-      </button>
-      <button class="vis-qf-btn" data-vis-preset="home">
-        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" width="13" height="13"><path d="M3 9.5 10 3l7 6.5V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5z"/><path d="M7 19v-7h6v7"/></svg>
-        Home
-      </button>
-    </div>
-
-    <div class="files-root-row" style="margin-top:10px">
-      <input id="visualizerPathInput" list="visualizerPathSuggestions" type="text"
-        placeholder="Or type any path…" autocomplete="off" />
-      <datalist id="visualizerPathSuggestions"></datalist>
-      <button class="pill-btn primary" id="visualizerScanBtn">Scan</button>
-    </div>
-
-    <div class="vis4-toggles">
-      <label class="pill-check">
-        <input type="checkbox" id="visualizerHideTiny" />
-        <span>Hide tiny blocks</span>
-      </label>
-      <label class="pill-check">
-        <input type="checkbox" id="visualizerHideNoisy" />
-        <span>Hide noisy folders (AppData, node_modules...)</span>
-      </label>
-
-      <button class="pill-btn ghost" id="visualizerResetViewBtn">Reset view</button>
-
-      <div class="spacer"></div>
-
-      <a class="tiny-link" id="visualizerDebugToggle" href="javascript:void(0)">raw JSON (debug)</a>
-    </div>
-  </div>
-
-  <!-- Results -->
-  <div id="vis4-summary" class="vis4-summary"></div>
-
-  <!-- Safe Cleanup Strip — shown above the results grid after a scan -->
-  <div class="vis4-cleanup-strip" id="vis4-cleanup-strip" hidden>
-    <div class="vis4-cleanup-strip-header">
-      <span class="vis4-cleanup-strip-title">🧹 Safe Cleanup</span>
-      <span class="vis4-cleanup-strip-sub">Detected cleanup opportunities — review before acting</span>
-    </div>
-    <div id="visualizerCleanupHints"></div>
-  </div>
-
-  <div class="card-section">
-    <div class="section-heading">
-      <span>Results</span>
-      <div class="section-actions">
-        <button class="pill-btn ghost" id="visualizerBackBtn" disabled>Back</button>
-        <div class="pill-group modePills" id="visualizerModePills">
-          <button class="pill-btn tiny active" data-mode="map">Map</button>
-          <button class="pill-btn tiny" data-mode="offenders">Largest files</button>
-          <button class="pill-btn tiny" data-mode="folders">Largest folders</button>
-          <button class="pill-btn tiny" data-mode="types">File types</button>
-        </div>
+  <div class="fs-layout">
+    <details class="fs-card fs-locations" id="fs-locations" open>
+      <summary>Browse locations <span id="fs-location-summary-hint">Choose a drive or folder</span></summary>
+      <div class="fs-location-body">
+      <div class="fs-heading"><h3 id="fs-locations-title">Locations</h3><button class="fs-button fs-small" id="fs-drives-refresh" type="button">Refresh</button></div>
+      <p class="fs-help">Drives on the computer hosting TLI.</p>
+      <label class="fs-field">Find a drive<input id="fs-drive-search" type="search" placeholder="Name or path" maxlength="256"></label>
+      <label class="fs-field">Sort drives<select id="fs-drive-sort"><option value="name">Name</option><option value="free">Least free space</option><option value="used">Most used</option></select></label>
+      <p id="fs-drives-status" class="fs-help" role="status">Choose Refresh to read drive capacity.</p>
+      <div id="vis4-drives" class="fs-drive-list"></div>
+      <h4>Quick folders</h4><p class="fs-help">Choose a folder, then start a scan.</p>
+      <div id="vis-quick-folders" class="fs-quick-folders"><button class="fs-button" type="button" data-vis-preset="downloads">Downloads</button><button class="fs-button" type="button" data-vis-preset="desktop">Desktop</button><button class="fs-button" type="button" data-vis-preset="documents">Documents</button><button class="fs-button" type="button" data-vis-preset="pictures">Pictures</button><button class="fs-button" type="button" data-vis-preset="videos">Videos</button><button class="fs-button" type="button" data-vis-preset="home">Home</button></div>
       </div>
-    </div>
-
-    <div class="vis4-toolbar">
-      <div class="vis4-search">
-        <input id="visualizerSearchInput" type="text" placeholder="Search name or path…" autocomplete="off" />
+    </details>
+    <div class="fs-main">
+      <section class="fs-card fs-location-hero" aria-labelledby="fs-location-title">
+        <span class="fs-eyebrow">SELECTED LOCATION</span><h3 id="fs-location-title">Choose where to look</h3><p id="fs-location-capacity" class="fs-help">Choose a drive or enter a folder on the TLI host. Selecting a location does not scan it.</p>
+        <label class="fs-field">Folder or drive on the TLI host<input id="visualizerPathInput" type="text" list="visualizerPathSuggestions" maxlength="4096" placeholder="Choose a location or enter an absolute path" autocomplete="off" spellcheck="false"></label><datalist id="visualizerPathSuggestions"></datalist>
+        <div class="fs-scan-controls"><label class="fs-field">Scan depth<select id="fs-profile"><option value="quick">Quick · up to 15 seconds</option><option value="deep">Deep · up to 5 minutes</option></select></label><button id="visualizerScanBtn" class="fs-button fs-primary" type="button">Scan selected location</button></div>
+        <details class="fs-policy"><summary>Review scan limits &amp; exclusions</summary><p id="fs-policy-text">Quick scans inspect up to 50,000 entries and 18 folder levels. Deep scans inspect up to 500,000 entries and 30 levels. Both can finish with partial coverage.</p><p>By default, app/cache and development folders such as AppData, .git and node_modules are excluded. Links always stay excluded. No files are moved or deleted.</p><label class="fs-check"><input id="fs-include-excluded" type="checkbox" disabled> Include excluded app/cache folders in this Deep scan</label><p id="fs-exclusion-help">Available with Deep. This may inspect many more files; cleanup restrictions still apply.</p></details>
+        <div id="fs-job" class="fs-job" hidden><div class="fs-heading"><strong id="fs-job-title"></strong><button id="fs-job-stop" type="button" class="fs-button">Stop scan</button></div><p id="fs-job-progress" role="status"></p><button id="fs-job-check" type="button" class="fs-button" hidden>Check status</button></div>
+        <p id="visualizerStatus" class="fs-status" role="status"></p>
+      </section>
+      <div class="fs-tabs" role="tablist" aria-label="Storage workspace">
+        <button id="fs-tab-explore" type="button" role="tab" aria-selected="true" aria-controls="fs-view-explore" data-fs-tab="explore">Explore</button>
+        <button id="fs-tab-large_files" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="fs-view-large_files" data-fs-tab="large_files">Large files</button>
+        <button id="fs-tab-duplicates" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="fs-view-duplicates" data-fs-tab="duplicates">Duplicates</button>
+        <button id="fs-tab-common_folders" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="fs-view-common_folders" data-fs-tab="common_folders">Common folders</button>
+        <button id="fs-tab-history" type="button" role="tab" aria-selected="false" tabindex="-1" aria-controls="fs-view-history" data-fs-tab="history">Saved scans</button>
       </div>
-
-      <div class="vis4-filters">
-        <select id="visualizerCategoryFilter">
-          <option value="">All categories</option>
-          <option value="Models">Models</option>
-          <option value="Video">Video</option>
-          <option value="Archives">Archives</option>
-          <option value="Images">Images</option>
-          <option value="Audio">Audio</option>
-          <option value="Dev">Dev</option>
-          <option value="Docs">Docs</option>
-          <option value="Other">Other</option>
-        </select>
-
-        <input id="visualizerExtFilter" type="text" placeholder=".zip .mp4 .gguf" />
-
-        <select id="visualizerMinSize">
-          <option value="0">Any size</option>
-          <option value="50">≥ 50 MB</option>
-          <option value="200">≥ 200 MB</option>
-          <option value="500">≥ 500 MB</option>
-          <option value="1024">≥ 1 GB</option>
-        </select>
-
-        <button class="pill-btn" id="visualizerClearFiltersBtn">Clear</button>
-      </div>
-
-      <div class="vis4-actions">
-        <button class="pill-btn primary" id="visualizerSendToFilesBtn" disabled>Open in Files</button>
-      </div>
-    </div>
-
-    <div class="vis4-grid">
-      <!-- Left: Folder tree -->
-      <div class="vis4-pane">
-        <div class="vis4-pane-head">
-          <div class="h">Folders</div>
-          <div class="p" id="visualizerBreadcrumb">—</div>
-        </div>
-        <div class="vis4-tree" id="visualizerFolderTree">
-          <div class="vis4-empty">Scan a folder to begin.</div>
-        </div>
-      </div>
-
-      <!-- Center: Table -->
-      <div class="vis4-pane">
-        <div class="vis4-pane-head">
-          <div class="h" id="visualizerCenterTitle">Largest files</div>
-          <div class="p" id="visualizerCenterSubtitle">—</div>
-        </div>
-
-        <div id="vis4-treemap-container" class="vis4-treemap-container" style="display:none;"></div>
-
-        <div class="vis4-table-wrap">
-          <table class="vis4-table">
-            <thead>
-              <tr>
-                <th class="col-name" data-sort="name">Name</th>
-                <th class="col-type" data-sort="category">Type</th>
-                <th class="col-size" data-sort="size">Size</th>
-                <th class="col-path" data-sort="path">Path</th>
-              </tr>
-            </thead>
-            <tbody id="visualizerTableBody">
-              <tr><td colspan="4" class="vis4-empty-row">No results yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="vis4-footer">
-          <div class="muted" id="visualizerStatusLine">—</div>
-          <div class="muted" id="visualizerSelectionLine">No selection.</div>
-        </div>
-      </div>
-
-      <!-- Right: Insights -->
-      <div class="vis4-pane">
-        <div class="vis4-pane-head">
-          <div class="h">Insights</div>
-          <div class="p" id="visualizerInsightsSubtitle">—</div>
-        </div>
-
-        <div class="vis4-cards">
-          <div class="vis4-card">
-            <div class="t">Storage breakdown</div>
-            <div class="bars" id="visualizerTypeBars"></div>
+      <section id="fs-view-explore" role="tabpanel" aria-labelledby="fs-tab-explore">
+        <div id="fs-empty" class="fs-card fs-empty"><span class="fs-empty-icon" aria-hidden="true">▥</span><h3>A clearer view of your storage</h3><p>Start with Downloads or a folder you recognize. A scan records which files and folders use space; it does not decide what you should delete.</p><ol><li>Choose a location above.</li><li>Start a Quick scan.</li><li>Inspect the largest items and review any cleanup.</li></ol></div>
+        <div id="storage-results" class="fs-card" hidden>
+          <div id="vis4-summary" class="fs-observation" aria-live="polite"></div>
+          <div class="fs-heading fs-explorer-heading"><div><h3 id="visualizerCenterTitle" tabindex="-1">Explorer</h3><p id="visualizerCenterSubtitle" class="fs-path"></p></div><button id="visualizerBackBtn" type="button" class="fs-button" disabled>Up one folder</button></div>
+          <div id="visualizerModePills" class="fs-segments" aria-label="Explore as"><button type="button" data-mode="map" aria-pressed="true">Space map + list</button><button type="button" data-mode="files" aria-pressed="false">All entries</button><button type="button" data-mode="folders" aria-pressed="false">Folders</button><button type="button" data-mode="types" aria-pressed="false">File types</button></div>
+          <nav id="fs-map-breadcrumbs" class="fs-map-breadcrumbs" aria-label="Recorded folder location"></nav>
+          <details id="fs-explorer-filters" class="fs-filter-disclosure"><summary>Search &amp; filters</summary><div class="fs-filters"><label class="fs-field">Search this observation<input id="visualizerSearchInput" type="search" maxlength="256" placeholder="Name or path"></label><label class="fs-field">File type<select id="visualizerCategoryFilter"><option value="all">All types</option></select></label><label class="fs-field">Minimum size<select id="visualizerMinSize"><option value="0">Any size</option><option value="1048576">1 MiB</option><option value="104857600">100 MiB</option><option value="1073741824">1 GiB</option></select></label></div></details>
+          <p id="visualizerStatusLine" class="fs-help" role="status"></p>
+          <div id="fs-mobile-map-list" class="fs-segments fs-mobile-map-list" aria-label="Space map presentation"><button id="fs-mobile-map" type="button" aria-pressed="true">Map</button><button id="fs-mobile-list" type="button" aria-pressed="false">List</button></div>
+          <div id="visualizerDetailsBar" class="fs-selection" hidden><div><strong id="visualizerDetailsName"></strong><p id="visualizerDetailsPath" class="fs-path"></p><p id="visualizerDetailsSize" class="fs-help"></p></div><div class="fs-actions"><div id="fs-selected-cleanup"></div><button id="visualizerCopyPathBtn" class="fs-button" type="button">Copy path</button><button id="visualizerSendToFilesBtn" class="fs-button" type="button">Review folder in Files</button></div></div>
+          <div id="fs-map-workbench" class="fs-map-workbench" data-surface="map">
+            <div id="vis4-treemap-container" class="fs-map"></div>
+            <div id="fs-map-list-panel" class="fs-map-list-panel">
+              <div id="fs-table-wrap" class="fs-table-wrap"><table class="fs-table"><caption class="sr-only">Recorded entries corresponding to the space map; unknown sizes are outside proportional area</caption><thead><tr><th data-sort="name" aria-sort="none"><button type="button">Name / path</button></th><th data-sort="category" aria-sort="none"><button type="button">Type</button></th><th data-sort="size" aria-sort="descending"><button type="button">Recorded size</button></th><th>Review</th></tr></thead><tbody id="visualizerTableBody"></tbody></table></div>
+              <div id="fs-paging" class="fs-paging"><button id="fs-page-prev" class="fs-button" type="button">Previous</button><span id="fs-page-label"></span><button id="fs-page-next" class="fs-button" type="button">Next</button></div>
+            </div>
           </div>
-
-          <div class="vis4-card">
-            <div class="t">Top folders</div>
-            <div class="list" id="visualizerTopFolders"></div>
-          </div>
-
+          <div id="visualizerTypeBars" class="fs-types" hidden></div>
+          <div class="fs-actions"><button id="fs-ask-chat" type="button" class="fs-button">Prepare a question about this scan</button><button id="fs-open-cleanup" type="button" class="fs-button">Review selected files</button></div>
         </div>
-      </div>
+      </section>
+      <section id="fs-view-large_files" role="tabpanel" aria-labelledby="fs-tab-large_files" hidden class="fs-card fs-tool"><h3>Find large files</h3><p class="fs-help">Search the selected location with the chosen scan depth. Previous results stay visible while a replacement search runs.</p><label class="fs-field fs-inline-field">Minimum file size (MiB)<input id="vis4-largefiles-minmb" type="number" min="1" max="50000" value="100"></label><button id="fs-start-large_files" type="button" class="fs-button fs-primary">Find large files</button><p id="fs-large_files-status" role="status" class="fs-status">No search has run.</p><div id="fs-large_files-results"></div></section>
+      <section id="fs-view-duplicates" role="tabpanel" aria-labelledby="fs-tab-duplicates" hidden class="fs-card fs-tool"><h3>Find duplicate copies</h3><p class="fs-help">Matching content is only one reason to review a file. Copies may be needed by different apps or backups. Choose a copy to keep before selecting other copies.</p><button id="fs-start-duplicates" type="button" class="fs-button fs-primary">Check for duplicates</button><p id="fs-duplicates-status" role="status" class="fs-status">No search has run.</p><div id="fs-duplicates-results"></div></section>
+      <section id="fs-view-common_folders" role="tabpanel" aria-labelledby="fs-tab-common_folders" hidden class="fs-card fs-tool"><h3>Review common folders</h3><p class="fs-help">This checks supported common folders on the TLI host, which may be on different drives from your selected location. Nothing is removed.</p><button id="fs-start-common_folders" type="button" class="fs-button fs-primary">Check common folders</button><p id="fs-common_folders-status" role="status" class="fs-status">No search has run.</p><div id="fs-common_folders-results"></div></section>
+      <section id="fs-view-history" role="tabpanel" aria-labelledby="fs-tab-history" hidden></section>
+      <details id="storage-cleanup-review" class="fs-card fs-cleanup"><summary>Cleanup review · no files selected</summary>
+  <section class="storage-cleanup" aria-labelledby="cleanup-title">
+    <h3 id="cleanup-title">Review cleanup</h3>
+    <p>Select individual files from scan or search results. Nothing is selected automatically. Protected and restricted locations stay blocked.</p>
+    <p id="cleanup-count">0 of 100 files selected</p>
+    <details><summary>Selected files</summary><ul id="cleanup-selection"></ul></details>
+    <div class="cleanup-buttons">
+      <button id="cleanup-check" type="button" class="pill-btn" disabled>Review selected files</button>
+      <button id="cleanup-clear" type="button" class="pill-btn ghost" disabled>Clear selection</button>
     </div>
-
-    <!-- Details bar -->
-    <div class="vis4-details" id="visualizerDetailsBar" style="display:none;">
-      <div class="left">
-        <div class="name" id="visualizerDetailsName">—</div>
-        <div class="path" id="visualizerDetailsPath">—</div>
-      </div>
-      <div class="right">
-        <div class="size" id="visualizerDetailsSize">—</div>
-        <button class="pill-btn" id="visualizerCopyPathBtn">Copy path</button>
-      </div>
+    <p id="cleanup-error" role="status"></p>
+    <div id="cleanup-preview"></div>
+    <div class="cleanup-buttons">
+      <button id="cleanup-execute" type="button" class="pill-btn primary" hidden disabled>Move reviewed files to Trash</button>
+      <button id="cleanup-result-check" type="button" class="pill-btn" hidden>Check cleanup result</button>
     </div>
-
-    <!-- Debug JSON -->
-    <pre id="visualizer-json" class="vis4-json" style="display:none;"></pre>
+    <div id="cleanup-receipt" aria-live="polite"></div>
+    <details><summary>Recent cleanup receipts</summary>
+      <button id="cleanup-history-load" type="button" class="pill-btn ghost">Load cleanup receipts</button>
+      <div id="cleanup-history"></div>
+    </details>
+  </section>
+      </details>
+    </div>
   </div>
+  <dialog id="fs-handoff" class="fs-dialog" aria-labelledby="fs-handoff-title"><h3 id="fs-handoff-title"></h3><p id="fs-handoff-help"></p><pre id="fs-handoff-text"></pre><p id="fs-handoff-status" role="status"></p><div class="fs-actions"><button id="fs-handoff-confirm" type="button" class="fs-button fs-primary"></button><button id="fs-handoff-close" type="button" class="fs-button">Close</button></div></dialog>
 </section>
 
 <section class="panel-container" id="panel-files" hidden>
@@ -1595,13 +1495,13 @@
     <div class="card-header-row">
       <div>
         <div class="card-title">Printers</div>
-        <div class="card-subtitle" id="printers-subtitle">Inventory + queue status. No cloud.</div>
+        <div class="card-subtitle" id="printers-subtitle">Host printer inventory and reported queue status.</div>
       </div>
       <div class="card-header-actions">
-        <button class="btn-ghost" data-action="refreshPrinters">Refresh</button>
-        <button class="btn-ghost" data-action="openScan">Scan</button>
-        <button class="btn-ghost" data-action="testPrint">Test page</button>
-        <button class="btn-ghost" data-action="openAddPrinter">Manage</button>
+        <button id="printers-refresh-btn" class="btn-ghost" data-action="refreshPrinters">Refresh printers</button>
+        <button id="printers-open-scan-btn" class="btn-ghost" data-action="openScan">Open scanner app</button>
+        <button id="printers-test-page-btn" class="btn-ghost" data-action="testPrint">Send test page</button>
+        <button id="printers-manage-btn" class="btn-ghost" data-action="openAddPrinter">Printer settings</button>
       </div>
     </div>
 
@@ -1653,7 +1553,7 @@
   <div class="page-header">
     <div>
       <h2 class="page-title">Print &amp; Scan Studio</h2>
-      <p class="page-subtitle">Universal print and scan — any brand, any driver, no cloud.</p>
+      <p class="page-subtitle">Print and scan using supported devices and drivers on the TLI host.</p>
     </div>
     <div class="page-header-tags">
       <div class="page-tag" id="ps-platform-tag">Local</div>
@@ -1681,7 +1581,7 @@
          ondrop="psDrop(event)">
       <div class="ps-dropzone-icon">📄</div>
       <div class="ps-dropzone-label">Drop file here or click to browse</div>
-      <div class="ps-dropzone-sub">PDF, Word, images, text — anything printable</div>
+      <div class="ps-dropzone-sub">Choose a document or image. Supported formats depend on the host and its installed print tools.</div>
       <div class="ps-dropzone-file" id="ps-chosen-file" hidden></div>
       <input type="file" id="ps-file-input" style="display:none" data-action-change="psPickFile">
     </div>
@@ -1822,6 +1722,16 @@
 
 </section>
 
+        <section class="panel-container" id="panel-troubleshooting" hidden>
+          <div class="page-header"><div><h2 class="page-title">Troubleshooting</h2><p class="page-subtitle">Keep the problem, what you tried and what helped in one place.</p></div></div>
+          <div id="troubleshooting-workspace"></div>
+        </section>
+
+        <!-- One native Companion controller; Settings and search link here. -->
+        <section class="panel-container" id="panel-companion" hidden>
+          <div class="page-header"><div><h2 class="page-title">Phone Companion</h2><p class="page-subtitle">Pair the installed TLI Companion app and manage its access to this host.</p></div></div>
+        </section>
+
         <!-- MESH / NODES PANEL -->
         <section class="panel-container" id="panel-mesh" hidden>
           <div class="card mcd-card">
@@ -1829,14 +1739,13 @@
             <!-- Header -->
             <div class="mcd-header">
               <div class="mcd-header-left">
-                <h2 class="mcd-title">Mesh Control Center</h2>
-                <p class="mcd-subtitle">Live health across every TLI node on your network.</p>
+                <h2 class="mcd-title">Your computers</h2>
+                <p class="mcd-subtitle">Reported connections and capabilities, with a separate identity for each computer.</p>
               </div>
               <div class="mcd-header-right">
                 <span class="mcd-last-updated" id="mcd-last-updated"></span>
-                <button class="mcd-add-sat-btn" id="mcd-add-sat-btn" title="Add a satellite phone to the mesh">
-                  📱 Add Phone
-                </button>
+                <button class="btn-primary" data-panel-target="panel-companion">Connect phone</button>
+                <details class="ui-connection-secondary"><summary>Browser connection</summary><p>Connect a browser as a satellite. This invitation is separate from the native Phone Companion app.</p><button class="mcd-add-sat-btn" id="mcd-add-sat-btn" title="Create a browser-satellite invitation">Browser satellite</button></details>
                 <button class="mcd-refresh-btn" id="mcd-refresh-btn" title="Refresh now">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
                   Refresh
@@ -1852,7 +1761,7 @@
             <!-- Satellite phones section (shown only when satellites are registered) -->
             <div id="mcd-satellites-section" class="mcd-satellites-section" hidden>
               <div class="mcd-sat-section-head">
-                <span class="mcd-sat-section-title">📱 Satellite Phones</span>
+                <span class="mcd-sat-section-title">Browser satellites</span>
                 <span class="mcd-sat-section-sub" id="mcd-sat-count"></span>
               </div>
               <div class="mcd-sat-grid" id="mcd-sat-grid"></div>
@@ -1918,7 +1827,7 @@
   <div class="mesh-host-topbar">
     <div class="mesh-host-topbar-left">
       <div class="mesh-host-title">Host directory</div>
-      <div class="mesh-host-sub">Approvals + safe admin. Presence + quick-launch live in <strong>TLI Chat</strong>.</div>
+      <div class="mesh-host-sub">Approvals + safe admin. Presence + quick-launch live in <strong>LAN Chat</strong>.</div>
     </div>
     <div class="mesh-host-topbar-right">
       <span class="mesh-pill host">Host-only controls</span>
@@ -1988,7 +1897,7 @@
       </div>
 
       <div class="mesh-directory-status" id="mesh-directory-status">
-        Mesh v2.1: Presence is shown in <strong>TLI Chat</strong>. This panel is for Host approval + admin.
+        Mesh v2.1: Presence is shown in <strong>LAN Chat</strong>. This panel is for Host approval + admin.
       </div>
 
       <div class="mesh-device-list" id="mesh-directory-list">
@@ -2066,41 +1975,53 @@
 
         
 
-<!-- GAMES PANEL — AI Game Optimizer v2 -->
+<!-- PERFORMANCE & APPS — existing panel identity retained -->
 <section class="panel-container" id="panel-games" hidden>
-  <div class="card">
-    <div class="page-header">
-      <div>
-        <h2 class="page-title">Game Optimizer</h2>
-        <p class="page-subtitle">AI-powered performance advisor. Reads your hardware, detects your game, and gives expert-level settings guidance — no Googling required.</p>
-      </div>
-      <div class="page-header-tags">
-        <div class="page-tag" id="go-ai-tag">AI</div>
-        <div class="page-tag">Local</div>
-      </div>
+  <div class="performance-workspace" id="performance-workspace">
+    <header class="page-header"><div><h2 class="page-title">Performance &amp; apps</h2><p class="page-subtitle">See what your computer and one app are doing. Start with evidence, then decide what to try.</p></div><span class="page-tag">Read-only observation</span></header>
+    <p id="perf-host" class="perf-muted">This observes the computer hosting TLI. Other selected computers are not targeted.</p>
+    <div class="perf-layout">
+      <section class="card perf-setup" id="perf-setup" aria-labelledby="perf-setup-title"><h3 id="perf-setup-title">Which app feels slow?</h3><p>Keep its usual workload running, then choose the exact process to observe.</p>
+        <div class="perf-starters"><button type="button" class="btn-outline" data-perf-starter="obs">Streaming or recording</button><button type="button" class="btn-outline" data-perf-starter="">A game or another app</button><button type="button" class="btn-outline" data-perf-starter="chrome">Browser slowdown</button></div>
+        <div class="perf-picker"><label for="perf-search">App name or process ID</label><input id="perf-search" type="search" maxlength="120" placeholder="For example: obs, browser, or a PID" autocomplete="off">
+        <button type="button" class="btn-outline" id="perf-refresh">Read process list</button>
+        <label for="perf-processes">Running app on this host</label><select id="perf-processes"><option value="">Read the process list first</option></select></div>
+        <div class="perf-session-review"><div class="perf-session"><strong>30 seconds</strong><span>One sample per second · CPU and memory</span></div>
+        <p class="perf-muted">No settings are changed. App CPU uses the whole host’s logical CPU capacity; memory is resident memory, including shared pages.</p>
+        <div class="perf-actions"><button type="button" class="btn-primary" id="perf-start" disabled>Start observation</button><button type="button" class="btn-outline" id="perf-stop" hidden>Stop observation</button><button type="button" class="btn-outline" id="perf-resolve" hidden>Check original request</button><button type="button" class="btn-outline" id="perf-new-request" hidden>Review a new observation</button></div>
+        <p class="perf-muted">Leaving this view does not stop the host. Unsaved results are retained for 10 minutes, up to 20 observations.</p></div>
+        <p id="perf-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="card perf-observation" id="perf-observation" aria-labelledby="perf-observation-title" hidden><h3 id="perf-observation-title">Recorded performance</h3><div id="perf-result"></div>
+        <div class="perf-actions"><button type="button" class="btn-primary" id="perf-save" hidden>Save report</button><button type="button" class="btn-outline" id="perf-refresh-observations">Refresh observations</button></div>
+        <div id="perf-saved-actions" class="perf-actions" hidden><button type="button" class="btn-outline" id="perf-open-report">Open saved report</button><button type="button" class="btn-outline" id="perf-discuss">Review for AI Chat</button><button type="button" class="btn-outline" id="perf-link">Link to Troubleshooting</button></div>
+        <details class="perf-details"><summary>Recent observations on this host</summary><div id="perf-history"></div></details>
+      </section>
     </div>
-
+    <details class="card perf-game-advice"><summary><strong>Game advice &amp; existing settings</strong><span>Optional AI guidance · separate from measured results</span></summary>
+      <div class="perf-game-body"><p>Read hardware or one supported game’s settings when you choose. Advice does not measure FPS, identify a fault, or change settings. Config readers support Cyberpunk 2077, The Witcher 3 and Red Dead Redemption 2.</p>
     <!-- Context row: Game + Hardware -->
     <div class="go-context-row">
       <div class="go-context-block">
-        <label class="go-label">🎮 Game</label>
+        <label class="go-label" for="go-game-input">Game name</label>
         <div class="go-game-row">
-          <input id="go-game-input" class="go-game-input" type="text" placeholder="Auto-detecting…" autocomplete="off" />
+          <input id="go-game-input" class="go-game-input" type="text" placeholder="Enter the exact game name" autocomplete="off" />
           <button class="btn btn-ghost btn-sm" id="go-detect-btn" title="Detect running game">Detect</button>
         </div>
+        <div class="perf-actions"><button type="button" class="btn-outline" id="go-read-config-btn">Read this game’s settings</button><button type="button" class="btn-outline" id="go-read-hardware-btn">Read host hardware</button></div>
         <div id="go-detect-status" class="go-detect-status"></div>
       </div>
 
       <div class="go-context-block">
-        <label class="go-label">🖥️ Your Hardware</label>
-        <div id="go-hw-pills" class="go-hw-pills"><span class="go-hw-loading">Loading…</span></div>
+        <label class="go-label">Host hardware</label>
+        <div id="go-hw-pills" class="go-hw-pills"><span class="go-hw-loading">Not read yet.</span></div>
       </div>
     </div>
 
     <!-- Current Settings (populated by config reader) -->
     <div class="go-settings-block" id="go-settings-block" style="display:none">
       <div class="go-settings-header">
-        <label class="go-label">📋 Current Settings</label>
+        <label class="go-label">Read game settings</label>
         <div class="go-config-badge" id="go-config-badge"></div>
       </div>
       <div id="go-settings-grid" class="go-settings-grid"></div>
@@ -2108,29 +2029,29 @@
 
     <!-- Optimization goal -->
     <div class="go-section">
-      <label class="go-label">Optimization Goal</label>
+      <label class="go-label">Requested goal</label>
       <div class="go-presets" id="go-presets">
         <button class="go-preset" data-preset="stable_60">
           <span class="go-preset-icon">🎯</span>
           <span class="go-preset-name">Stable 60 FPS</span>
-          <span class="go-preset-desc">Consistent frame-time, no stutter</span>
+          <span class="go-preset-desc">A target to discuss, not a measured result</span>
         </button>
         <button class="go-preset" data-preset="high_fps">
           <span class="go-preset-icon">⚡</span>
           <span class="go-preset-name">High FPS</span>
-          <span class="go-preset-desc">Maximum frames, minimum latency</span>
+          <span class="go-preset-desc">Favor responsiveness</span>
         </button>
         <button class="go-preset" data-preset="max_visual">
           <span class="go-preset-icon">✨</span>
           <span class="go-preset-name">Max Visuals</span>
-          <span class="go-preset-desc">Best image quality, stays stable</span>
+          <span class="go-preset-desc">Favor image quality</span>
         </button>
       </div>
     </div>
 
     <!-- Free-form question -->
     <div class="go-section">
-      <label class="go-label">Or ask anything specific</label>
+      <label class="go-label" for="go-question">Question for AI</label>
       <div class="go-ask-row">
         <textarea id="go-question" class="go-question" rows="2"
           placeholder="e.g. What's causing stutters in open world areas? Should I enable DLSS on my GPU? What Windows tweaks help the most?"></textarea>
@@ -2151,6 +2072,8 @@
       <div id="go-output" class="go-output"></div>
     </div>
 
+      </div>
+    </details>
   </div>
 </section>
 <!-- SCRIPTS PANEL -->
@@ -2205,7 +2128,7 @@
             <header class="builder-header">
               <div class="builder-header-title">
                 <h2 class="builder-title">TLI Builder</h2>
-                <span class="builder-subtitle">Local AI workspace for projects, files, photos, and guarded code changes.</span>
+                <span class="builder-subtitle">Local code agent for guarded repo changes.</span>
               </div>
               <div class="builder-header-project">
                 <button id="builder-project-btn" class="builder-project-btn" type="button" aria-haspopup="true" aria-expanded="false">
@@ -2261,8 +2184,13 @@
             </header>
 
             <section class="builder-hero">
+              <div class="builder-mode-strip" role="group" aria-label="Builder mode">
+                <button class="builder-mode-btn is-active" data-builder-mode="build" type="button" aria-pressed="true">Build</button>
+                <button class="builder-mode-btn" data-builder-mode="plan" type="button" aria-pressed="false">Plan</button>
+                <button class="builder-mode-btn" data-builder-mode="inspect" type="button" aria-pressed="false">Inspect</button>
+              </div>
               <textarea id="builder-chat-input" class="builder-hero-input"
-                        placeholder="Tell the local agent what you want to do in this project. It can answer, inspect files, plan work, or run an approved task."></textarea>
+                        placeholder="Describe the repo change or investigation. Builder will inspect, plan, prepare a diff, then wait for approval."></textarea>
               <div id="builder-attach-dropzone" class="builder-attach-dropzone" tabindex="0">
                 <input id="builder-attach-input" type="file" multiple hidden />
                 <button id="builder-attach-btn" class="builder-attach-btn" type="button">Attach files or photos</button>
@@ -2270,12 +2198,12 @@
               </div>
               <div id="builder-attachment-tray" class="builder-attachment-tray" aria-live="polite"></div>
               <div class="builder-hero-actions">
-                <button id="builder-chat-send-btn" class="btn-primary builder-hero-primary" type="button">Send</button>
-                <button id="builder-code-change-btn" class="btn-outline" type="button">Run agent task</button>
-                <button id="builder-chat-plan-btn" class="btn-outline" type="button">Plan task</button>
-                <button id="builder-chat-task-btn" class="btn-outline" type="button">Inspect project</button>
-                <button id="builder-new-project-open-btn" class="btn-outline" type="button">New project</button>
+                <button id="builder-start-btn" class="btn-primary builder-hero-primary" type="button">Start</button>
+                <button id="builder-chat-send-btn" class="btn-outline" type="button">Ask</button>
+                <button id="builder-new-project-open-btn" class="btn-outline" type="button">Open/Create repo</button>
               </div>
+              <div id="builder-readiness" class="builder-readiness" aria-live="polite"></div>
+              <p class="small-meta">Unfinished drafts stay with each project in this page. Opening another project requires a fresh diff review. Locking TLI or closing this page clears drafts.</p>
               <div class="builder-hero-hints">
                 <span class="builder-hero-hints-label">Try</span>
                 <button class="builder-hint-chip" data-builder-prompt="Explain this project architecture." type="button">explain this project</button>
@@ -2582,17 +2510,22 @@
             <div class="card settings-main-card">
               <div class="card-header-row">
                 <div>
-                  <div class="card-title">Settings <span class="badge">Local only</span></div>
-                  <div class="card-subtitle">AI, appearance, identity, and security — all local. Nothing leaves your network.</div>
+                  <div class="card-title">Settings</div>
+                  <div class="card-subtitle">Make TLI work for you. Each section explains what changes and where it is saved.</div>
                 </div>
+              </div>
+              <div class="settings-search-box">
+                <label for="settings-search">Find a setting</label>
+                <div class="settings-search-input-row"><input id="settings-search" type="search" placeholder="Try theme, AI model, PIN or backup" autocomplete="off" /><button id="settings-find-clear" type="button" hidden>Clear</button></div>
+                <p id="settings-search-status" role="status" aria-live="polite"></p>
               </div>
 
               <!-- ── AI Model ─────────────────────────────────────────────── -->
               <div class="settings-section" id="settings-section-ai-model">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">AI Model</div>
-                    <div class="settings-section-subtitle">Choose your bundled offline model. All models run locally — Apache 2.0.</div>
+                    <div class="settings-section-title">Local AI model</div>
+                    <div class="settings-section-subtitle">Install or select a model for the computer hosting TLI. Downloading and running are separate steps.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2615,15 +2548,18 @@
               <div class="settings-section" id="settings-section-intelligence">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Intelligence</div>
-                    <div class="settings-section-subtitle">AI routing, LAN offloading, and hardware profile.</div>
+                    <div class="settings-section-title">Where AI runs</div>
+                    <div class="settings-section-subtitle">Choose which computer answers your AI requests.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
                 <div class="settings-section-body">
+                  <fieldset class="settings-routing-group" aria-describedby="settings-routing-browser-help">
+                    <legend>This browser</legend>
+                    <p class="settings-routing-help" id="settings-routing-browser-help">These choices apply only to chats from this browser.</p>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">AI source</div>
+                      <div class="settings-row-title">Chat source for this browser</div>
                       <div class="settings-row-desc" id="settings-ai-source-desc">Auto (recommended)</div>
                     </div>
                     <div class="settings-row-actions">
@@ -2632,8 +2568,8 @@
                   </div>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Preferred LAN host</div>
-                      <div class="settings-row-desc">When LAN AI is selected. Auto-select picks the fastest peer.</div>
+                      <div class="settings-row-title">Preferred TLI computer</div>
+                      <div class="settings-row-desc">Used when LAN AI is selected. Changes save immediately in this browser.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-ai-lan-host" class="field-select compact-select">
@@ -2641,22 +2577,26 @@
                       </select>
                     </div>
                   </div>
+                  </fieldset>
+                  <fieldset class="settings-routing-group" aria-describedby="settings-routing-host-help">
+                    <legend>TLI host</legend>
+                    <p class="settings-routing-help" id="settings-routing-host-help">Shared settings for the computer running TLI. Use Save below to apply changes.</p>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Prefer mesh AI</div>
-                      <div class="settings-row-desc">Route AI requests to the most capable peer before using local inference. Ideal for low-spec machines.</div>
+                      <div class="settings-row-title">Prefer another TLI computer for AI</div>
+                      <div class="settings-row-desc" id="settings-prefer-mesh-help">Use an available AI computer on your network before local inference.</div>
                     </div>
                     <div class="settings-row-actions">
-                      <label class="toggle-pill">
-                        <input type="checkbox" id="settings-prefer-mesh-ai">
-                        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                      <label class="settings-routing-switch">
+                        <input type="checkbox" id="settings-prefer-mesh-ai" role="switch" aria-label="Prefer another TLI computer for AI" aria-describedby="settings-prefer-mesh-help">
+                        <span class="toggle-track" aria-hidden="true"><span class="toggle-thumb"></span></span>
                       </label>
                     </div>
                   </div>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">CPU offload threshold</div>
-                      <div class="settings-row-desc">Offload to mesh when local CPU exceeds this %. Set 100 to disable.</div>
+                      <div class="settings-row-title">CPU pressure threshold</div>
+                      <div class="settings-row-desc">Consider another AI computer at this CPU use. Memory pressure can also affect routing.</div>
                     </div>
                     <div class="settings-row-actions settings-row-actions--inline">
                       <input type="number" id="settings-mesh-cpu-threshold" class="field-input compact-input settings-num-input"
@@ -2664,24 +2604,26 @@
                       <span class="settings-unit">%</span>
                     </div>
                   </div>
+                  </fieldset>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">System profile</div>
+                      <div class="settings-row-title">Host performance profile</div>
                       <div class="settings-row-desc" id="settings-system-profile-meta">Suggested defaults for your hardware tier.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-system-profile" class="field-select compact-select">
                         <option value="balanced">Balanced</option>
                         <option value="lite">Lite (low RAM)</option>
-                        <option value="power">Power (max VRAM)</option>
+                        <option value="power">Power</option>
                       </select>
                     </div>
                   </div>
                   <div class="button-row">
-                    <button class="btn-primary" id="settings-mesh-ai-save">Save Intelligence Settings</button>
-                    <button class="btn-outline" id="settings-system-profile-save">Save Profile</button>
+                    <button class="btn-primary" id="settings-mesh-ai-save">Save host AI routing</button>
+                    <button class="btn-outline" id="settings-system-profile-save">Save host profile</button>
                   </div>
                   <div class="small-meta" id="settings-mesh-ai-status"></div>
+                  <p class="small-meta" id="settings-profile-help">The profile controls background activity limits. It does not switch models or replace chat preferences.</p>
                 </div>
               </div>
 
@@ -2690,12 +2632,50 @@
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">Appearance</div>
-                    <div class="settings-section-subtitle">Theme and visual preferences — saved in this browser.</div>
+                    <div class="settings-section-subtitle">Changes apply and save immediately in this browser.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
                 <div class="settings-section-body">
-                  <div class="field-label">Theme</div>
+                  <fieldset class="interface-choice-group" aria-describedby="tli-interface-help">
+                    <legend>Choose your TLI interface</legend>
+                    <p id="tli-interface-help">Switch the whole workspace: navigation, page layouts, chat and Settings. Your color theme is a separate choice below.</p>
+                    <div class="interface-choice-options">
+                      <label class="interface-choice">
+                        <input type="radio" name="tli-interface-style" value="modern" checked>
+                        <span class="interface-preview interface-preview-modern" aria-hidden="true"><span class="preview-nav"></span><span class="preview-main"></span><span class="preview-side"></span></span>
+                        <strong>Modern TLI</strong><span>The anniversary workspace. Grouped navigation, spacious pages and focused Settings.</span>
+                      </label>
+                      <label class="interface-choice">
+                        <input type="radio" name="tli-interface-style" value="classic">
+                        <span class="interface-preview interface-preview-classic" aria-hidden="true"><span class="preview-nav"></span><span class="preview-main"></span><span class="preview-side"></span></span>
+                        <strong>Classic TLI</strong><span>The early layout, rebuilt for today. Compact navigation, raised cards, chat bubbles and long-form Settings.</span>
+                      </label>
+                    </div>
+                    <p>Both interfaces use the same current features and data protections. Switch back at any time using View in the header. This does not roll back TLI or its data.</p>
+                    <p id="tli-interface-status" class="small-meta"></p>
+                  </fieldset>
+                  <section id="tli-theme-library" aria-labelledby="tli-theme-library-title" hidden>
+                    <div class="tli-theme-intro">
+                      <div>
+                        <h3 id="tli-theme-library-title">Choose your colors</h3>
+                        <p>Choose a palette for your workspace. Theme changes save only in this browser.</p>
+                        <p id="tli-theme-current"></p>
+                      </div>
+                    </div>
+                    <div class="tli-theme-toolbar">
+                      <div class="tli-theme-filters" role="group" aria-label="Filter themes">
+                        <button type="button" data-theme-filter="all" aria-pressed="true">All</button>
+                        <button type="button" data-theme-filter="light" aria-pressed="false">Light</button>
+                        <button type="button" data-theme-filter="dark" aria-pressed="false">Dark</button>
+                        <button type="button" data-theme-filter="new" aria-pressed="false">New</button>
+                      </div>
+                      <p id="tli-theme-count" role="status" aria-live="polite"></p>
+                    </div>
+                    <div class="tli-theme-grid" id="tli-theme-grid"></div>
+                  </section>
+                  <div class="tli-theme-browse">
+                  <label class="field-label" for="settings-theme">Browse by name</label>
                   <select id="settings-theme" class="field-select">
                     <optgroup label="Dark">
                       <option value="midnight">Midnight (default)</option>
@@ -2712,12 +2692,15 @@
                     </optgroup>
                     <optgroup label="Light">
                       <option value="emeraldLight">Emerald Light</option>
+                      <option value="classicTli">Classic Mint</option>
                       <option value="emeraldLite">Emerald Lite</option>
                       <option value="cloudLight">Cloud Light</option>
                       <option value="sandLight">Sand Light</option>
                       <option value="lavenderLite">Lavender Lite</option>
                     </optgroup>
                   </select>
+                  </div>
+                  <p id="settings-theme-status" class="small-meta" role="status"></p>
                 </div>
               </div>
 
@@ -2725,16 +2708,16 @@
               <div class="settings-section collapsed" id="settings-section-chat">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Chat Preferences</div>
-                    <div class="settings-section-subtitle">Default brain, teaching mode, temperature, and token limits.</div>
+                    <div class="settings-section-title">Chat preferences</div>
+                    <div class="settings-section-subtitle">Save response defaults for this browser. Model installation and selection are above.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
                 <div class="settings-section-body">
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Default Brain</div>
-                      <div class="settings-row-desc">Which model personality TLI defaults to.</div>
+                      <div class="settings-row-title">Legacy model preference (advanced)</div>
+                      <div class="settings-row-desc">A hint for older provider routes; unavailable names fall back to the server default. This does not install or switch your local model.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-brain" class="field-select compact-select">
@@ -2748,7 +2731,7 @@
                   <div class="settings-row">
                     <div>
                       <div class="settings-row-title">Teaching mode at startup</div>
-                      <div class="settings-row-desc">TLI explains its reasoning step by step.</div>
+                      <div class="settings-row-desc">Ask for more detailed explanations in new browser sessions.</div>
                     </div>
                     <div class="settings-row-actions">
                       <button class="toggle-pill" id="settings-teaching">
@@ -2758,8 +2741,8 @@
                   </div>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Temperature</div>
-                      <div class="settings-row-desc">Higher = more creative, lower = more precise.</div>
+                      <div class="settings-row-title">Response variation (temperature)</div>
+                      <div class="settings-row-desc">Lower values favor consistency; higher values add variation. This does not guarantee accuracy.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-temp" class="field-select compact-select">
@@ -2771,8 +2754,8 @@
                   </div>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Max tokens</div>
-                      <div class="settings-row-desc">Maximum response length per message.</div>
+                      <div class="settings-row-title">Response length limit</div>
+                      <div class="settings-row-desc">Maximum generated tokens per message. Tokens are pieces of words; the model may reply more briefly.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-max" class="field-select compact-select">
@@ -2783,9 +2766,10 @@
                     </div>
                   </div>
                   <div class="button-row">
-                    <button class="btn-primary" id="settings-save">Save</button>
-                    <button class="btn-outline" id="settings-apply">Apply now</button>
+                    <button class="btn-primary" id="settings-save">Save chat preferences</button>
+                    <button class="btn-outline" id="settings-apply" hidden>Save chat preferences</button>
                   </div>
+                  <p id="settings-chat-status" class="small-meta" role="status"></p>
                 </div>
               </div>
 
@@ -2793,16 +2777,16 @@
               <div class="settings-section collapsed" id="settings-section-node-identity">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Node Identity</div>
-                    <div class="settings-section-subtitle">How this device appears in the mesh network.</div>
+                    <div class="settings-section-title">Computer name &amp; network role</div>
+                    <div class="settings-section-subtitle">How the computer hosting TLI appears to other TLI computers.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
                 <div class="settings-section-body">
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Node name</div>
-                      <div class="settings-row-desc">How this device appears to other nodes.</div>
+                      <div class="settings-row-title">Computer name</div>
+                      <div class="settings-row-desc">A friendly name, such as Living Room PC.</div>
                     </div>
                     <div class="settings-row-actions">
                       <input id="settings-node-name" class="field-input compact-input" type="text" maxlength="64" placeholder="e.g. Living Room PC" />
@@ -2822,7 +2806,7 @@
                     </div>
                   </div>
                   <div class="button-row">
-                    <button class="btn-primary" id="settings-node-identity-save">Save Identity</button>
+                    <button class="btn-primary" id="settings-node-identity-save">Save name &amp; role</button>
                   </div>
                   <div class="small-meta">Node ID: <code id="settings-node-id">—</code></div>
                 </div>
@@ -2833,7 +2817,7 @@
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">LM Studio <span class="settings-section-badge">Advanced</span></div>
-                    <div class="settings-section-subtitle">Connect to an external LM Studio model server.</div>
+                    <div class="settings-section-subtitle">Check the configured LM Studio server and choose its default model. Separate from the bundled model.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2854,18 +2838,32 @@
                   </select>
                   <div class="button-row">
                     <button class="btn-outline" id="settings-model-refresh">Refresh models</button>
-                    <button class="btn-primary" id="settings-model-save">Set as default</button>
+                    <button class="btn-primary" id="settings-model-save">Save LM Studio default</button>
                   </div>
                   <div class="small-meta">Model choice is saved on this device — all browsers on this node share the same default.</div>
                 </div>
               </div>
 
               <!-- ── Software Updates ───────────────────────────────────── -->
+              <div class="settings-section collapsed" id="settings-section-mcp">
+                <div class="settings-section-header" role="button" tabindex="0">
+                  <div>
+                    <div class="settings-section-title">Local MCP connections <span class="settings-section-badge">Advanced</span></div>
+                    <div class="settings-section-subtitle">Review access to local MCP tools, or temporarily share selected read-only host information.</div>
+                  </div>
+                  <div class="settings-section-chevron">▾</div>
+                </div>
+                <div class="settings-section-body">
+                  <div id="settings-mcp-client-mount"></div>
+                  <div id="settings-mcp-mount"></div>
+                </div>
+              </div>
+
               <div class="settings-section collapsed" id="settings-section-updates">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">Software Updates</div>
-                    <div class="settings-section-subtitle">Check for new TLI releases from your manifest URL.</div>
+                    <div class="settings-section-subtitle">Check your configured release source. Online sources contact the internet.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2882,7 +2880,14 @@
                       <button class="btn-outline" id="settings-check-update-btn">Check now</button>
                     </div>
                   </div>
-                  <div class="field-label">Update manifest URL</div>
+                  <details class="tli-release-settings">
+                    <summary>Running host &amp; application files</summary>
+                    <p id="settings-release-state" role="status">Running application identity has not been checked.</p>
+                    <p id="settings-release-identity"></p>
+                    <p>These identifiers describe application code and browser assets. They do not identify your saved data or AI model.</p>
+                    <button type="button" class="btn-outline" id="settings-release-recheck">Recheck running host</button>
+                  </details>
+                  <label class="field-label" for="settings-update-url">Release information URL (advanced)</label>
                   <div class="settings-url-row">
                     <input type="text" id="settings-update-url" class="field-input"
                       placeholder="https://raw.githubusercontent.com/you/tli-releases/main/latest.json" />
@@ -2899,7 +2904,7 @@
               <div class="settings-section collapsed" id="settings-section-security">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Security</div>
+                    <div class="settings-section-title">Access PIN &amp; Vault</div>
                     <div class="settings-section-subtitle">PIN lock and encrypted vault passphrase.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
@@ -2942,7 +2947,7 @@
                         <span class="settings-pin-callout-icon">🔒</span>
                         <div class="settings-pin-callout-text">
                           <strong style="color:var(--info,#38bdf8);">Vault not initialized</strong>
-                          Create a passphrase to encrypt your files and notes. If you lose it, the data is gone — no recovery by design.
+                          Protect items placed in Vault with a separate passphrase. Notes &amp; fixes and chat history use separate storage. TLI cannot recover a lost Vault passphrase.
                         </div>
                       </div>
                       <div class="pin-input-row" style="margin-top:10px;">
@@ -2964,12 +2969,13 @@
                         </div>
                       </div>
                       <div class="button-row">
-                        <button class="btn-outline btn-sm" id="sv-export-btn">Export Encrypted Backup</button>
+                        <button class="btn-outline btn-sm" id="sv-export-btn">Download encrypted copy</button>
                       </div>
+                      <p class="small-meta">Includes Vault files, Vault notes and this account’s secrets. Excludes saved logins and encryption metadata. Keep the original installation and passphrase; this copy is not a complete recovery backup.</p>
                       <details class="settings-danger-details">
                         <summary>⚠ Danger zone — hard reset vault</summary>
                         <div class="settings-danger-body">
-                          <div class="small-meta">Permanently deletes all encrypted data and the password hash. <strong>This cannot be undone.</strong></div>
+                          <div class="small-meta">Permanently deletes all Vault files, secrets, saved logins, Vault notes and the Vault passphrase configuration. Requires the current Vault passphrase. <strong>This cannot be undone.</strong></div>
                           <div class="pin-input-row" style="margin-top:8px;">
                             <input id="sv-reset-password" class="field-input compact-input" type="password" autocomplete="current-password" placeholder="Current vault passphrase" />
                             <input id="sv-reset-confirm" class="field-input compact-input" type="text" placeholder='Type "RESET VAULT" to confirm' autocomplete="off" />
@@ -2988,8 +2994,8 @@
               <div class="settings-section collapsed" id="settings-section-search">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Online Search Assist</div>
-                    <div class="settings-section-subtitle">searXNG integration for web-augmented answers.</div>
+                    <div class="settings-section-title">Optional web search</div>
+                    <div class="settings-section-subtitle">Use a configured SearXNG service for current information. Searches can leave your home network.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -3005,11 +3011,11 @@
                   </div>
                   <div class="field-label">SearXNG URL</div>
                   <input id="settings-searx-url" class="field-input" placeholder="http://localhost:8080" />
-                  <div class="small-meta">Point this at your local or LAN SearXNG instance. TLI proxies through its backend — no CORS required.</div>
+                  <div class="small-meta">Address of your SearXNG search service, reachable from the TLI host. Preferences save in this browser as you change them.</div>
                   <div class="settings-row">
                     <div>
-                      <div class="settings-row-title">Top K results</div>
-                      <div class="settings-row-desc">Snippets injected into the prompt. Fewer = faster.</div>
+                      <div class="settings-row-title">Search results to include</div>
+                      <div class="settings-row-desc">How many result snippets are supplied with your question.</div>
                     </div>
                     <div class="settings-row-actions">
                       <select id="settings-search-topk" class="field-select compact-select">
@@ -3061,8 +3067,8 @@
               <div class="settings-section collapsed" id="settings-section-identity">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
-                    <div class="settings-section-title">Device Identity <span class="settings-section-badge">Cryptographic</span></div>
-                    <div class="settings-section-subtitle">Node fingerprint and public key for mesh trust.</div>
+                    <div class="settings-section-title">Host trust identity <span class="settings-section-badge">Advanced</span></div>
+                    <div class="settings-section-subtitle">Read-only fingerprint and public key for verifying this TLI computer. Separate from its friendly name.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -3082,23 +3088,23 @@
               </div>
 
               <!-- ── Conversation data (collapsible-card) ────────────────── -->
-              <div class="collapsible-card" style="margin-top:12px;">
+              <div class="collapsible-card" id="settings-browser-data-card" style="margin-top:12px;">
                 <div class="collapsible-header" role="button" aria-expanded="true">
-                  <div class="collapsible-header-title">Conversation data</div>
+                  <div class="collapsible-header-title">Browser preferences &amp; legacy history</div>
                   <div class="collapsible-chevron">⌄</div>
                 </div>
                 <div class="collapsible-body" aria-hidden="false">
                   <div class="button-row">
-                    <button class="btn-outline" id="settings-export">Export (settings + history)</button>
+                    <button class="btn-outline" id="settings-export">Export browser data</button>
                     <label class="btn-outline" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;">
-                      Import JSON
+                      Import browser data
                       <input type="file" id="settings-import" accept="application/json" style="display:none;">
                     </label>
                   </div>
                   <div class="button-row" style="margin-top:8px;">
-                    <button class="btn-outline danger" id="settings-clear-history">Clear history</button>
+                    <button class="btn-outline danger" id="settings-clear-history">Clear legacy browser history</button>
                   </div>
-                  <div class="small-meta">Affects only this browser: <code>tli_settings</code>, <code>tli_previous_prompts</code>, <code>tli_previous_conversations</code>.</div>
+                  <div class="small-meta">These older browser records are separate from saved chats on the TLI host. Export includes browser preferences and legacy history in plain JSON. Clearing removes only that legacy history. Use the encrypted backup above for Notes &amp; fixes, chats and reports.</div>
                 </div>
               </div>
 
@@ -3142,20 +3148,19 @@
               </div>
 
               <div class="settings-info-section">
-                <div class="settings-info-heading">Privacy</div>
+                <div class="settings-info-heading">Where changes are saved</div>
                 <ul class="settings-info-list">
-                  <li>All settings stored locally in this browser.</li>
-                  <li>Model config saved on this device — all browsers share the same AI.</li>
-                  <li>Nothing leaves your LAN. No telemetry, no cloud.</li>
+                  <li><strong>This browser:</strong> appearance and chat preferences.</li>
+                  <li><strong>TLI host:</strong> the computer running TLI, even when you visit from a phone.</li>
+                  <li><strong>Your account:</strong> Notes &amp; fixes, chats and reports on that host. Without PIN protection, local access shares one owner.</li>
                 </ul>
               </div>
 
               <div class="settings-info-section">
-                <div class="settings-info-heading">Tips</div>
+                <div class="settings-info-heading">Connections</div>
                 <ul class="settings-info-list">
-                  <li>"Apply now" updates header controls without saving permanently.</li>
-                  <li>Clearing history affects only this browser's local storage.</li>
-                  <li>To apply a theme network-wide, set it on each device.</li>
+                  <li>Online search, downloads and update checks can contact external services.</li>
+                  <li>Saving startup settings does not restart TLI.</li>
                 </ul>
               </div>
             </div><!-- /.right-column-card -->
@@ -3171,62 +3176,87 @@
     <div class="modal-card">
       <div class="modal-header">
         <h2>TheLANIntelligence</h2>
-        <button class="btn-icon" data-close-modal>&times;</button>
+        <button class="btn-icon" data-close-modal aria-label="Close About TLI">&times;</button>
       </div>
       <div class="modal-body">
         <p><strong>Version:</strong> <span id="about-version">v1.3.5-beta</span></p>
-        <p><strong>Mode:</strong> Offline-first, LAN-only AI OS.</p>
-        <p><strong>Engine:</strong> Integrated llama.cpp &mdash; Qwen2.5 (Lite 1.5B / Standard 3B / Power 7B). No external dependencies.</p>
+        <p><strong>Purpose:</strong> Your private home console for computers, devices, files and local AI.</p>
+        <p><strong>AI:</strong> Bundled local inference, optional LM Studio and connected TLI computers. Check AI &amp; chat settings for current model availability.</p>
+        <p><strong>Saved work:</strong> Notes &amp; fixes holds setup details, preferences and past fixes. Vault notes use a separate passphrase.</p>
+        <p><strong>Your phone:</strong> Open Phone Companion under Home &amp; network to review native-app pairing. Browser satellite is a separate connection.</p>
         <p><strong>Created by:</strong> Anonymous</p>
+        <p><a class="btn-outline" href="/history/index.html" target="_blank" rel="noopener">TLI through the years ↗</a></p>
+        <p class="modal-subtext">Explore retained historical views with synthetic examples. To use TLI in its early layout, choose Classic UI in the header or Settings → Appearance. Classic and Modern use the same current features and protections; neither rolls back the application or its data.</p>
         <p class="modal-subtext">
-          TLI never sends your data to remote servers. Everything runs on your machine or LAN.
+          Saved information stays on your TLI host. Optional online search, package registries, downloads and configured external services make network requests. Review their settings before use.
         </p>
       </div>
     </div>
   </div>
 
   <!-- Main JS bundle -->
-  <script src="/app.js?v=r10"></script>
-  <script src="/js/vault.js?v=r1"></script>
-  <script src="/js/files.js?v=r1"></script>
-  <script src="/js/visualizer.js?v=r3"></script>
-  <script src="/js/tools.js?v=r1"></script>
-  <script src="/js/mesh.js?v=r2"></script>
-  <script src="/js/settings.js?v=r1"></script>
-  <script src="/js/home-auto.js?v=r2"></script>
+  <script src="/js/host-identity.js?v=workspace-cohesion-1"></script>
+  <script src="/js/ui-foundation.js?v=workspace-cohesion-1"></script>
+  <script src="/js/device-details.js?v=anniversary-completion-2"></script>
+  <script src="/js/room-display.js?v=anniversary-completion-1"></script>
+  <script src="/js/ui-health.js?v=dashboard-workspace-1"></script>
+  <script src="/js/local-voice.js?v=anniversary-completion-2"></script>
+  <script src="/app.js?v=workspace-cohesion-1"></script>
+  <script src="/js/vault.js?v=vault-workspace-1"></script>
+  <script src="/js/vault-backups.js?v=continuity-20260908"></script>
+  <script src="/js/guided-checks.js?v=workspace-cohesion-1"></script>
+  <script src="/js/troubleshooting.js?v=workspace-cohesion-2"></script>
+  <script src="/js/case-context.js?v=finish-fix-1"></script>
+  <script src="/js/case-guides.js?v=anniversary-completion-2"></script>
+  <script src="/js/case-exports.js?v=anniversary-completion-2"></script>
+  <script src="/js/files.js?v=free-space-2"></script>
+  <script src="/js/storage-cleanup.js?v=free-space-2"></script>
+  <script src="/js/storage-map.js?v=workspace-cohesion-1"></script>
+  <script src="/js/visualizer.js?v=workspace-cohesion-2"></script>
+  <script src="/js/tools.js?v=themes-1"></script>
+  <script src="/js/mesh.js?v=finish-fix-1"></script>
+  <script src="/js/settings.js?v=themes-1"></script>
+  <script src="/js/home-auto.js?v=relay-controls-1"></script>
   <script src="/js/satellite.js?v=r1"></script>
   <script src="/js/federation.js?v=r1"></script>
-  <script src="/js/hub.js?v=r3"></script>
+  <script src="/js/hub.js?v=section-clarity-1"></script>
   <script src="/js/tli-apps.js?v=r1"></script>
-  <script src="/js/tli-update.js?v=r1"></script>
+  <script src="/js/tli-update.js?v=settings-workspace-1"></script>
   <!-- app.js second-pass split (2026-04-11) -->
-  <script src="/js/tli-chat.js?v=r2"></script>
-  <script src="/js/automations.js?v=r1"></script>
-  <script src="/js/ai-source.js?v=r1"></script>
-  <script src="/js/ai-model-manager.js?v=r2"></script>
-  <script src="/js/live-feed.js?v=r3"></script>
-  <script src="/js/mesh-control.js?v=r2"></script>
-  <script src="/js/printers-ext.js?v=r1"></script>
-  <script src="/js/action-engine.js?v=r1"></script>
+  <script src="/js/peer-transfers.js?v=finish-fix-1"></script>
+  <script src="/js/tli-chat.js?v=finish-fix-1"></script>
+  <script src="/js/routine-workspace.js?v=anniversary-completion-2"></script>
+  <script src="/js/automations.js?v=anniversary-completion-1"></script>
+  <script src="/js/ai-source.js?v=dashboard-workspace-1"></script>
+  <script src="/js/ai-model-manager.js?v=anniversary-completion-1"></script>
+  <script src="/js/live-feed.js?v=themes-1"></script>
+  <script src="/js/activity-summary.js?v=dashboard-workspace-1"></script>
+  <script src="/js/mesh-control.js?v=dependable-computers-2"></script>
+  <script src="/js/printers-ext.js?v=section-clarity-1"></script>
+  <script src="/js/action-engine.js?v=anniversary-completion-1"></script>
   <script src="/js/pwa.js?v=r1"></script>
   <!-- Persistent chat history (defines missing history functions + restores last session) -->
-  <script src="/chat_history.js?v=r1"></script>
+  <script src="/chat_history.js?v=memory-continuity-1"></script>
   <!-- JS modules (extracted from app.js for maintainability) -->
-  <script src="/js/tli-games.js?v=r3"></script>
+  <script src="/js/performance-workspace.js?v=workspace-cohesion-1"></script>
+<script src="/js/tli-games.js?v=performance-1"></script>
   <script src="/js/tli-system.js?v=r3"></script>
-  <script src="/js/builder.js?v=r11"></script>
-  <script src="/js/mesh-service.js?v=r3"></script>
-  <script src="/js/pin-lock.js?v=r3"></script>
-  <script src="/js/cmd-palette.js?v=r3"></script>
-  <script src="/js/fetch-interceptor.js?v=r3"></script>
+  <script src="/js/builder.js?v=section-clarity-1"></script>
+  <script src="/js/mesh-service.js?v=dependable-computers-1"></script>
+<script src="/js/pin-lock.js?v=dashboard-workspace-1"></script>
+<script src="/js/cmd-palette.js?v=section-clarity-1"></script>
+  <script src="/js/fetch-interceptor.js?v=anniversary-completion-2"></script>
+  <script src="/js/release-status.js?v=dependable-computers-1"></script>
   <script src="/js/tli-search.js?v=r3"></script>
-  <script src="/chat_enhanced.js?v=r3"></script>
-  <script src="/settings_enhanced.js?v=r4"></script>
-  <script src="/panel_cleanup.js?v=r3"></script>
-  <script src="/nerve.js?v=r3"></script>
+<script src="/js/chat-format.js?v=troubleshooting-20260908"></script>
+<script src="/chat_enhanced.js?v=anniversary-ui-1"></script>
+  <script src="/settings_enhanced.js?v=settings-workspace-1"></script>
+  <script src="/panel_cleanup.js?v=free-space-2"></script>
+  <script src="/nerve.js?v=chat-workspace-1"></script>
   <!-- TLI v1.3 — Dashboard Presence Layer -->
-  <script src="/js/event_interpreter.js?v=r1"></script>
-  <script src="/js/system-state-bar.js?v=r3"></script>
+  <script src="/js/event_interpreter.js?v=dashboard-workspace-1"></script>
+  <script src="/js/system-state-bar.js?v=workspace-cohesion-1"></script>
+  <script src="/js/shell-refinement.js?v=1"></script>
 
 
 
@@ -3309,7 +3339,7 @@
         </div>
         <div>
           <div class="mm2-h1" id="model-manager-title">Local AI Model</div>
-          <div class="mm2-sub">100% offline — runs on your machine, no cloud, no accounts.</div>
+          <div class="mm2-sub">Runs on this TLI host. Downloads need internet; inference stays local. Resource requirements are estimates.</div>
         </div>
       </div>
       <button class="mm2-x" id="model-manager-x" aria-label="Close">×</button>
@@ -3345,7 +3375,7 @@
     </div>
 
     <!-- Status / log line -->
-    <div class="mm2-statusline" id="model-manager-progress"></div>
+    <div class="mm2-statusline" id="model-manager-progress" role="status" aria-live="polite"></div>
 
     <!-- Advanced / footer -->
     <div class="mm2-foot">
@@ -3355,7 +3385,7 @@
       </div>
       <div class="mm2-foot-right">
         <input id="model-manager-file" type="file" accept=".gguf" style="display:none" />
-        <button class="mm2-mini" id="model-manager-select">Select .gguf…</button>
+        <button class="mm2-mini" id="model-manager-select">Import .gguf…</button>
         <button class="mm2-mini" id="model-manager-close">Done</button>
       </div>
     </div>
@@ -3375,7 +3405,7 @@
 <!-- ── Mobile bottom nav ─────────────────────────────────────── -->
 <nav class="tli-bottom-nav" id="tli-bottom-nav" aria-label="Main navigation">
   <button class="tli-bn-item active" data-panel-target="panel-main">
-    <span class="tli-bn-icon">💬</span><span class="tli-bn-label">Chat</span>
+    <span class="tli-bn-icon">💬</span><span class="tli-bn-label">AI Chat</span>
   </button>
   <button class="tli-bn-item" data-panel-target="panel-dashboard2">
     <span class="tli-bn-icon">🧭</span><span class="tli-bn-label">Dashboard</span>
@@ -3409,7 +3439,7 @@
   </div>
   <div class="tli-more-grid">
     <button class="tli-more-item" data-panel-target="panel-main">
-      <span class="tli-more-icon">💬</span><span>Chat</span>
+      <span class="tli-more-icon">💬</span><span>AI Chat</span>
     </button>
     <button class="tli-more-item" data-panel-target="panel-tli-chat">
       <span class="tli-more-icon">🗨️</span><span>LAN Chat</span>
@@ -3439,7 +3469,10 @@
       <span class="tli-more-icon">📜</span><span>Scripts</span>
     </button>
     <button class="tli-more-item" data-panel-target="panel-builder">
-      <span class="tli-more-icon">B</span><span>Builder</span>
+      <span class="tli-more-icon">🛠️</span><span>Builder</span>
+    </button>
+    <button class="tli-more-item" data-panel-target="panel-hub">
+      <span class="tli-more-icon">🌐</span><span>TLI Hub</span>
     </button>
     <button class="tli-more-item" data-panel-target="panel-automations">
       <span class="tli-more-icon">⚡</span><span>Automations</span>
@@ -3450,7 +3483,25 @@
 <!-- PWA Service Worker registration — DISABLED (recovery mode, SW caused app.js to load 4x via clients.claim) -->
 <!-- The head script already unregisters any existing SW. -->
 
+<script src="/js/report-review.js?v=evidence-led-1"></script>
+<script src="/js/report-facts.js?v=evidence-led-1"></script>
+<script src="/js/intelligence.js?v=evidence-led-1"></script>
+<script src="/js/screenshot-help.js"></script>
+<script src="/js/notebook.js?v=anniversary-completion-1"></script>
+<script src="/js/memory-continuity.js?v=evidence-led-1"></script>
+<script src="/js/document-context.js?v=anniversary-completion-1"></script>
+<script src="/js/data-recovery.js?v=continuity-20260908"></script>
+<script src="/js/saved-places.js?v=free-space-2"></script>
+<script src="/js/native-companion.js?v=remote-readiness-1"></script>
+<script src="/js/chat-workspace.js?v=anniversary-completion-1"></script>
+<script src="/js/settings-workspace.js?v=anniversary-completion-1"></script>
+<script src="/js/theme-library.js?v=1"></script>
+<script src="/js/storage-workspace.js?v=free-space-2"></script>
+<script src="/js/network-workspace.js?v=finish-fix-1"></script>
+<script src="/js/mcp-bridge.js?v=anniversary-completion-1"></script>
+<script src="/js/mcp-client.js?v=anniversary-completion-2"></script>
+<script src="/js/home-assistant.js?v=anniversary-completion-2"></script>
+<script src="/js/note-search.js?v=anniversary-completion-2"></script>
+<script src="/js/note-links.js?v=anniversary-completion-2"></script>
 </body>
 </html>
-
-

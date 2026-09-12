@@ -1,4 +1,18 @@
 // ---------- Mesh / Nodes panel ----------
+let meshUiEpoch = 0, meshUiLocked = false;
+const meshEscape = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const meshUiCurrent = token => !meshUiLocked && token === meshUiEpoch && !document.hidden;
+window.addEventListener('tli-session-locked', () => {
+  meshUiLocked = true; meshUiEpoch++;
+  if (meshJoinPollTimer) clearTimeout(meshJoinPollTimer);
+  meshJoinPollTimer = null; meshDirectoryCache = null;
+  if (typeof currentNodeConfig !== 'undefined') currentNodeConfig = null;
+  const list = document.getElementById('mesh-directory-list'); if (list) list.replaceChildren();
+  updateMeshJoinStatus('Unlock TLI to view this connection.');
+});
+window.addEventListener('tli-session-unlocked', () => { meshUiLocked = false; meshUiEpoch++; });
+window.addEventListener('pagehide', () => { meshUiEpoch++; if (meshJoinPollTimer) clearTimeout(meshJoinPollTimer); meshJoinPollTimer = null; });
+
 
 function renderMeshNode(node) {
   const summaryEl    = $("mesh-node-summary");
@@ -96,6 +110,7 @@ function renderMeshNode(node) {
 }
 
 function renderMeshDirectory(directory) {
+  window.TLIPeerTrust?.renderDirectory(directory);
   const hostCard = $("mesh-host-card");
   const statusEl = $("mesh-directory-status");
   const listEl   = $("mesh-directory-list");
@@ -138,10 +153,11 @@ function renderMeshDirectory(directory) {
     if (isSelf) continue; // don't show the Host itself in the list
 
     const ip = dev.ip || "";
-    if (!ip) continue;    // 🔹 skip “ghost” nodes with no IP (they look gross + unusable)
+    // An unavailable address remains visible; it grants no ability to contact the peer.
 
-    if (seenIps.has(ip)) continue; // de-dupe by IP
-    seenIps.add(ip);
+    const identity = dev.device_id || dev.node_id;
+    if (!identity || seenIps.has(identity)) continue;
+    seenIps.add(identity);
 
     deduped.push(dev);
   }
@@ -210,21 +226,18 @@ function renderMeshDirectory(directory) {
 
   const html = devices
     .map((dev) => {
-      const id   = dev.device_id || dev.node_id || "unknown";
-      const ip   = dev.ip || "";
-      const name =
-        dev.display_name ||
-        dev.node_name ||
-        dev.device_name ||
-        id;
-      const state    = (dev.state || dev.status || "allowed").toLowerCase();
-      const lastSeen = dev.last_seen || "—";
+      const id   = meshEscape(dev.device_id || dev.node_id || "unknown");
+      const ip   = meshEscape(dev.ip || "");
+      const name = meshEscape(dev.display_name || dev.node_name || dev.device_name || id);
+      const state    = (dev.status || "pending").toLowerCase();
+      const verified = dev.trust_state === "verified" && state === "allowed";
+      const lastSeen = meshEscape(dev.last_seen || "—");
       const isSelf   = dev.is_self || dev.self || false;
       const health   = computeNodeHealth(dev);
 
-      let stateLabel = state;
+      let stateLabel = meshEscape(state);
       if (state === "pending") stateLabel = "Pending approval";
-      if (state === "allowed") stateLabel = "Allowed";
+      if (state === "allowed") stateLabel = verified ? "Reviewed identity" : "Trust review required";
       if (state === "blocked") stateLabel = "Blocked";
 
       const healthPill =
@@ -238,14 +251,14 @@ function renderMeshDirectory(directory) {
       // Actions based on state (Host approval controls)
       const actions = [];
       if (!isSelf) {
-        if (state === "pending" || state === "blocked") {
+        if (!verified) {
           actions.push(
-            `<button class="btn btn-primary" data-mesh-action="allow" data-device-id="${id}">Allow</button>`
+            `<button class="btn btn-primary" data-mesh-action="allow" data-device-id="${id}">Review trust</button>`
           );
         }
         if (state === "pending" || state === "allowed") {
           actions.push(
-            `<button class="btn btn-ghost" data-mesh-action="block" data-device-id="${id}">Block</button>`
+            `<button class="btn btn-ghost" data-mesh-action="block" data-device-id="${id}">Revoke trust</button>`
           );
         }
         actions.push(
@@ -261,7 +274,7 @@ function renderMeshDirectory(directory) {
       const launchButtons = [];
 
       // Lightweight “chip” actions – always available when we know the node IP
-      if (ip) {
+      if (ip && verified) {
         // Node info & ping (host proxies)
         launchButtons.push(
           `<button class="btn btn-ghost mesh-launch-btn" data-mesh-info="${id}">Node info</button>`
@@ -275,7 +288,7 @@ function renderMeshDirectory(directory) {
           `<button class="btn btn-ghost mesh-launch-btn" data-mesh-maint="refresh" data-device-id="${id}">Refresh stats</button>`
         );
         launchButtons.push(
-          `<button class="btn btn-ghost mesh-launch-btn" data-mesh-maint="clean_temp" data-device-id="${id}">Clean temp</button>`
+          `<button class="btn btn-ghost mesh-launch-btn" data-mesh-maint="clean_temp" data-device-id="${id}">Review Free Space</button>`
         );
         launchButtons.push(
           `<button class="btn btn-ghost mesh-launch-btn" data-mesh-maint="logs" data-device-id="${id}">View logs</button>`
@@ -283,12 +296,12 @@ function renderMeshDirectory(directory) {
       }
 
       // Deep-links into the node's own console (only when Allowed)
-      if (ip && state === "allowed") {
+      if (ip && verified) {
         launchButtons.push(
-          `<button class="btn btn-primary" data-mesh-open="visualizer" data-ip="${ip}">Open Visualizer</button>`
+          `<button class="btn btn-primary" data-mesh-open="visualizer" data-device-id="${id}" data-ip="${ip}">Open Free Space</button>`
         );
         launchButtons.push(
-          `<button class="btn btn-primary" data-mesh-open="tools" data-ip="${ip}">Open Tools</button>`
+          `<button class="btn btn-primary" data-mesh-open="tools" data-device-id="${id}" data-ip="${ip}">Open Tools</button>`
         );
       }
 
@@ -336,6 +349,8 @@ function renderMeshDirectory(directory) {
 
 
 async function refreshMeshDirectory() {
+  if (meshUiLocked || document.hidden) return false;
+  const epoch = meshUiEpoch;
   const statusEl = $("mesh-directory-status");
   if (statusEl) {
     statusEl.textContent = "Loading directory…";
@@ -343,11 +358,14 @@ async function refreshMeshDirectory() {
 
   try {
     const res = await fetch("/mesh/directory");
+    if (res.status === 401 || !meshUiCurrent(epoch)) return false;
     if (!res.ok) {
       throw new Error("HTTP " + res.status);
     }
 
+    if (res.status === 401) return false;
     const data = await res.json();
+    if (!meshUiCurrent(epoch)) return false;
 
     // ✅ Cache for multi-node tools
     // NOTE: No "let" — we use the global declaration already at the top of the file
@@ -357,24 +375,34 @@ async function refreshMeshDirectory() {
     renderMeshDirectory(data);
 
     debugLog("mesh", "info", "Loaded mesh directory");
+    return true;
   } catch (err) {
+    if (!meshUiCurrent(epoch) || /401/.test(String(err.message))) return false;
     console.error("Mesh directory fetch failed:", err);
 
     if (statusEl) {
       statusEl.textContent =
-        "Unable to load directory (host-only, or not configured).";
+        "Computer directory unavailable. Previous entries, if any, are retained; their observation times still apply.";
     }
 
-    // Still render an empty directory so the Host UI remains visible when appropriate
-    renderMeshDirectory(null);
+    return false;
   }
 }
 
 
 async function refreshMeshNodeAndMaybeDirectory() {
+  if (meshUiLocked || document.hidden) return false;
+  const epoch = meshUiEpoch;
   try {
     // Prefer MeshService so every module shares the same caches
-    const data = window.MeshService ? await window.MeshService.fetchNode({ force: true }) : await (await fetch("/mesh/node")).json();
+    let data;
+    if (window.MeshService) data = await window.MeshService.fetchNode({ force: true });
+    else {
+      const response = await fetch('/mesh/node');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      data = await response.json();
+    }
+    if (!meshUiCurrent(epoch)) return false;
     currentNodeConfig = data;
     window.currentNodeConfig = data;
     renderMeshNode(data);
@@ -389,36 +417,31 @@ async function refreshMeshNodeAndMaybeDirectory() {
       }
     } catch {}
 
+    if (!meshUiCurrent(epoch)) return false;
     if (dir) {
       meshDirectoryCache = dir;
       window.meshDirectoryCache = dir;
     }
 
-    const isHost = data && (data.is_host || data.role === "host");
-    if (isHost) {
-      await refreshMeshDirectory();
-    } else {
-      // Host directory UI stays host-only; presence belongs in TLI Chat
-      renderMeshDirectory(null);
-      setInlineStatus(
-        "mesh-directory-status",
-        "Presence is shown in TLI Chat. This panel is for Host administration.",
-        "muted"
-      );
-    }
+    if (dir) renderMeshDirectory(dir);
+    else if (await refreshMeshDirectory() === false) return false;
 
     // Sync context tags everywhere
     try { syncMeshContextTags(); } catch {}
+    return true;
   } catch (err) {
+    if (!meshUiCurrent(epoch) || /401/.test(String(err.message))) return false;
     console.error("Mesh node fetch failed:", err);
-    renderMeshNode(null);
+    // Preserve the last reported identity; failure does not mean unconfigured.
     setInlineStatus(
       "mesh-directory-status",
-      "Unable to load node info: " + err.message,
+      "Computer info unavailable: " + err.message + ". Previous information, if any, is retained.",
       "error"
     );
     showToast("Mesh node unreachable.", "error");
-    throw err; // Let callers show their own UX if they want.
+    // This refresh is also called by timers and navigation without await.
+    // Return failure explicitly instead of leaking an unhandled rejection.
+    return false;
   }
 }
 
@@ -447,9 +470,11 @@ async function performMeshPing(deviceId) {
 
     showToast("Ping successful:\n\n" + summary);
     debugLog("mesh", "info", `Ping ok for device ${deviceId}`);
+    return true;
   } catch (err) {
     console.error("Mesh ping failed:", err);
     showToast("Ping failed: " + err.message);
+    return false;
   }
 }
 async function performMeshInfo(deviceId) {
@@ -465,7 +490,7 @@ async function performMeshInfo(deviceId) {
     }
     const data = await res.json();
     const info = data.info || {};
-    const node = info.node || {};
+    const node = info.node || info;
     const sys  = info.system || {};
 
     const lines = [];
@@ -513,117 +538,21 @@ async function performMeshInfo(deviceId) {
 }
 
 async function performMeshMaintenanceRefresh(deviceId) {
-  if (!deviceId) return;
-
+  if (!deviceId || meshUiLocked) return false;
+  const epoch=meshUiEpoch;
   try {
-    const res = await fetch(
-      `/mesh/directory/${encodeURIComponent(deviceId)}/maintenance/refresh`,
-      {
-        method: "POST",
-        headers: { Accept: "application/json" },
-      }
-    );
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(txt || ("HTTP " + res.status));
-    }
-
-    const data = await res.json().catch(() => ({}));
-    debugLog("mesh", "info", `Maintenance refresh ok for device ${deviceId}`);
-
-    // Optionally show fresh node info afterwards
-    try {
-      await performMeshInfo(deviceId);
-    } catch (err) {
-      console.warn("performMeshInfo after refresh failed:", err);
-    }
-
-    if (!data || data.ok !== false) {
-      showToast("Maintenance: stats refresh requested on this node.");
-    }
-  } catch (err) {
-    console.error("Mesh maintenance refresh failed:", err);
-    showToast("Refresh stats failed: " + err.message);
-  }
+    const response=await fetch(`/mesh/directory/${encodeURIComponent(deviceId)}/maintenance/refresh`,{method:'POST'});
+    if(!meshUiCurrent(epoch))return false;
+    const data=await response.json();if(!meshUiCurrent(epoch))return false;
+    if(!response.ok||!data.ok||data.data?.protocol!=='tli-peer-observation-v1')throw Error(data.detail?.message||'No valid peer observation was received.');
+    const observation=data.data, facts=observation.facts;
+    const metric=value=>value==null?'Unknown':String(value);
+    showToast(observation.host.name+' · '+observation.observed_at+'\nCPU: '+metric(facts.cpu_percent)+'% · RAM: '+metric(facts.ram_percent)+'%\n'+observation.scope);
+    return true;
+  } catch(error) {if(meshUiCurrent(epoch))showToast('Peer observation unavailable: '+error.message,'error');return false;}
 }
 
-async function performMeshMaintenanceCleanTemp(deviceId) {
-  if (!deviceId) return;
-
-  const ok = confirm(
-    "Run a SAFE temp cleanup on this node?\n\n" +
-      "This only touches OS temp folders and TLI cache directories."
-  );
-  if (!ok) return;
-
-  try {
-    const res = await fetch(
-      `/mesh/directory/${encodeURIComponent(deviceId)}/maintenance/clean_temp`,
-      {
-        method: "POST",
-        headers: { Accept: "application/json" },
-      }
-    );
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(txt || ("HTTP " + res.status));
-    }
-
-    const data = await res.json().catch(() => ({}));
-    const nodePayload = data && data.data ? data.data : data;
-    const summary = nodePayload.summary || nodePayload.result || nodePayload;
-
-    let msg = "Temp cleanup completed.";
-
-    if (summary && typeof summary === "object") {
-      const totalFiles =
-        summary.total_files_deleted ??
-        summary.total_files_removed ??
-        summary.files_deleted ??
-        summary.files_removed;
-
-      const totalBytes =
-        summary.total_bytes_reclaimed ??
-        summary.bytes_reclaimed ??
-        summary.bytesRemoved ??
-        summary.totalBytesReclaimed;
-
-      const parts = [];
-
-      if (typeof totalFiles === "number") {
-        parts.push("Files deleted: " + totalFiles);
-      }
-      if (typeof totalBytes === "number") {
-        parts.push(
-          "Bytes reclaimed: " + totalBytes.toLocaleString() + " bytes"
-        );
-      }
-
-      if (Array.isArray(summary.directories)) {
-        parts.push("", "Directories touched:");
-        for (const d of summary.directories) {
-          if (!d) continue;
-          const p = d.path || d.dir || "";
-          const f =
-            typeof d.files_deleted === "number"
-              ? ` (${d.files_deleted} files)`
-              : "";
-          parts.push("- " + p + f);
-        }
-      }
-
-      if (parts.length) {
-        msg = "Temp cleanup summary:\n\n" + parts.join("\n");
-      }
-    }
-
-    showToast(msg);
-    debugLog("mesh", "info", `Clean temp ok for device ${deviceId}`);
-  } catch (err) {
-    console.error("Mesh clean temp failed:", err);
-    showToast("Clean temp failed: " + err.message);
-  }
-}
+function performMeshMaintenanceCleanTemp(deviceId) { return openReviewedPeerConsole(deviceId, "visualizer"); }
 
 async function performMeshViewLogs(deviceId) {
   if (!deviceId) return;
@@ -689,121 +618,9 @@ async function performMeshViewLogs(deviceId) {
   }
 }
 
-async function performMeshMaintenanceRefresh(deviceId) {
-  if (!deviceId) return;
-  try {
-    const res = await fetch(
-      `/mesh/directory/${encodeURIComponent(deviceId)}/maintenance/refresh`,
-      {
-        method: "POST",
-        headers: { Accept: "application/json" },
-      }
-    );
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(txt || ("HTTP " + res.status));
-    }
-    // We don't depend on a specific shape; just log and show a small confirmation.
-    const data = await res.json().catch(() => ({}));
-    debugLog(
-      "mesh",
-      "info",
-      `Maintenance refresh ok for device ${deviceId}`,
-    );
 
-    // Optionally re-run node info so you see fresh stats.
-    try {
-      await performMeshInfo(deviceId);
-    } catch {
-      // If info fails, ignore; the refresh itself already happened.
-    }
 
-    if (!data || data.ok !== false) {
-      showToast("Maintenance: stats refresh requested on this node.");
-    }
-  } catch (err) {
-    console.error("Mesh maintenance refresh failed:", err);
-    showToast("Refresh stats failed: " + err.message);
-  }
-}
-
-async function performMeshMaintenanceCleanTemp(deviceId) {
-  if (!deviceId) return;
-
-  const ok = confirm(
-    "Run a SAFE temp cleanup on this node?\n\n" +
-      "This only touches OS temp folders and TLI cache directories."
-  );
-  if (!ok) return;
-
-  try {
-    const res = await fetch(
-      `/mesh/directory/${encodeURIComponent(deviceId)}/maintenance/clean_temp`,
-      {
-        method: "POST",
-        headers: { Accept: "application/json" },
-      }
-    );
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(txt || ("HTTP " + res.status));
-    }
-    const data = await res.json().catch(() => ({}));
-    const summary = data.summary || data.result || data;
-
-    let msg = "Temp cleanup completed.";
-
-    if (summary && typeof summary === "object") {
-      const totalFiles =
-        summary.total_files_removed ??
-        summary.totalFilesRemoved ??
-        summary.files_removed ??
-        summary.filesRemoved;
-
-      const totalBytes =
-        summary.total_bytes_reclaimed ??
-        summary.totalBytesReclaimed ??
-        summary.bytes_reclaimed ??
-        summary.bytesReclaimed;
-
-      const parts = [];
-
-      if (typeof totalFiles === "number") {
-        parts.push(`Files removed: ${totalFiles}`);
-      }
-      if (typeof totalBytes === "number") {
-        parts.push(
-          `Bytes reclaimed: ${totalBytes.toLocaleString()} bytes`
-        );
-      }
-
-      if (Array.isArray(summary.directories)) {
-        parts.push(
-          "",
-          "Directories touched:",
-          ...summary.directories.map((d) => {
-            const p = d.path || d.dir || "";
-            const f =
-              typeof d.files_removed === "number"
-                ? ` (${d.files_removed} files)`
-                : "";
-            return `- ${p}${f}`;
-          })
-        );
-      }
-
-      if (parts.length) {
-        msg = "Temp cleanup summary:\n\n" + parts.join("\n");
-      }
-    }
-
-    showToast(msg);
-    debugLog("mesh", "info", `Clean temp ok for device ${deviceId}`);
-  } catch (err) {
-    console.error("Mesh clean temp failed:", err);
-    showToast("Clean temp failed: " + err.message);
-  }
-}
+function performMeshMaintenanceCleanTemp(deviceId) { return openReviewedPeerConsole(deviceId, "visualizer"); }
 
 async function performMeshViewLogs(deviceId) {
   if (!deviceId) return;
@@ -900,6 +717,8 @@ function updateMeshJoinStatus(text) {
 }
 
 async function pollMeshJoinStatus() {
+  if (meshUiLocked || document.hidden) return false;
+  const epoch = meshUiEpoch;
   // avoid double polling
   if (meshJoinPollTimer) {
     clearTimeout(meshJoinPollTimer);
@@ -912,15 +731,28 @@ async function pollMeshJoinStatus() {
       headers: { "Accept": "application/json" }
     });
 
+    if (!meshUiCurrent(epoch) || res.status === 401) return;
     if (!res.ok) {
       const txt = await res.text().catch(() => "");
+      if (res.status === 400) {
+        let detail;
+        try { detail = JSON.parse(txt).detail; } catch {}
+        if (detail === "This node is not joined to any host.") {
+          updateMeshJoinStatus("Standalone — no host connection configured.");
+          return;
+        }
+      }
       throw new Error("HTTP " + res.status + (txt ? " · " + txt : ""));
     }
 
     const data = await res.json();
+    if (!meshUiCurrent(epoch)) return;
     const meshStatus = (data.mesh_status || "pending").toLowerCase();
 
-    if (meshStatus === "pending") {
+    if (meshStatus === "not_joined") {
+      updateMeshJoinStatus("Standalone — no host connection configured.");
+      return;
+    } else if (meshStatus === "pending") {
       updateMeshJoinStatus("Join request pending on host…");
       // keep polling every 5 seconds
       meshJoinPollTimer = setTimeout(pollMeshJoinStatus, 5000);
@@ -954,6 +786,7 @@ async function pollMeshJoinStatus() {
       updateMeshJoinStatus("Join status: " + meshStatus);
     }
   } catch (err) {
+  if (!meshUiCurrent(epoch)) return;
   console.error("[MESH] join_status error:", err);
   const msg = "Join status error: " + err.message;
   updateMeshJoinStatus(msg);
@@ -964,6 +797,8 @@ async function pollMeshJoinStatus() {
 
 
 async function requestMeshJoin(hostAddress) {
+ const addr = String(hostAddress || "").trim();
+ if (meshUiLocked || document.hidden) return;
  if (!addr) {
   const msg = "Enter the Host address first (e.g. 192.168.x.xxx:8000)"
   updateMeshJoinStatus(msg);
@@ -1023,6 +858,7 @@ async function requestMeshJoin(hostAddress) {
 }
 
 function setupMeshPanel() {
+  window.TLIPeerTrust?.install();
   const refreshBtn    = $("mesh-node-refresh-btn");
   const listEl        = $("mesh-directory-list");
   const joinBtn       = $("mesh-join-btn");
@@ -1051,7 +887,7 @@ if (refreshBtn) {
         "muted"
       );
       try {
-        await refreshMeshNodeAndMaybeDirectory();
+        if (await refreshMeshNodeAndMaybeDirectory() === false) return;
         setInlineStatus(
           "mesh-directory-status",
           "Mesh directory up to date.",
@@ -1144,7 +980,7 @@ if (multiRunBtn && multiSelect) {
           return;
         }
 
-        const allowed = directory.devices.filter((d) => d.allowed !== false);
+        const allowed = directory.devices.filter(d => d.status === "allowed" && d.trust_state === "verified");
         if (!allowed.length) {
           multiStatus.textContent = "No allowed nodes to run this on.";
           showToast("No allowed nodes in directory.", "error");
@@ -1158,9 +994,9 @@ if (multiRunBtn && multiSelect) {
           const id = dev.device_id;
           try {
             if (action === "ping") {
-              await performMeshPing(id);
+              if(await performMeshPing(id)===false)throw Error("Ping failed");
             } else if (action === "refresh") {
-              await performMeshMaintenanceRefresh(id);
+              if(await performMeshMaintenanceRefresh(id)===false)throw Error("Observation failed");
             }
             okCount++;
           } catch (err) {
@@ -1237,11 +1073,7 @@ if (multiRunBtn && multiSelect) {
           panelParam = "tools";
         }
 
-        const url = panelParam
-          ? `http://${ip}:8000/?panel=${encodeURIComponent(panelParam)}`
-          : `http://${ip}:8000/`;
-
-        window.open(url, "_blank");
+        openReviewedPeerConsole(launchBtn.getAttribute('data-device-id'), panelParam);
         return;
       }
 
@@ -1259,6 +1091,8 @@ if (multiRunBtn && multiSelect) {
         if (!ok) return;
       }
 
+      if (action === 'allow') { window.TLIPeerTrust.open(); return; }
+      if (action === 'block') { window.TLIPeerTrust.revoke(deviceId); return; }
       performMeshAction(deviceId, action);
     });
   }
@@ -1629,3 +1463,52 @@ function refreshUSBList() {
 }
 
 
+
+function openReviewedPeerConsole(id,panel) {
+  if(meshUiLocked)return false;
+  const peer=meshDirectoryCache?.devices?.find(x=>x.device_id===id);
+  try { const u=new URL(peer?.origin); if(peer.status!=='allowed'||peer.trust_state!=='verified'||u.protocol!=='https:'||u.username||u.password||u.pathname!=='/')throw Error();
+    window.open(u.origin+'/?panel='+encodeURIComponent(panel||'visualizer'),'_blank','noopener,noreferrer');return true;
+  } catch {showToast('Review this computer’s exact identity and HTTPS address first.','error');return false;}
+}
+window.TLIPeerTrust=(()=>{
+  let dialog,body,notice,review=null,epoch=0,busy=false,focus;
+  const n=(tag,text)=>{const x=document.createElement(tag);if(text!=null)x.textContent=text;return x;};
+  const alive=t=>dialog?.open&&!meshUiLocked&&t===epoch;
+  function button(text,fn){const b=n('button',text);b.type='button';b.className='btn btn-outline';Object.assign(b.style,{minWidth:'0',maxWidth:'100%',whiteSpace:'normal',overflowWrap:'anywhere'});b.addEventListener('click',()=>{if((busy&&text!=='Close')||meshUiLocked)return;Promise.resolve().then(fn).catch(e=>{if(dialog?.open&&!meshUiLocked)notice.textContent=e.message;});});return b;}
+  function field(text,tag='input'){const label=n('label'),input=n(tag);label.style.minWidth='0';input.style.minWidth='0';input.style.width='100%';input.style.boxSizing='border-box';input.maxLength=24576;label.append(n('span',text),input);body.append(label);return input;}
+  async function api(path,payload,t){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!alive(t))throw Error('Review closed.');if(r.status===401){window.dispatchEvent(new CustomEvent('tli-session-locked'));throw Error('Unlock TLI to review trust.');}const j=await r.json();if(!alive(t))throw Error('Review closed.');if(!r.ok)throw Error(typeof j.detail==='string'?j.detail:j.detail?.message||'Trust review unavailable.');return j;}
+  async function run(fn){if(busy)return;const t=epoch;busy=true;try{await fn();}finally{if(t===epoch)busy=false;}}
+  async function compatible(t){if(!window.TLIRelease?.requireCapability)throw Error('Refresh TLI to load its computer trust capability check.');await window.TLIRelease.requireCapability('trusted_peers_v1');return alive(t);}
+  function close(){epoch++;review=null;busy=false;dialog?.close();focus?.focus?.();}
+  function home(){review=null;body.replaceChildren();notice.textContent='';body.append(n('p','Exchange public cards on both computers. Compare both fingerprints on the other computer’s own screen. Names and discovered addresses are not proof of identity.'));
+    const address=field('This computer’s HTTPS LAN IPv4 address and port');address.placeholder='https://192.168.1.20:8000';
+    const output=field('Your public computer card; contains no private key','textarea');output.readOnly=true;output.rows=6;
+    body.append(button('Show this computer’s card',()=>run(async()=>{const t=epoch,j=await api('/mesh/trust/card',{origin:address.value.trim()},t);output.value=JSON.stringify(j.card,null,2);notice.textContent='Identity: '+j.card.identity_fingerprint+' · HTTPS: '+j.card.certificate_sha256;})));
+    const input=field('Paste the other computer’s public card','textarea');input.rows=6;const checks=[];
+    for(const [id,text] of [['observe','Allow short CPU, RAM and uptime observations'],['coordinate','Allow connection status and read-only coordination/ping'],['messages','Allow explicit LAN messages and file offers (files need separate receiver consent)']]){const label=n('label'),c=n('input');c.type='checkbox';c.value=id;label.append(c,n('span',text));body.append(label);checks.push(c);}
+    body.append(button('Review selected permissions',()=>run(async()=>{const t=epoch;if(!await compatible(t))return;if(input.value.length>24576)throw Error('Public card is too large.');let card;try{card=JSON.parse(input.value);}catch{throw Error('Paste the complete public JSON card.');}review=await api('/mesh/trust/preview',{card,grants:checks.filter(x=>x.checked).map(x=>x.value)},t);paint();})));
+  }
+  function paint(){body.replaceChildren();const c=review.card;body.append(n('p',c.name+' · '+c.node_id),n('p',c.origin),n('p','Identity: '+c.identity_fingerprint),n('p','HTTPS certificate SHA-256: '+c.certificate_sha256),n('p','Permissions: '+review.grants.join(', ')+'. No cleanup, arbitrary commands or device actions. File offers require a separate receiver review for each file; this trust review never accepts a file. Complete this review on both computers.'));
+    if(review.replaces_existing)body.append(n('p','This replaces trust for this exact node ID. Other same-name or same-address records are preserved.'));
+    const fp=field('Paste the matching identity fingerprint from the other computer’s screen');fp.maxLength=39;const cert=field('Paste the matching HTTPS SHA-256 from that screen');cert.maxLength=64;
+    body.append(button('Trust these exact details',()=>run(async()=>{const t=epoch;if(!await compatible(t))return;await api('/mesh/trust/approve',{review_id:review.review_id,identity_fingerprint:fp.value.trim(),certificate_sha256:cert.value.trim()},t);home();notice.textContent='Trust saved here. The other computer must review your card too.';await refreshMeshNodeAndMaybeDirectory();})),button('Back to card',home));
+  }
+  function open(){if(meshUiLocked||document.hidden)return;if(!dialog){dialog=n('dialog');dialog.id='tli-peer-trust-dialog';dialog.setAttribute('aria-labelledby','tli-peer-trust-heading');Object.assign(dialog.style,{width:'min(720px, calc(100vw - 24px))',maxHeight:'90vh',overflow:'auto',color:'var(--text)',background:'var(--bg-panel)',border:'1px solid var(--border)',borderRadius:'14px',padding:'20px',boxSizing:'border-box'});const h=n('h2','Trust a computer');h.id='tli-peer-trust-heading';h.tabIndex=-1;body=n('div');Object.assign(body.style,{display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:'12px',minWidth:'0',overflowWrap:'anywhere'});notice=n('p');notice.setAttribute('role','status');dialog.append(h,body,notice,button('Close',close));dialog.addEventListener('cancel',e=>{e.preventDefault();close();});document.body.append(dialog);}epoch++;busy=false;focus=document.activeElement;home();dialog.showModal();dialog.querySelector('h2').focus();}
+  async function revoke(id){if(meshUiLocked||!confirm('Revoke this computer’s access here? Saved identity and history remain. Another explicit review will be required.'))return;const t=meshUiEpoch;try{const r=await fetch('/mesh/trust/'+encodeURIComponent(id)+'/revoke',{method:'POST'});if(!meshUiCurrent(t))return;if(!r.ok)throw Error('Could not revoke this computer.');await refreshMeshNodeAndMaybeDirectory();}catch(e){if(meshUiCurrent(t))showToast(e.message,'error');}}
+  function renderDirectory(directory){
+    const list=document.getElementById('tli-peer-trust-list');if(!list)return;list.replaceChildren();
+    if(meshUiLocked)return;
+    const entries=directory?.devices;if(!Array.isArray(entries)){list.append(n('p','Computer access is unavailable. Refresh to read saved identities.'));return;}
+    if(!entries.length){list.append(n('p','No other computer identities are recorded here yet.'));return;}
+    for(const entry of entries){const row=n('div');Object.assign(row.style,{borderTop:'1px solid var(--border-subtle)',padding:'12px 0',overflowWrap:'anywhere'});
+      row.append(n('strong',entry.display_name||entry.device_id),n('p','ID: '+entry.device_id),n('p',entry.status==='blocked'?'Access revoked':entry.trust_state==='verified'?'Reviewed permissions saved here':'Review required before communication'));
+      if(entry.origin)row.append(n('p',entry.origin));
+      row.append(button('Review computer',open));if(entry.status!=='blocked')row.append(button('Revoke access',()=>revoke(entry.device_id)));list.append(row);}
+  }
+  function install(){if(document.getElementById('tli-peer-trust-open'))return;const anchor=document.querySelector('#panel-mesh .mcd-header');if(!anchor)return;
+    const wrap=n('div'),b=button('Review computer trust',open);b.id='tli-peer-trust-open';wrap.style.padding='0 0 18px';wrap.append(b,n('p','Both computers explicitly review identity and HTTPS fingerprints before communicating.'));
+    const details=n('details');details.append(n('summary','Reviewed computer access'));const list=n('div');list.id='tli-peer-trust-list';details.append(list);wrap.append(details);anchor.after(wrap);renderDirectory(meshDirectoryCache);
+  }
+  window.addEventListener('tli-session-locked',()=>{epoch++;review=null;busy=false;if(dialog){body.replaceChildren();notice.textContent='';dialog.close();}document.getElementById('tli-peer-trust-list')?.replaceChildren();});window.addEventListener('pagehide',()=>{epoch++;review=null;dialog?.close();});return{open,revoke,install,renderDirectory};
+})();

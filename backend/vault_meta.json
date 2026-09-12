@@ -1,9 +1,0 @@
-{
-  "password_salt": "NLvPHsBlEwnXM2p9dd0NCw==",
-  "password_hash": "KaBAgbVYBk7mY7yMkhjgonJ5p3YL24VmNwvFyq/mz5Q=",
-  "encryption_salt": "mdPWwzvNV+EzVxkg4OxZsA==",
-  "failed_attempts": 3,
-  "locked_until": null,
-  "created_at": "2025-11-21T02:35:31.939994",
-  "updated_at": "2026-05-14T03:36:28.933611"
-}

@@ -1,0 +1,14 @@
+{
+  "name": "tli-transport",
+  "version": "0.1.0",
+  "private": true,
+  "description": "App-scoped certificate-pinned LAN transport for TLI Companion",
+  "main": "index.ts",
+  "types": "index.ts",
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "expo": "*",
+    "expo-modules-core": "*",
+    "react-native": "*"
+  }
+}

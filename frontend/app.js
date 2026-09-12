@@ -14,6 +14,7 @@ function _tliIsLinux()   { return window.TLI_SERVER_OS === "Linux";   }
 
 // Real paths fetched from backend — populated by _tliLoadCommonPaths()
 window.TLI_PATHS = null; // { home, common: {downloads, desktop, ...}, extras: [...] }
+let _tliPathsEpoch = 0, _tliPathsLocked = false;
 
 function _tliHomePath() {
   return (window.TLI_PATHS && window.TLI_PATHS.home) || "~";
@@ -41,15 +42,25 @@ function _tliPathPreset(kind) {
 }
 
 async function _tliLoadCommonPaths() {
+  if (_tliPathsLocked) return;
+  const epoch = ++_tliPathsEpoch;
   try {
-    const r = await fetch("/visualizer/paths");
+    const r = await fetch("/visualizer/paths", {credentials:'same-origin',cache:'no-store'});
     if (!r.ok) return;
     const data = await r.json();
+    if (epoch !== _tliPathsEpoch || _tliPathsLocked || !data || typeof data.home !== 'string' || !data.common || typeof data.common !== 'object') return;
     window.TLI_PATHS = data;
     _tliApplyPathSuggestions(data);
     document.dispatchEvent(new CustomEvent("tli:paths-loaded", { detail: data }));
   } catch { /* non-fatal */ }
 }
+window.addEventListener('tli-session-locked', () => {
+  _tliPathsLocked = true; _tliPathsEpoch++; window.TLI_PATHS = null;
+  document.getElementById('visualizerPathSuggestions')?.replaceChildren();
+  const field = document.getElementById('visualizerPathInput');
+  if (field) field.placeholder = 'Choose a drive or enter an absolute folder path';
+});
+window.addEventListener('tli-session-unlocked', () => { _tliPathsLocked = false; _tliLoadCommonPaths(); });
 
 function _tliApplyPathSuggestions(data) {
   try {
@@ -114,10 +125,6 @@ fetch("/agent/ping")
   .then(d => { if (d && d.os) _tliApplyServerOS(d.os); })
   .catch(() => {})
   .finally(() => { _tliLoadCommonPaths(); });
-
-// Recovery: dashboard panel was broken by a previous session — force classic mode.
-// Prevents the animated dashboard (with GPU-expensive blur filters) from loading.
-try { localStorage.setItem("tli_ui_mode", "classic"); } catch {}
 
 // [module] See /js/tli-games.js
 // [module] See /js/tli-system.js
@@ -441,7 +448,7 @@ async function setupOnboardingWizard() {
     // ── Step 0: Welcome + node name ────────────────────────────
     {
       title: "Welcome to TheLANIntelligence",
-      text: "Your private home console — no cloud, no accounts, no tracking.\nLet’s get you set up in a few quick steps.",
+      text: "Your private home console for computers, files and local AI.\nChoose a name, protect access and check which AI options are available.",
       build: () => {
         dynEl.innerHTML = `
           <div class="tli-onboard-field">
@@ -475,7 +482,7 @@ async function setupOnboardingWizard() {
     // ── Step 1: PIN setup ──────────────────────────────────────
     {
       title: "Set an access PIN (recommended)",
-      text: "A PIN locks TLI so only you can open it from the browser. Hashed with PBKDF2 — never stored in plaintext.",
+      text: "A PIN restricts browser access to people who know it. Without PIN protection, local access shares one owner and its saved information.",
       build: () => {
         dynEl.innerHTML = `
           <div class="tli-onboard-field">
@@ -565,9 +572,11 @@ async function setupOnboardingWizard() {
               bar.style.width = "100%";
               bar.style.background = "var(--accent)";
               nextBtn.textContent = "Continue";
-              statusEl.textContent = "Your AI is ready.";
+              statusEl.textContent = "Model installed. Open the model library after setup to check and select it.";
               return;
             }
+            if (dl.status === "cancelled") { clearInterval(_dlInterval); lbl.textContent = "Download cancelled. Previous files retained."; return; }
+            if (dl.status === "cancelling") { lbl.textContent = "Cancelling; waiting for completion…"; return; }
             if (dl.status === "error") {
               clearInterval(_dlInterval);
               lbl.textContent = "Download failed: " + (dl.error || "unknown error");
@@ -592,15 +601,19 @@ async function setupOnboardingWizard() {
             <button class="btn btn-ghost btn-sm" id="onboard-ai-cancel">Cancel</button>
           `;
           document.getElementById("onboard-ai-cancel")?.addEventListener("click", () => {
-            fetch("/api/ai/model/download/cancel", { method: "POST" }).catch(() => {});
-            clearInterval(_dlInterval);
-            _buildChooser();
+            fetch("/api/ai/model/download/cancel", { method: "POST" }).then(r => {
+              if (!r.ok) throw new Error("Cancellation request failed");
+              statusEl.textContent = "Cancellation requested; waiting for completion.";
+            }).catch(e => { statusEl.textContent = e.message; });
           });
           fetch("/api/ai/model/download", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ preset_id: presetId }),
-          }).catch(() => {});
+          }).then(async r => {
+            const result = await r.json();
+            if (!r.ok || result.ok === false) throw new Error(result.detail || result.error || "Download failed");
+          }).catch(e => { clearInterval(_dlInterval); statusEl.textContent = e.message; });
           clearInterval(_dlInterval);
           _dlInterval = setInterval(_renderProgress, 800);
           _renderProgress();
@@ -611,18 +624,28 @@ async function setupOnboardingWizard() {
           if (!body) return;
 
           // Get RAM to suggest a tier
-          let ramGb = 16;
+          let ramGb = null;
           try {
             const sr = await fetch("/system/summary");
-            if (sr.ok) { const sd = await sr.json(); ramGb = sd?.memory?.total_gb || 16; }
+            if (sr.ok) { const sd = await sr.json(); ramGb = sd?.memory?.total_gb || null; }
           } catch {}
 
           // Get preset list
           let presets = [];
+          let presetsUnavailable = false;
           try {
             const pr = await fetch("/api/ai/models/presets");
-            if (pr.ok) { const pd = await pr.json(); presets = pd.presets || []; }
-          } catch {}
+            if (!pr.ok) throw new Error("Model choices unavailable");
+            const pd = await pr.json();
+            if (!Array.isArray(pd.presets)) throw new Error("Model choices unavailable");
+            presets = pd.presets.filter(p => p && ["lite", "standard", "power", "vision"].includes(p.id) && typeof p.name === "string" && p.name.trim() && typeof p.size_human === "string" && typeof p.description === "string");
+          } catch { presetsUnavailable = true; }
+
+          if (!presets.length) {
+            body.textContent = presetsUnavailable ? "Model choices are unavailable. Skip for now, then open the model library in Settings to try again." : "No bundled model choices are available. Skip for now and check the model library in Settings after setup.";
+            statusEl.textContent = "No model download has started.";
+            return;
+          }
 
           // Check if any already downloaded
           const downloaded = presets.find(p => p.downloaded);
@@ -630,21 +653,21 @@ async function setupOnboardingWizard() {
             body.innerHTML = `
               <div class="tli-onboard-cardmini" style="border-color:var(--accent);margin-bottom:12px">
                 <div class="h" style="color:var(--accent)">AI already downloaded ✓</div>
-                <div class="p">${downloaded.name} is ready to use.</div>
+                <div class="p">${downloaded.name} is installed; running status is checked separately.</div>
               </div>`;
             nextBtn.textContent = "Continue";
-            statusEl.textContent = "Your AI is ready.";
+            statusEl.textContent = "Model installed. Open the model library after setup to check and select it.";
             return;
           }
 
           // Recommend a tier based on RAM
-          const recommended = ramGb >= 16 ? "power" : ramGb >= 12 ? "standard" : "lite";
+          const recommended = ["standard", "lite"].find(id => presets.some(p => p.id === id && p.compatibility?.state === "compatible")) || presets.find(p => p.id === "standard")?.id || presets[0].id;
           const tierRows = presets.map(p => {
             const isRec = p.id === recommended;
             return `
               <div class="tli-onboard-ai-tier${isRec ? " recommended" : ""}" data-preset-id="${p.id}">
                 <div class="tli-onboard-ai-tier-top">
-                  <span class="tli-onboard-ai-tier-name">${p.name}${isRec ? ' <span class="tli-onboard-ai-rec">Recommended</span>' : ""}</span>
+                  <span class="tli-onboard-ai-tier-name">${p.name}${isRec ? ` <span class="tli-onboard-ai-rec">${p.compatibility?.state === "compatible" ? "Suggested by resources" : (p.id === "standard" ? "Default preset" : "Selected for download")}</span>` : ""}</span>
                   <span class="tli-onboard-ai-tier-size">${p.size_human}</span>
                 </div>
                 <div class="tli-onboard-ai-tier-desc">${p.description}</div>
@@ -653,10 +676,13 @@ async function setupOnboardingWizard() {
 
           body.innerHTML = `
             <div class="tli-onboard-ai-tiers">${tierRows}</div>
-            <button class="pill-btn primary" id="onboard-ai-dl-btn" style="margin-top:12px;width:100%">Download Standard AI</button>
+            <button class="pill-btn primary" id="onboard-ai-dl-btn" style="margin-top:12px;width:100%">Download model</button>
           `;
 
           let selectedPreset = recommended;
+          const initialPreset = presets.find(p => p.id === selectedPreset);
+          const initialDownloadButton = document.getElementById("onboard-ai-dl-btn");
+          if (initialDownloadButton && initialPreset) initialDownloadButton.textContent = `Download ${initialPreset.name.split(" (")[0]}`;
           document.querySelectorAll(".tli-onboard-ai-tier").forEach(el => {
             el.addEventListener("click", () => {
               document.querySelectorAll(".tli-onboard-ai-tier").forEach(x => x.classList.remove("selected"));
@@ -685,7 +711,7 @@ async function setupOnboardingWizard() {
     // ── Step 3: Done ───────────────────────────────────────────
     {
       title: "You’re in.",
-      text: "TLI is running entirely on your LAN. Nothing leaves your network.",
+      text: "Your home console is ready. Check AI readiness and connection settings before choosing what to do next.",
       build: async () => {
         // Pull latest autodetect summary for the done screen
         let ad = null;
@@ -702,7 +728,7 @@ async function setupOnboardingWizard() {
             const air = await fetch("/api/ai/model/info");
             if (air.ok) {
               const aid = await air.json();
-              if (aid.exists) {
+              if (aid.healthy === true) {
                 clearInterval(_aiPolling);
                 const valEl = document.getElementById("tli-onboard-ai-val");
                 if (valEl) valEl.innerHTML = `<span style="color:var(--accent)">Ready ✓</span> · ${aid.preset?.name || "Integrated AI"}`;
@@ -713,7 +739,7 @@ async function setupOnboardingWizard() {
             const str = await fetch("/api/ai/status");
             if (str.ok) {
               const std = await str.json();
-              if (std.active_model || std.model_loaded) {
+              if (std.healthy === true) {
                 clearInterval(_aiPolling);
                 const valEl = document.getElementById("tli-onboard-ai-val");
                 if (valEl) valEl.innerHTML = `<span style="color:var(--accent)">Ready ✓</span> · ${std.active_model || "Integrated AI"}`;
@@ -727,7 +753,7 @@ async function setupOnboardingWizard() {
               const valEl = document.getElementById("tli-onboard-ai-val");
               if (dld.status === "done") {
                 clearInterval(_aiPolling);
-                if (valEl) valEl.innerHTML = `<span style="color:var(--accent)">Ready ✓</span> · Integrated AI`;
+                if (valEl) valEl.textContent = "Installed — select it in the model library";
                 return true;
               }
               if (dld.in_progress && valEl) {
@@ -774,7 +800,8 @@ async function setupOnboardingWizard() {
             </div>
           </div>
           <div class="tli-onboard-cardmini" style="margin-top:12px">
-            <div class="p">Explore the sidebar — Chat, Vault, Files, Devices, Mesh, and more. All settings are in the gear icon.</div>
+            <div class="p">Use AI Chat for questions, Notes &amp; fixes for setup details and past solutions, and Files for reviewed file changes. Phone Companion has its own setup page under Home &amp; network.</div>
+            <button id="tli-onboard-companion-open" class="btn-outline" type="button">Set up Phone Companion</button>
           </div>
         `;
         statusEl.textContent = "";
@@ -786,9 +813,15 @@ async function setupOnboardingWizard() {
           tliHideOnboard(true);
           // Navigate to Settings → AI after the overlay closes
           setTimeout(() => {
-            const settingsBtn = document.querySelector("[data-panel='settings']") || document.getElementById("nav-settings");
-            if (settingsBtn) settingsBtn.click();
+            switchPanel('panel-settings');
+            window.TLISettingsWorkspace?.open?.('ai', 'settings-section-ai-model');
           }, 150);
+        });
+        document.getElementById('tli-onboard-companion-open')?.addEventListener('click', () => {
+          if (_aiPolling) { clearInterval(_aiPolling); _aiPolling = null; }
+          tliStopAudio(audioEl);
+          tliHideOnboard(true);
+          switchPanel('panel-companion');
         });
       },
       onNext: async () => {
@@ -994,14 +1027,16 @@ function _tliInitMobileNav() {
     backdrop.addEventListener("click", _tliCloseMoreDrawer);
   }
 
-  // Swipe-down on drawer to close
+  // Drag the handle to close. Scrolling the destination list must not dismiss it.
   const drawer = document.getElementById("tli-more-drawer");
   if (drawer) {
-    let startY = 0;
-    drawer.addEventListener("touchstart", e => { startY = e.touches[0].clientY; }, { passive: true });
+    let startY = null;
+    drawer.addEventListener("touchstart", e => { startY = e.target.closest('.tli-more-handle') ? e.touches[0].clientY : null; }, { passive: true });
     drawer.addEventListener("touchend",   e => {
-      if (e.changedTouches[0].clientY - startY > 60) _tliCloseMoreDrawer();
+      if (startY !== null && e.changedTouches[0].clientY - startY > 60) _tliCloseMoreDrawer();
+      startY = null;
     }, { passive: true });
+    drawer.addEventListener("touchcancel", () => { startY = null; }, { passive: true });
   }
 }
 
@@ -1257,6 +1292,33 @@ const previousPromptsKey = "tli_previous_prompts";
 let currentDeviceId = null;        // filled from /status
 const CHAT_HISTORY_DRAFT_ID = "__draft__";
 let currentConversationId = null;  // tracks active conversation thread
+window.TLIConversationLoad = {
+  contract: "v1", generation: 0,
+  invalidate() { this.generation++; },
+  deleted(id) {
+    this.invalidate();
+    if (id && currentConversationId !== id) return;
+    currentConversationId = null;
+    window.currentConversationId = null;
+    window.TLIMemory?.clear();
+    window.TLIDocuments?.clear();
+    window.TLICaseContext?.clear();
+    window.TLIIntelligence?.clearContext?.();
+    if (typeof resetChatHistory === "function") resetChatHistory({ alsoClearStorage: true });
+    if (typeof clearChatWithPlaceholder === "function") clearChatWithPlaceholder("Choose a saved conversation or start a new chat.");
+  },
+};
+function clearLocalChatSession() {
+  window.TLIConversationLoad.deleted();
+  if (typeof inFlightController !== "undefined") inFlightController?.abort();
+  const input = document.getElementById("chat-input");
+  if (input) input.value = "";
+  const send = document.getElementById("chat-send-btn"), abort = document.getElementById("abort-chat-btn");
+  if (send) send.disabled = false;
+  if (abort) abort.disabled = true;
+}
+window.addEventListener("tli-session-locked", clearLocalChatSession);
+window.addEventListener("pagehide", clearLocalChatSession);
 let meshDirectoryCache = null;   // cache for /mesh/directory so multi-node tools can see it
 let currentNodeConfig = null;    // cache for /mesh/node (role + host state)
 let suppressShellySelection = false;
@@ -1330,7 +1392,8 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 1200) {
 
 // Updates the header pill (added in index.html)
 function setAIRoutePill(source, tip) {
-  // ✅ Header single source-of-truth badge
+  // The source controller owns header and Chat availability when present.
+  if (window.__TLI_AI_SOURCE_OF_TRUTH_V2__) { window.TLIAISource?.renderRoute?.({source, reason:tip}); return; }
   const pill = $("ai-source-pill");
   const text = $("ai-source-text");
   if (!pill || !text) return;
@@ -1364,8 +1427,8 @@ function setAIRoutePill(source, tip) {
   }
 
   pill.classList.add("ai-offline");
-  text.textContent = "AI: Off";
-  pill.title = tip || "No AI provider available.";
+  text.textContent = "AI: Not confirmed";
+  pill.title = tip || "AI availability has not been confirmed.";
 }
 
 // Probe local LM Studio via your existing report endpoint
@@ -1882,101 +1945,45 @@ function appendMessage(role, text, options = {}) {
 // ===============================
 // Bundled AI SSE Streaming Helper (POST with GET fallback)
 // ===============================
-async function tliBundledChatStream({ message, raw_input, session_id, active_panel, max_tokens, temperature, image_b64, image_mime, onDelta, onMeta }) {
-  // 1) Try POST streaming first (works when same-origin + POST allowed)
+async function tliBundledChatStream({ message, raw_input, session_id, active_panel, max_tokens, temperature, image_b64, image_mime, onDelta, onMeta, signal, ...context }) {
+  const res = await fetch("/api/ai/chat/stream", {
+    method: "POST", signal,
+    headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+    body: JSON.stringify({ ...context, message, raw_input: raw_input || "", session_id: session_id || null,
+      active_panel: active_panel || null, max_tokens: max_tokens ?? 300, temperature: temperature ?? 0.2,
+      image_b64: image_b64 || null, image_mime: image_mime || null }),
+  });
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(typeof data.detail === "string" ? data.detail : `Chat request failed (${res.status}).`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "", completed = false;
   try {
-    const res = await fetch("/api/ai/chat/stream", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-      },
-      body: JSON.stringify({
-        message,
-        raw_input: raw_input || "",
-        session_id: session_id || null,
-        active_panel: active_panel || null,
-        max_tokens: max_tokens ?? 300,
-        temperature: temperature ?? 0.2,
-        image_b64: image_b64 || null,
-        image_mime: image_mime || null,
-      }),
-    });
-
-    if (res.ok && res.body) {
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buf = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const block = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-
-          for (const ln of block.split("\n")) {
-            if (!ln.startsWith("data:")) continue;
-            const dataStr = ln.slice(5).trim();
-            if (!dataStr) continue;
-
-            let obj = null;
-            try { obj = JSON.parse(dataStr); } catch { obj = null; }
-            if (!obj) continue;
-
-            if (obj.type === "meta" && onMeta) onMeta(obj);
-            if (obj.type === "delta" && onDelta) onDelta(obj.text || "");
-          }
+    while (!completed) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      buf = buf.replace(/\r\n/g, "\n");
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const block = buf.slice(0, idx); buf = buf.slice(idx + 2);
+        for (const line of block.split("\n")) {
+          if (!line.startsWith("data:")) continue;
+          let obj;
+          try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          if (obj.type === "error") throw new Error(obj.detail || "The provider could not complete this request.");
+          if (obj.type === "meta") onMeta?.(obj);
+          if (obj.type === "delta") onDelta?.(obj.text || "");
+          if (obj.type === "done") completed = true;
         }
       }
-      return true;
     }
-
-    // If server rejects POST (common: 405), fall through to GET/EventSource.
-    if (res.status !== 405) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(`Bundled stream failed (${res.status}): ${txt}`);
-    }
-  } catch (e) {
-    // swallow and try GET fallback below
-  }
-
-  // 2) GET fallback via EventSource (avoids POST/CORS/preflight issues)
-  return await new Promise((resolve, reject) => {
-    try {
-      const qs = new URLSearchParams();
-      qs.set("message", message || "");
-      if (session_id) qs.set("session_id", session_id);
-      qs.set("max_tokens", String(max_tokens ?? 300));
-      qs.set("temperature", String(temperature ?? 0.2));
-
-      const es = new EventSource("/api/ai/chat/stream?" + qs.toString());
-      es.onmessage = (ev) => {
-        if (!ev || !ev.data) return;
-        let obj = null;
-        try { obj = JSON.parse(ev.data); } catch { obj = null; }
-        if (!obj) return;
-
-        if (obj.type === "meta" && onMeta) onMeta(obj);
-        if (obj.type === "delta" && onDelta) onDelta(obj.text || "");
-        if (obj.type === "done") {
-          try { es.close(); } catch {}
-          resolve(true);
-        }
-      };
-      es.onerror = () => {
-        try { es.close(); } catch {}
-        reject(new Error("Bundled SSE connection failed (EventSource)."));
-      };
-    } catch (err) {
-      reject(err);
-    }
-  });
+    if (!completed) throw new Error("The response was interrupted. It was not automatically retried.");
+    return true;
+  } finally { await reader.cancel().catch(() => {}); }
 }
-
 
 
 function clearChatWithPlaceholder(text) {
@@ -2113,10 +2120,17 @@ function syncMeshContextTags({ fallbackRole } = {}) {
 }
 
 function applyTheme(theme) {
-  const t = theme || DEFAULT_THEME;
-  document.documentElement.setAttribute("data-theme", t);
-  // Sync body.theme-dark for CSS components that target that class
-  document.body.classList.toggle("theme-dark", !/(light|lite)/i.test(t));
+  if (typeof window.TLIThemes?.apply === "function") return window.TLIThemes.apply(theme || DEFAULT_THEME);
+  // The native picker still works if the gallery catalog failed to load.
+  // CSS declares each palette's tone; do not infer it from the theme's name.
+  const root = document.documentElement;
+  const selected = typeof theme === "string" && theme ? theme : DEFAULT_THEME;
+  root.setAttribute("data-theme", selected);
+  root.style.removeProperty("color-scheme");
+  const tone = getComputedStyle(root).colorScheme === "dark" ? "dark" : "light";
+  root.setAttribute("data-theme-tone", tone);
+  document.body.classList.toggle("theme-dark", tone === "dark");
+  return selected;
 }
 
 // ---------- version + About modal ----------
@@ -2218,6 +2232,10 @@ if (targetId === "panel-main" && typeof _refreshNoAiBanner === "function") {
 document.dispatchEvent(new CustomEvent("tli-panel-switched", { detail: { panelId: targetId } }));
 
 // Panel hooks (optional feature modules)
+if (targetId === 'panel-companion') window.TLICompanion?.onOpen?.();
+else window.TLICompanion?.onClose?.();
+if (targetId === 'panel-troubleshooting') window.TLITroubleshooting?.onOpen?.();
+else window.TLITroubleshooting?.onClose?.();
 if (targetId === "panel-tli-chat" && window.TLIChat && typeof window.TLIChat.onOpen === "function") {
   window.TLIChat.onOpen();
 }
@@ -2310,19 +2328,18 @@ if (window.TLIHomeAutoActions && typeof window.TLIHomeAutoActions.onOpen === "fu
 
 
 
-// Navigate to the visualizer and immediately scan a path.
-// Called by alert action buttons so the user lands on a pre-scanned result.
+// Historical entry-point name retained for callers. Navigation prepares a
+// location; the explicit Scan control is the only way to start inspection.
 function switchPanelAndScan(panelId, path) {
   switchPanel(panelId);
-  // Give the panel time to become visible before triggering the scan
-  const attempt = (tries) => {
-    if (window.TLIVisualizer && typeof window.TLIVisualizer.scanPath === "function") {
-      window.TLIVisualizer.scanPath(path);
-    } else if (tries > 0) {
-      setTimeout(() => attempt(tries - 1), 150);
-    }
-  };
-  setTimeout(() => attempt(10), 50);
+  if (panelId !== 'panel-visualizer') return;
+  if (typeof window.TLIVisualizer?.scanPath === 'function') return window.TLIVisualizer.scanPath(path);
+  const input = document.getElementById('visualizerPathInput');
+  if (input && typeof path === 'string') {
+    input.value = path;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.focus();
+  }
 }
 
 function openPanelFromQuery() {
@@ -2345,16 +2362,6 @@ function openPanelFromQuery() {
 }
 
 
-// ---------- UI Mode (Classic vs Dashboard 2.0) ----------
-const UI_MODE_KEY = "tli_ui_mode";
-function getUiMode() {
-  return "dash2"; // Dashboard is default landing panel
-}
-function setUiMode(mode) {
-  const v = (mode || "").toLowerCase() === "dash2" ? "dash2" : "classic";
-  localStorage.setItem(UI_MODE_KEY, v);
-  return v;
-}
 function setupTeachingToggle() {
   const toggle = $("teaching-toggle");
   if (!toggle) return;
@@ -2364,56 +2371,6 @@ function isTeachingMode() {
   const toggle = $("teaching-toggle");
   return !!(toggle && toggle.classList.contains("on"));
 }
-
-function setupUiModeSelect() {
-  const sel = document.getElementById("ui-mode-select");
-  if (!sel) return;
-
-  // initialize select value
-  sel.value = getUiMode();
-
-  sel.addEventListener("change", () => {
-    const mode = setUiMode(sel.value);
-
-    // Navigate immediately to the correct landing panel
-    if (mode === "dash2") {
-      const el = document.getElementById("panel-dashboard2");
-      if (el) switchPanel("panel-dashboard2");
-    } else {
-      const el = document.getElementById("panel-main");
-      if (el) switchPanel("panel-main");
-    }
-  });
-}
-
-// ---------- Dashboard toggle button (replaces UI dropdown visually; keeps it for compatibility) ----------
-function setupDash2HeaderButton() {
-  const btn  = document.getElementById("dash2-btn");
-  const sel  = document.getElementById("ui-mode-select");
-  const chip = document.getElementById("ui-mode-chip");
-  if (!btn || !sel) return;
-
-  // Hide the dropdown chip (but keep select in DOM so existing logic still works)
-  try { if (chip) chip.style.display = "none"; } catch {}
-
-  function sync() {
-    const mode = getUiMode();
-    btn.textContent = (mode === "dash2") ? "Classic View" : "Dashboard";
-    btn.classList.toggle("is-dash2", mode === "dash2");
-    btn.setAttribute("aria-pressed", mode === "dash2" ? "true" : "false");
-  }
-
-  btn.addEventListener("click", () => {
-    const next = (getUiMode() === "dash2") ? "classic" : "dash2";
-    sel.value = next;
-    sel.dispatchEvent(new Event("change"));
-    sync();
-  });
-
-  sel.addEventListener("change", sync);
-  sync();
-}
-
 
 // =========================================================
 // Dashboard 2.0 — Alive Layer (additive, safe)
@@ -2429,6 +2386,8 @@ window.TLIDash2 = (function () {
   let _open          = false;
   let _lastCategory  = null;
   let _lastData      = null;   // cached from last _refresh()
+  let _freshnessTimer = null, _lastRefreshFailed = false, _meshObservedAt = null;
+  let _refreshPending = null, _viewEpoch = 0, _sessionLocked = false;
   let _dashSse       = null;   // SSE connection for mesh presence events
   const _seenFeedIds = new Set(); // dedup guard for seeded feed entries
 
@@ -2463,7 +2422,7 @@ window.TLIDash2 = (function () {
 
     const map = {
       state: () => {
-        const devStr  = devCount > 0 ? `${devCount} device${devCount !== 1 ? "s" : ""} online` : "no smart devices";
+        const devStr  = devCount > 0 ? `${devCount} device${devCount !== 1 ? "s" : ""} registered` : "no smart devices";
         const aiStr   = aiOk ? "AI bundled" : lmOnline ? "LM Studio" : "AI offline";
         const diskStr = sys?.ok ? `${sys.pct}% on ${dLabel}` : "";
         return pick([
@@ -2481,7 +2440,7 @@ window.TLIDash2 = (function () {
           sys?.ok && sys.pct > 85 ? `${dLabel} is getting full — ${sys.pct}% used on ${nickname}.` : null,
           sys?.ok && sys.pct <= 85 ? `${sys.free_gb} GB free on ${dLabel}. Storage is healthy.` : null,
           `${nickname} is up. ${timeStr} — ${aiStr.toLowerCase()}, ${devStr}.`,
-          aiReady && devCount > 0 ? `Quiet on the home front. ${devCount} device${devCount !== 1 ? "s" : ""} online, AI ready.` : null,
+          aiReady && devCount > 0 ? `Quiet on the home front. ${devCount} device${devCount !== 1 ? "s" : ""} registered, AI ready.` : null,
           aiReady ? `${aiLabel} is running locally — nothing is leaving this network.` : null,
         ].filter(Boolean));
       },
@@ -2497,7 +2456,7 @@ window.TLIDash2 = (function () {
           `You have ${devCount} Shelly device${devCount !== 1 ? "s" : ""}: ${list}.`,
           `"Toggle ${first}" — say it in chat to switch it instantly.`,
           `${first} is under TLI control. Ask for its power draw, voltage, or relay status.`,
-          devCount > 1 ? `${devNames[devNames.length - 1]} and ${devCount - 1} other device${devCount > 2 ? "s" : ""} are online.` : null,
+          devCount > 1 ? `${devNames[devNames.length - 1]} and ${devCount - 1} other device${devCount > 2 ? "s" : ""} are registered.` : null,
           `Your devices are named. TLI knows "${first}" — no IP addresses needed.`,
           `${list} — plain English works: "turn off ${first}", "is ${devNames[devNames.length - 1]} on?".`,
           `TLI has mapped ${devCount} smart plug${devCount !== 1 ? "s" : ""} to your LAN. ${first} is ready.`,
@@ -2506,13 +2465,13 @@ window.TLIDash2 = (function () {
       },
 
       ai: () => pick(aiReady ? [
-        `${nickname}'s AI runs 100% offline. Nothing you say ever leaves this network.`,
+        `Check the chat source to see where ${nickname}'s AI runs. Optional online search and external services have their own connection settings.`,
         `${aiLabel} can answer questions, write scripts, and control devices — no cloud required.`,
         "Ask TLI to write a PowerShell script. It generates real, runnable code you can save and schedule.",
         "Teaching Mode walks through the AI's reasoning step by step — great for learning or auditing.",
-        "The AI remembers context within a session. Start a New Chat to reset its memory.",
+        "New Chat starts a fresh conversation. Use saved notes controls whether relevant Notes & fixes can also be included.",
         "Precision mode makes the AI more technical. Creative mode lets it think freely.",
-        "Use [vault:key] in any chat message to inject a secret without typing it in the clear.",
+        "A [vault:key] reference can share a secret with the selected AI provider. Review the destination before sending.",
         `${aiLabel} doesn't log your conversations. Privacy is the default.`,
         "You can ask the AI to explain any process, file, or network event — it answers from local context.",
         "The AI can draft scripts, explain errors, and suggest fixes — all without leaving your LAN.",
@@ -2520,7 +2479,7 @@ window.TLIDash2 = (function () {
         `${aiLabel} works even without internet. Power cut to the router? AI still runs on ${nickname}.`,
         "Default mode balances speed and quality. Precision mode goes deeper. Creative mode roams free.",
         "Every reply stays on your hardware. No usage data is collected. No external servers are contacted.",
-        "The AI can reference your Vault. Ask it to use [vault:key] and it will inject the secret safely.",
+        "Vault values shared with AI may appear in its reply or saved conversation. Share only what the task needs.",
       ] : [
         "No AI model is running. Start the bundled backend or connect LM Studio to enable chat.",
         "TLI works without an AI for device control and file browsing — but chat needs a model.",
@@ -2564,20 +2523,20 @@ window.TLIDash2 = (function () {
       },
 
       vault: () => pick([
-        "Vault stores secrets encrypted at rest. Use [vault:key] in any chat message to inject them.",
-        "Nothing in the Vault ever leaves your network. Encrypted locally, always.",
-        "Store API keys, passwords, and notes in Vault — reference them in chat with [vault:key].",
-        "Vault entries are encrypted with your PIN. TLI locked = Vault locked.",
-        "The Vault is zero-knowledge — the AI never sees the raw secret unless you explicitly inject it.",
-        "Vault lets you keep secrets out of your chat history. [vault:key] injects them invisibly.",
-        "Everything in Vault is AES-encrypted on disk. No plaintext is ever stored.",
-        "You can store credentials, tokens, passphrases — and inject them into any AI prompt on demand.",
-        "The Vault is always available offline. Your secrets don't need a cloud provider.",
-        "Use Vault like a local 1Password — reference secrets in chat without exposing them.",
+        "Vault protects file contents, secret values and private notes with a separate passphrase.",
+        "Your TLI PIN and Vault passphrase are separate. Use Lock Vault to end Vault access for this account.",
+        "Vault notes are separate from Notes & fixes and conversation history.",
+        "Vault access lasts up to 30 minutes for this TLI account, including its other signed-in sessions.",
+        "A downloaded Vault file is an unencrypted copy outside the Vault. Your browser chooses where to save it.",
+        "Revealing or copying a secret is deliberate. Locking Vault does not erase your device’s clipboard.",
+        "A [vault:key] reference can expose its value to a tool or AI provider and its output. Review before sharing.",
+        "Vault encrypts contents on the TLI host. File names and Vault note titles remain visible as storage metadata.",
+        "TLI cannot recover a forgotten Vault passphrase. Keep it somewhere safe.",
+        "The encrypted Vault export is a partial copy. Retain the original installation and encryption metadata for recovery.",
       ]),
 
       tip: () => pick([
-        `Say "Remember that..." to teach TLI facts about ${nickname}. It stores them in local memory.`,
+        `Use Notes & fixes to save setup details and past fixes for ${nickname}. Saving stays in your control.`,
         "History saves every conversation. Tap History in chat to browse and resume past sessions.",
         "Advanced controls let you tune temperature and token limits per message.",
         "Use the Scripts panel to generate automations — PowerShell, Bash, or Python — and save them.",
@@ -2585,11 +2544,11 @@ window.TLIDash2 = (function () {
         "The Tools panel runs one-click utilities: health check, top processes, printer scan, and more.",
         "LAN AI lets you offload inference to a more powerful machine on the same network.",
         `Home Automation responds to plain English — "Is the charger on?" or "Turn off the HDD."`,
-        "Game Optimizer tweaks system settings for better gaming performance — all locally, instantly.",
+        "Performance & apps records CPU and memory for an app you choose. Review the readings before saving a report or asking AI; no settings are changed.",
         "File browser lets you explore this machine's directories and ask the AI to help organize them.",
         "Teaching Mode is great for clients — the AI explains every step like a patient instructor.",
         "The Abort button stops an AI response mid-stream. Useful if it goes off track.",
-        "Start a New Chat to give the AI a clean context — no memory of previous messages.",
+        "New Chat leaves earlier messages behind. Review the context summary and Use saved notes setting before sending.",
         "You can inject a Vault secret into any message without it appearing in the chat log.",
         `${nickname} is your private LAN console. Free tier covers most features — Pro unlocks the rest.`,
         "The AI can read system logs, explain errors, and suggest fixes — all without internet.",
@@ -2728,6 +2687,44 @@ window.TLIDash2 = (function () {
 
   function _el(id) { return document.getElementById(id); }
 
+  function _dashEsc(str) {
+    return String(str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function _runSuggestion(item) {
+    if (!item) return;
+    if (item.kind === "chat_seed") {
+      window._tliDashChatAction(item.prompt || item.context || item.title || "");
+      return;
+    }
+    const target = item.target || item.panel || "";
+    if (!target) return;
+    if (target === "panel-visualizer") {
+      _openStorage(item.scan_path);
+      return;
+    }
+    if (typeof switchPanel === "function") switchPanel(target);
+  }
+
+  function _openStorage(path) {
+    if (path && typeof window.TLIVisualizer?.scanPath === 'function') {
+      switchPanel('panel-visualizer');
+      window.TLIVisualizer.scanPath(path);
+      return;
+    }
+    switchPanel('panel-visualizer');
+    const input = document.getElementById('visualizerPathInput');
+    if (input && path) {
+      input.value = path;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    input?.focus();
+  }
+
   // ── Vitals ───────────────────────────────────────────────────
   function _setVital(base, val, sub) {
     const v = _el("ndv-" + base + "-val");
@@ -2744,27 +2741,36 @@ window.TLIDash2 = (function () {
     const colors = { good: "var(--accent)", warn: "#f59e0b", idle: "#6b7280" };
     orb.style.background = colors[state] || colors.idle;
     orb.style.boxShadow  = state === "good" ? "0 0 14px var(--accent)" : "none";
-    if (label) label.textContent = state === "good" ? "ONLINE" : state === "warn" ? "PARTIAL" : "OFFLINE";
+    if (label) label.textContent = state === "good" ? "CHECKED" : state === "warn" ? "ATTENTION" : "UNKNOWN";
   }
 
   // ── Live activity feed seeding ────────────────────────────────
 
   async function _seedFeed() {
+    const epoch = _viewEpoch;
     // 1. Action receipts (Shelly toggles, saved actions, etc.)
     try {
-      const data = await fetch("/actions/receipts?limit=10", { signal: AbortSignal.timeout(4000) })
-        .then(r => r.ok ? r.json() : null);
-      const receipts = (data?.items || []).reverse(); // oldest first → insert in order
+      let receipts = Array.isArray(_lastData?.recent_receipts) ? _lastData.recent_receipts.slice() : null;
+      if (!receipts) {
+        const data = await fetch("/actions/receipts?limit=10", { signal: AbortSignal.timeout(4000) })
+          .then(r => r.ok ? r.json() : null);
+        receipts = data?.items || [];
+      }
+      if (epoch !== _viewEpoch || _sessionLocked) return;
+      receipts = receipts.reverse();
       receipts.forEach(r => {
         const key = "r:" + (r.ts || "") + "|" + (r.kind || "");
         if (_seenFeedIds.has(key)) return;
         _seenFeedIds.add(key);
         const label = r.summary || r.kind || "Action";
-        _feedLog("⚡ " + label, "good", r.ts);
+        const failed = r.ok === false || r.receipt?.ok === false ||
+          (Array.isArray(r.results) && r.results.some(step => step.ok === false));
+        _feedLog("⚡ " + label, failed ? "error" : "good", r.ts);
       });
     } catch {}
 
     // 2. Active alerts (disk, Shelly offline, mesh offline)
+    if (epoch !== _viewEpoch || _sessionLocked) return;
     const alerts = _lastData?.activeAlerts || [];
     alerts.forEach(a => {
       const key = "a:" + (a.id || a.kind || a.message || "");
@@ -2782,6 +2788,7 @@ window.TLIDash2 = (function () {
     try {
       _dashSse = new EventSource("/mesh/presence/stream");
       _dashSse.onmessage = e => {
+        if (!_open || _sessionLocked) return;
         try {
           const evt = JSON.parse(e.data);
           if (evt.type === "node_online") {
@@ -2825,6 +2832,11 @@ window.TLIDash2 = (function () {
     if (_typeTimer) { clearInterval(_typeTimer); _typeTimer = null; }
     const el = _el("nd-statement-text");
     if (!el) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      el.textContent = text;
+      if (onDone) onDone();
+      return;
+    }
     let i = 0;
     el.textContent = "";
     _typeTimer = setInterval(() => {
@@ -2837,6 +2849,7 @@ window.TLIDash2 = (function () {
   }
 
   function _narratorNext() {
+    if (_serverNarrator) return;
     if (!_open) return;
     const cat = _pickCategory();
     const msg = _buildStatement(cat);
@@ -2887,10 +2900,11 @@ window.TLIDash2 = (function () {
     }
 
     if (sevEl) {
-      const dots = { info: "🟢", warning: "🟡", critical: "🔴" };
-      const dot  = dots[msg.severity] || "";
-      sevEl.textContent   = dot;
-      sevEl.style.display = dot ? "" : "none";
+      const attention = ['warning','critical'].includes(msg.severity);
+      sevEl.textContent = '';
+      sevEl.dataset.severity = msg.severity || 'info';
+      sevEl.setAttribute('aria-label', msg.severity || 'Information');
+      sevEl.style.display = attention ? "" : "none";
     }
 
     if (actionEl) {
@@ -2932,28 +2946,32 @@ window.TLIDash2 = (function () {
   function _renderActions(aiOk, devNames) {
     const el = _el("nd-actions");
     if (!el) return;
-    const _dMount    = (_lastData?.diskData?.system?.mount) || (_tliIsWindows() ? "C:\\" : "/");
-    const _dMountEsc = _dMount.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const mount = _lastData?.diskData?.system?.mount || '';
+    const chat = prompt => () => window._tliDashChatAction(prompt);
     const actions = [
-      { icon: "💬", label: "Ask TLI anything",             onclick: "switchPanel('panel-main'); document.getElementById('chat-input')?.focus();" },
-      { icon: "🩺", label: "What's slowing me down?",      onclick: `window._tliDashChatAction("Run a full system health check — CPU, RAM, disk, and top processes.")` },
-      { icon: "🌐", label: "Map this network",              onclick: `window._tliDashChatAction("Scan the local network and list all active LAN devices.")` },
-      { icon: "📁", label: "Find what's filling my drive",  onclick: `switchPanelAndScan('panel-visualizer', '${_dMountEsc}')` },
-      { icon: "🔑", label: "Open Vault",                    onclick: "switchPanel('panel-vault');" },
+      { icon: "💬", label: "Ask TLI anything", run: () => { switchPanel('panel-main'); document.getElementById('chat-input')?.focus(); } },
+      { icon: "🩺", label: "What's slowing me down?", run: chat('Run a full system health check — CPU, RAM, disk, and top processes.') },
+      { icon: "🌐", label: "Map this network", run: chat('Scan the local network and list all active LAN devices.') },
+      { icon: "📁", label: "Review Free Space", run: () => _openStorage(mount) },
+      { icon: "🔑", label: "Open Vault", run: () => switchPanel('panel-vault') },
     ];
-    if (devNames.length > 0) {
-      actions.splice(3, 0, { icon: "🏠", label: "Control smart home", onclick: "switchPanel('panel-homeauto')" });
-      const first = (devNames[0] || "").replace(/"/g, "");
-      actions.splice(4, 0, { icon: "⚡", label: `Toggle ${first}`, onclick: `window._tliDashChatAction("Toggle ${first}")` });
+    if (devNames.length) {
+      actions.splice(3, 0, { icon: "🏠", label: "Control smart home", run: () => switchPanel('panel-homeauto') });
+      actions.splice(4, 0, { icon: "⚡", label: `Toggle ${devNames[0]}`, run: chat(`Toggle ${devNames[0]}`) });
     }
-    if (!aiOk) {
-      actions.push({ icon: "🤖", label: "Why is AI offline?", onclick: `window._tliDashChatAction("The AI model appears offline. Why might this happen and how do I fix it?")` });
-    }
-    el.style.cssText = "display:flex;flex-direction:column;gap:6px;padding-top:8px;";
-    el.innerHTML = actions.map(a =>
-      `<button class="chip-button" style="display:flex;width:100%;text-align:left;align-items:center;gap:8px;padding:7px 10px;" onclick="${a.onclick}">` +
-      `<span style="flex-shrink:0;">${a.icon}</span><span>${a.label}</span></button>`
-    ).join("");
+    if (!aiOk) actions.push({ icon: "🤖", label: "Check AI availability", run: () => document.getElementById('ai-source-pill')?.click() });
+    el.replaceChildren();
+    actions.forEach(action => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'chip-button';
+      const iconName = {'💬':'chat','🩺':'tools','🌐':'network','📁':'folder','🔑':'lock','🏠':'home','⚡':'flow','🤖':'settings'}[action.icon];
+      const icon = window.TLIUI?.icon(iconName);
+      if (icon) button.append(icon);
+      button.append(document.createTextNode(action.label));
+      button.addEventListener('click', action.run);
+      el.append(button);
+    });
   }
 
   // ── Quick Read findings ───────────────────────────────────────
@@ -2963,89 +2981,155 @@ window.TLIDash2 = (function () {
     const sys   = data.diskData?.system || data.diskData;
     const chips = [];
 
-    if (sys?.ok) {
-      const dMount   = sys.mount || (_tliIsWindows() ? "C:\\" : "/");
-      const dEsc     = dMount.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      const dAct     = `switchPanelAndScan('panel-visualizer', '${dEsc}')`;
+    if (data.diskData?.ok && window.TLIUIHealth?.percent(sys?.pct) != null) {
       if (sys.pct >= 85)
-        chips.push({ icon: "💾", text: `${sys.drive || "C:"} ${sys.pct}% full`, cls: "warn", action: dAct, label: "Clean Up" });
-      else if (sys.pct >= 70)
-        chips.push({ icon: "💾", text: `${sys.free_gb} GB free`, cls: "", action: dAct, label: "Browse" });
+        chips.push({ icon: "💾", text: `${sys.drive || "C:"} ${sys.pct}% full`, cls: "warn" });
+      else if (sys.pct >= 70 && typeof sys.free_gb === 'number' && Number.isFinite(sys.free_gb))
+        chips.push({ icon: "💾", text: `${sys.free_gb} GB free`, cls: "" });
       else
-        chips.push({ icon: "💾", text: "Storage healthy", cls: "ok" });
+        chips.push({ icon: "💾", text: `${sys.drive || 'System drive'} ${sys.pct}% used`, cls: "ok" });
     }
     if (data.devCount > 0)
-      chips.push({ icon: "🏠", text: `${data.devCount} device${data.devCount !== 1 ? "s" : ""} online`, cls: "ok" });
+      chips.push({ icon: "🏠", text: `${data.devCount} device${data.devCount !== 1 ? "s" : ""} registered`, cls: "ok" });
     if (data.aiOk || data.lmOnline)
       chips.push({ icon: "🧠", text: data.aiOk ? "AI ready" : "LM Studio", cls: "ok" });
     else
-      chips.push({ icon: "🧠", text: "AI offline", cls: "warn", action: "switchPanel('panel-main')", label: "Start" });
+      chips.push({ icon: "🧠", text: data.aiOk === false && data.lmOnline === false ? "AI unavailable" : "AI status unknown", cls: "" });
 
     if (!chips.length) { el.hidden = true; return; }
     el.hidden = false;
-    el.innerHTML = chips.map(c => {
-      const mod  = (c.cls   ? ` nd-quickread__chip--${c.cls}` : "") + (c.action ? " nd-quickread__chip--action" : "");
-      const act  = c.action ? ` onclick="${c.action}"` : "";
-      const hint = c.label  ? `<span style="opacity:0.5;font-size:10px;margin-left:3px;">${c.label}&nbsp;›</span>` : "";
-      return `<div class="nd-quickread__chip${mod}"${act}>${c.icon} ${c.text}${hint}</div>`;
-    }).join("");
+    el.replaceChildren();
+    chips.forEach(chip => {
+      const finding = document.createElement('span');
+      finding.className = 'nd-quickread__chip' + (chip.cls ? ' nd-quickread__chip--' + chip.cls : '');
+      finding.textContent = chip.text;
+      el.append(finding);
+    });
   }
 
   // ── Smart suggestions ─────────────────────────────────────────
   function _renderSuggestions(data) {
     const el = _el("nd-suggestions");
     if (!el) return;
-    const sys   = data.diskData?.system || data.diskData;
-    const chips = [];
 
-    if (sys?.ok && sys.pct >= 70) {
-      const dMount = sys.mount || (_tliIsWindows() ? "C:\\" : "/");
-      const dEsc   = dMount.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-      chips.push({ label: "Free up space", onclick: `switchPanelAndScan('panel-visualizer', '${dEsc}')` });
+    const serverSuggestions = Array.isArray(data.suggestions) ? data.suggestions.slice(0, 5) : [];
+    if (serverSuggestions.length) {
+      el.hidden = false;
+      el.innerHTML = `<span class="nd-suggestions__label">Try</span>` +
+        serverSuggestions.map((c, idx) =>
+          `<button class="nd-sugg-chip" data-suggestion-index="${idx}" title="${_dashEsc(c.reason || c.title || c.context || "")}">${_dashEsc(c.label || c.title || "Open")}</button>`
+        ).join("");
+      el.querySelectorAll("[data-suggestion-index]").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const idx = Number(btn.getAttribute("data-suggestion-index"));
+          _runSuggestion(serverSuggestions[idx]);
+        });
+      });
+      return;
+    }
+
+    const sys = data.diskData?.system || data.diskData;
+    const chips = [];
+    if (data.diskData?.ok && sys && sys.pct >= 70) {
+      chips.push({ label: 'Review Free Space', run: () => _openStorage(sys.mount) });
     }
     if (!data.aiOk && !data.lmOnline)
-      chips.push({ label: "Start AI model", onclick: "switchPanel('panel-main')" });
+      chips.push({ label: 'Manage AI model', run: () => document.getElementById('ai-source-pill')?.click() });
     if (data.devCount === 0)
-      chips.push({ label: "Add smart device", onclick: "switchPanel('panel-homeauto')" });
-    if (data.meshSt === "unpaired")
-      chips.push({ label: "Connect a peer", onclick: "switchPanel('panel-mesh')" });
-
-    if (!chips.length) { el.hidden = true; return; }
-    el.hidden = false;
-    el.innerHTML = `<span class="nd-suggestions__label">Try</span>` +
-      chips.map(c => `<button class="nd-sugg-chip" onclick="${c.onclick}">${c.label}</button>`).join("");
+      chips.push({ label: 'Add smart device', run: () => switchPanel('panel-homeauto') });
+    if (data.meshSt === 'unpaired')
+      chips.push({ label: 'Connect a peer', run: () => switchPanel('panel-mesh') });
+    el.hidden = chips.length === 0;
+    el.replaceChildren();
+    chips.forEach(chip => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'nd-sugg-chip';
+      button.textContent = chip.label;
+      button.addEventListener('click', chip.run);
+      el.append(button);
+    });
   }
 
   // ── Data refresh (every 30s) ──────────────────────────────────
   async function _refresh() {
-    if (!_open) return;
+    if (!_open || _sessionLocked) return;
+    if (_refreshPending) return _refreshPending;
+    _refreshPending = _refreshOnce();
+    try { return await _refreshPending; } finally { _refreshPending = null; }
+  }
+
+  async function _refreshOnce() {
+    const epoch = _viewEpoch;
+    const identityStartedAt = Date.now();
     try {
-      const [statusRes, devRes, aiRes, diskRes, alertsRes] = await Promise.allSettled([
-        fetch("/status",                { signal: AbortSignal.timeout(5000) }).then(r => r.ok ? r.json() : null),
-        fetch("/homeauto/devices",      { signal: AbortSignal.timeout(5000) }).then(r => r.ok ? r.json() : null),
-        fetch("/api/ai/bundled/status", { signal: AbortSignal.timeout(5000) }).then(r => r.ok ? r.json() : null),
-        fetch("/api/system/disk",       { signal: AbortSignal.timeout(5000) }).then(r => r.ok ? r.json() : null),
-        fetch("/status/alerts",         { signal: AbortSignal.timeout(5000) }).then(r => r.ok ? r.json() : null),
-      ]);
+      let accessRejected = false;
+      let data = await fetch("/dashboard/command-center", {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: AbortSignal.timeout(12000),
+      }).then(r => { accessRejected = r.status === 401 || r.status === 403; return r.ok ? r.json() : null; }).catch(() => null);
+      if (accessRejected) throw new Error('Unlock TLI to check the Dashboard.');
 
-      const status      = statusRes.status  === "fulfilled" ? statusRes.value  : null;
-      const devData     = devRes.status     === "fulfilled" ? devRes.value     : null;
-      const aiData      = aiRes.status      === "fulfilled" ? aiRes.value      : null;
-      const diskData    = diskRes.status    === "fulfilled" ? diskRes.value    : null;
-      const alertsData  = alertsRes.status  === "fulfilled" ? alertsRes.value  : null;
-      const activeAlerts = (alertsData?.alerts || []).filter(a => !a.dismissed);
+      if (data && (typeof data !== 'object' || Array.isArray(data) || data.ok === false)) data = null;
+      if (!data) {
+        const [statusRes, devRes, aiRes, diskRes, alertsRes] = await Promise.allSettled([
+          fetch("/status",                { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+          fetch("/homeauto/devices",      { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+          fetch("/api/ai/bundled/status", { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+          fetch("/api/system/disk",       { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+          fetch("/status/alerts",         { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+        ]);
 
-      const aiOk     = !!(aiData && (aiData.ok || aiData.healthy));
-      const lmOnline = !!(status?.model_online);
-      const devices  = Array.isArray(devData?.devices) ? devData.devices : [];
-      const devNames = devices.map((d, i) => (d.name?.trim()) ? d.name.trim() : `Device ${i + 1}`);
-      const devCount = devices.length;
-      const nickname = status?.device_nickname || "TLI Node";
-      const nodeRole = status?.node_role       || "standalone";
-      const meshSt   = status?.mesh_status     || "unpaired";
+        const status       = statusRes.status === "fulfilled" ? statusRes.value : null;
+        const devData      = devRes.status    === "fulfilled" ? devRes.value    : null;
+        const aiData       = aiRes.status     === "fulfilled" ? aiRes.value     : null;
+        const diskData     = diskRes.status   === "fulfilled" ? diskRes.value   : null;
+        const alertsData   = alertsRes.status === "fulfilled" ? alertsRes.value : null;
+        const devices      = Array.isArray(devData?.devices) ? devData.devices : [];
+        const devNames     = devices.map((d, i) => (d.name?.trim()) ? d.name.trim() : `Device ${i + 1}`);
+        data = {
+          aiOk: typeof aiData?.healthy === 'boolean' ? aiData.healthy : null,
+          lmOnline: typeof status?.model_online === 'boolean' ? status.model_online : null,
+          devNames,
+          devCount: Array.isArray(devData?.devices) ? devices.length : null,
+          nickname: status?.device_nickname || null,
+          node: status ? {id: status.device_id || status.node_id, name: status.device_nickname} : null,
+          identitySource: 'status',
+          nodeRole: status?.node_role || "standalone",
+          meshSt: status?.mesh_status || "unpaired",
+          diskData: diskData || {},
+          activeAlerts: (alertsData?.alerts || []).filter(a => !a.dismissed),
+          suggestions: [],
+          current_action: null,
+        };
+        if (!status && !aiData && !diskData && !devData) throw new Error('Monitoring unavailable');
+      }
+
+      if (epoch !== _viewEpoch || _sessionLocked || !_open) return;
+      const aiOk         = typeof data.aiOk === 'boolean' ? data.aiOk : null;
+      const lmOnline     = typeof data.lmOnline === 'boolean' ? data.lmOnline : null;
+      const devNames     = Array.isArray(data.devNames) ? data.devNames : [];
+      const devCount     = Number.isInteger(data.devCount) && data.devCount >= 0 ? data.devCount : null;
+      window.TLIUI?.hostIdentity?.observe({id: data.node?.id || data.node_id || data.device_id, name: data.node?.name || data.nickname,
+        observedAt: Number.isFinite(data.ts) && data.ts > 0 ? data.ts * 1000 : identityStartedAt,
+        source: data.identitySource || 'dashboard/command-center'});
+      const nickname     = window.TLIUI?.hostIdentity ? (window.TLIUI.hostIdentity.get().name || 'Not confirmed') : (data.node?.name || data.nickname || 'Not confirmed');
+      const nodeRole     = data.nodeRole || data.node?.role || "standalone";
+      const meshSt       = data.meshSt || data.node?.mesh_status || "unpaired";
+      const diskData     = data.diskData || data.storage || {};
+      const activeAlerts = Array.isArray(data.activeAlerts) ? data.activeAlerts : [];
 
       // Cache for Narrator statements
-      _lastData = { aiOk, lmOnline, devNames, devCount, nickname, nodeRole, meshSt, diskData, activeAlerts };
+      if (data.narrator) setEventMessage(data.narrator);
+      _lastRefreshFailed = false;
+      _lastData = Object.assign({}, data, {
+        aiOk, lmOnline, devNames, devCount, nickname, nodeRole, meshSt, diskData, activeAlerts,
+      });
+      if (data.state) window.TLIPresence?.acceptSnapshot?.(data);
+      // Only the action owner reads and versions the queue. This aggregate may
+      // predate a just-completed action, and legacy fallback has no queue facts.
+      window.TLIPresence?.fetchActionCurrent?.();
       // Seed activity feed from backend events (fire-and-forget)
       _seedFeed();
       // Refresh mesh health strip (independent — may take up to 6s for peer pings)
@@ -3053,51 +3137,97 @@ window.TLIDash2 = (function () {
 
       // Vitals
       const meshLabel = meshSt === "unpaired" ? "Mesh: standalone" : `Mesh: ${meshSt}`;
-      _setVital("node", nodeRole === "standalone" ? "Solo" : nodeRole, `${nickname} · ${meshLabel}`);
+      _setVital("node", nickname, nodeRole === 'standalone' ? 'This computer · Standalone' : `${nodeRole} · ${meshLabel}`);
       const sysDrive = diskData?.system || diskData;
-      const driveLabel = sysDrive?.drive || "C:";
+      const driveLabel = sysDrive?.drive || "System drive";
+      const diskKnown = diskData?.ok && window.TLIUIHealth?.percent(sysDrive?.pct) != null;
       _setVital("storage",
-        diskData?.ok ? `${sysDrive.pct}%` : "—",
-        diskData?.ok ? `${driveLabel} · ${sysDrive.used_gb} GB used of ${sysDrive.total_gb} GB` : "Unavailable");
-      _setVital("smart", devCount > 0 ? String(devCount) : "—",
-                         devCount > 0 ? devNames.slice(0, 3).join(", ") + (devCount > 3 ? ` +${devCount - 3}` : "") : "No devices registered");
-      _setVital("ai", aiOk ? "Bundled" : lmOnline ? "LM Studio" : "Offline",
-                      aiOk ? "Local · offline-first" : lmOnline ? "LM Studio connected" : "No model running");
+        diskKnown ? `${sysDrive.pct}%` : "—",
+        diskKnown ? `${driveLabel}${typeof sysDrive.used_gb === 'number' && typeof sysDrive.total_gb === 'number' ? ` · ${sysDrive.used_gb} GB used of ${sysDrive.total_gb} GB` : ' · Capacity details unavailable'}` : "Storage reading unavailable");
+      const meter = _el('ndv-storage-meter');
+      if (meter) { meter.hidden = !diskKnown; if (diskKnown) { meter.value = sysDrive.pct; meter.setAttribute('aria-label', `${driveLabel}: ${sysDrive.pct}% used`); } }
+      _setVital("smart", devCount !== null ? String(devCount) : "—",
+                         devCount > 0 ? devNames.slice(0, 3).join(", ") + (devCount > 3 ? ` +${devCount - 3}` : "") : devCount === 0 ? "No devices registered" : "Device inventory unavailable");
+      const presentation = window.TLIUIHealth?.dashboard({ ..._lastData, aiSource: window.TLIAISource?.getSnapshot?.() }) || {
+        aiLabel: aiOk ? 'Bundled' : lmOnline ? 'LM Studio' : 'Unknown',
+        aiDetail: 'Check AI readiness in the model library', orb: 'idle', aiReady: aiOk === true || lmOnline === true,
+      };
+      _setVital("ai", presentation.aiLabel, presentation.aiDetail);
 
-      const _overallGood = aiOk || lmOnline;
-      _setOrb(_overallGood ? "good" : devCount > 0 ? "warn" : "idle");
-      _setMeta(`${nickname} · ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+      const _overallGood = presentation.aiReady;
+      _renderObservationSummary();
       _renderActions(_overallGood, devNames);
       _renderQuickRead(_lastData);
       _renderSuggestions(_lastData);
 
       // Make storage vital tile clickable → opens visualizer at system drive
       const _svTile = document.getElementById("nd-storage-vital-tile");
-      if (_svTile && diskData?.ok) {
-        const _sMnt = sysDrive?.mount || (_tliIsWindows() ? "C:\\" : "/");
+      if (_svTile) {
+        const _sMnt = diskKnown ? sysDrive?.mount || '' : '';
         _svTile.classList.add("nd-vital--clickable");
         _svTile.dataset.scanPath = _sMnt;
-        _svTile.title = "Click to open Storage Visualizer";
+        _svTile.title = _sMnt ? `Review ${_sMnt} in Free Space` : 'Open Free Space';
+        _svTile.setAttribute('role', 'button'); _svTile.tabIndex = 0;
         if (!_svTile._tliClickBound) {
           _svTile.addEventListener("click", function () {
-            switchPanelAndScan("panel-visualizer", this.dataset.scanPath);
+            _openStorage(this.dataset.scanPath);
           });
+          _svTile.addEventListener('keydown', function (event) { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); this.click(); } });
           _svTile._tliClickBound = true;
         }
       }
 
       // Always log a state snapshot on each data refresh so the feed is never empty
       const _snapParts = [];
-      if (devCount > 0) _snapParts.push(`${devCount} device${devCount !== 1 ? "s" : ""} online`);
-      _snapParts.push(aiOk ? "AI bundled" : lmOnline ? "LM Studio" : "AI offline");
-      if (diskData?.ok) _snapParts.push(`${driveLabel} ${diskData.pct}%`);
-      _feedLog(_snapParts.join(" · ") + ".", _overallGood ? "good" : "warn");
+      if (devCount > 0) _snapParts.push(`${devCount} device${devCount !== 1 ? "s" : ""} registered`);
+      _snapParts.push('AI: ' + presentation.aiLabel);
+      if (diskKnown) _snapParts.push(`${driveLabel} ${sysDrive.pct}%`);
+      _feedLog(_snapParts.join(" · ") + ".", presentation.orb === 'warn' ? 'warn' : 'info');
 
     } catch (e) {
-      _setOrb("idle");
-      _setMeta("Backend unreachable");
+      if (epoch !== _viewEpoch || _sessionLocked || !_open) return;
+      _lastRefreshFailed = true;
+      _renderObservationSummary();
+      setEventMessage({ type: "alert", text: "System monitoring is unavailable. TLI could not be reached for a fresh check." });
       _feedLog("Backend unreachable — check the server.", "error");
     }
+  }
+
+  function _renderObservationSummary() {
+    const shared = window.TLIPresence?.getObservation?.();
+    const aiSource = window.TLIAISource?.getSnapshot?.();
+    const facts = window.TLIUIHealth?.dashboard({ ...(_lastData || {}), ...(shared || {}), aiSource });
+    if (!facts) return;
+    const observed = facts.observed;
+    if (aiSource) _setVital('ai', facts.aiLabel, facts.aiDetail);
+    if (shared?.storage) {
+      const disk = shared.storage.system || shared.storage;
+      const label = disk.drive || disk.mount || 'System drive';
+      _setVital('storage', `${disk.pct}%`, `${label}${typeof disk.free_gb === 'number' && Number.isFinite(disk.free_gb) ? ` · ${disk.free_gb} GB free` : ''}${typeof disk.total_gb === 'number' && Number.isFinite(disk.total_gb) ? ` of ${disk.total_gb} GB` : ''}`);
+      const meter = _el('ndv-storage-meter'); if (meter) { meter.hidden = false; meter.value = disk.pct; meter.setAttribute('aria-label', `${label}: ${disk.pct}% used`); }
+      const tile = _el('nd-storage-vital-tile'); if (tile) tile.dataset.scanPath = disk.mount || '';
+    }
+    const storageScope = _el('ndv-storage-scope');
+    if (storageScope && shared) {
+      const stamp = shared.storageCheckedAt ? new Date(shared.storageCheckedAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : null;
+      const stale = shared.storageCheckedAt && Date.now() - shared.storageCheckedAt >= 30000;
+      storageScope.textContent = stamp ? `${shared.monitoringUnavailable || shared.storageUnavailable ? 'Refresh unavailable · last check' : stale ? 'Previous reading' : 'Checked'} ${stamp}` : 'Storage has not been checked';
+      storageScope.dataset.freshness = shared.monitoringUnavailable || shared.storageUnavailable ? 'unavailable' : stale ? 'stale' : stamp ? 'fresh' : 'unknown';
+    }
+    if (shared?.devCount !== null && shared?.devCount !== undefined) {
+      _setVital('smart', String(shared.devCount), shared.devCount ? shared.devNames.slice(0, 3).join(', ') + (shared.devCount > 3 ? ` +${shared.devCount - 3}` : '') : 'No devices registered');
+    }
+    const metric = _el('ndv-node-metrics'), state = shared?.state || _lastData?.state || {};
+    if (metric) {
+      const pct = window.TLIUIHealth?.percent;
+      metric.textContent = `CPU ${pct?.(state.cpu_pct) != null ? state.cpu_pct + '%' : 'unknown'} · Memory ${pct?.(state.ram_pct) != null ? state.ram_pct + '%' : 'unknown'}`;
+      metric.dataset.freshness = observed.freshness;
+    }
+    const stamp = observed.stamp ? new Date(observed.stamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'No successful system probe';
+    const failed = shared ? shared.monitoringUnavailable : _lastRefreshFailed;
+    _setOrb(failed ? 'idle' : facts.orb);
+    _setMeta(`${_lastData?.nickname || 'TLI host'} · ${failed ? (observed.stamp ? 'Monitoring unavailable; previous results retained' : 'Monitoring unavailable; no successful readings yet') : observed.label} · ${stamp}`);
+    const meta = _el('nd-meta-line'); if (meta) meta.dataset.freshness = failed ? 'unavailable' : observed.freshness;
   }
 
   // ── Mesh health strip ─────────────────────────────────────────
@@ -3115,70 +3245,85 @@ window.TLIDash2 = (function () {
     const allNodes = nodes; // self first, then peers
 
     container.innerHTML = allNodes.map(n => {
-      const offline  = !n.online;
+      const facts = window.TLIUIHealth?.meshNode(n);
+      const offline = n.online === false;
       const name     = n.node_name || n.hostname || "Unknown";
-      const cpu      = typeof n.cpu_percent === "number" ? Math.round(n.cpu_percent) : null;
-      const ram      = typeof n.ram_percent  === "number" ? Math.round(n.ram_percent)  : null;
-      const aiOk     = n.ai_healthy;
+      const cpu      = facts?.cpu != null ? Math.round(facts.cpu) : null;
+      const ram      = facts?.ram != null ? Math.round(facts.ram) : null;
+      const aiOk     = n.ai_healthy === true;
       const aiModel  = n.active_model || (n.active_preset ? n.active_preset : null);
       const cpuWarn  = cpu !== null && cpu >= 80;
 
       const cpuStat  = cpu !== null
         ? `<span class="nd-mesh-node__stat${cpuWarn ? " nd-mesh-node__stat--warn" : ""}">CPU ${cpu}%</span>`
-        : "";
+        : `<span class="nd-mesh-node__stat">CPU unknown</span>`;
       const ramStat  = ram !== null
         ? `<span class="nd-mesh-node__stat">RAM ${ram}%</span>`
-        : "";
+        : `<span class="nd-mesh-node__stat">RAM unknown</span>`;
       const aiStat   = aiOk
-        ? `<span class="nd-mesh-node__stat nd-mesh-node__stat--ai">AI ${aiModel ? "· " + aiModel : "✓"}</span>`
-        : `<span class="nd-mesh-node__stat nd-mesh-node__stat--ai-off">AI offline</span>`;
+        ? `<span class="nd-mesh-node__stat nd-mesh-node__stat--ai">AI ready${aiModel ? " · " + _dashEsc(aiModel) : ""}</span>`
+        : `<span class="nd-mesh-node__stat nd-mesh-node__stat--ai-off">${facts?.ai || 'AI status unknown'}</span>`;
       const selfTag  = n.is_self
-        ? `<span class="nd-mesh-node__self">This device</span>`
+        ? `<span class="nd-mesh-node__self">TLI host</span>`
         : "";
       const offlineTag = offline && !n.is_self
-        ? `<span class="nd-mesh-node__stat">Offline</span>`
-        : "";
+        ? `<span class="nd-mesh-node__stat">Not reachable</span>`
+        : `<span class="nd-mesh-node__stat">${facts?.availability || 'Status unknown'}</span>`;
 
       return `<div class="nd-mesh-node${offline && !n.is_self ? " nd-mesh-node--offline" : ""}">
         <div class="nd-mesh-node__dot"></div>
-        <div class="nd-mesh-node__name">${name.replace(/</g,"&lt;")}</div>
+        <div class="nd-mesh-node__name">${_dashEsc(name)}</div>
         ${selfTag}
         <div class="nd-mesh-node__stats">
-          ${cpuStat}${ramStat}${offline && !n.is_self ? offlineTag : aiStat}
+          ${offlineTag}${offline ? '' : cpuStat + ramStat + aiStat}
         </div>
       </div>`;
     }).join("");
   }
 
   async function _refreshMeshStrip() {
+    const epoch = _viewEpoch;
+    const strip = _el('nd-mesh-strip');
+    let observed = strip?.querySelector('.ui-mesh-observed');
+    if (strip && !observed) { observed = document.createElement('p'); observed.className = 'ui-mesh-observed small-meta'; strip.append(observed); }
     try {
       const data = await fetch("/api/mesh/health", { signal: AbortSignal.timeout(6000) })
         .then(r => r.ok ? r.json() : null);
-      if (data?.nodes?.length) _renderMeshStrip(data.nodes);
-    } catch {}
+      if (epoch !== _viewEpoch || _sessionLocked) return;
+      if (!Array.isArray(data?.nodes)) throw new Error('No computer readings');
+      _renderMeshStrip(data.nodes);
+      _meshObservedAt = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      if (observed) observed.textContent = `Computers checked ${_meshObservedAt}`;
+    } catch {
+      if (epoch !== _viewEpoch || _sessionLocked) return;
+      if (observed) observed.textContent = _meshObservedAt ? `Computer refresh unavailable. Previous results from ${_meshObservedAt}.` : 'Computer readings unavailable.';
+    }
   }
 
   // ── Public API ────────────────────────────────────────────────
   function onOpen() {
-    if (_open) return;
+    if (_open || _sessionLocked) return;
     _open = true;
-    // v1.3: First-launch placeholder while data loads
+    _serverNarrator = null;
+    // Server Narrator owns awareness and confirmation timing.
     _typeText("I'm reading your environment.");
     _startDashSSE();
-    _refresh().then(() => {
-      // First statement immediately after data loads
-      _narratorNext();
-      // Then cycle every 9 seconds
-      _cycleTimer = setInterval(_narratorNext, 9_000);
+    Promise.resolve(_refreshPending).then(_refresh).then(() => {
+      if (!_open || _sessionLocked) return;
+      if (!_serverNarrator) setEventMessage({ type: "status", text: "System monitoring is unavailable. Waiting for a fresh check." });
     });
     // Data refresh every 30s
     _pollTimer = setInterval(_refresh, 30_000);
+    _freshnessTimer = setInterval(_renderObservationSummary, 1000);
   }
 
   function onClose() {
     _open = false;
+    _viewEpoch++;
     _stopDashSSE();
+    if (_narratorTransition) { clearTimeout(_narratorTransition); _narratorTransition = null; }
     if (_pollTimer)  { clearInterval(_pollTimer);  _pollTimer  = null; }
+    if (_freshnessTimer) { clearInterval(_freshnessTimer); _freshnessTimer = null; }
     if (_cycleTimer) { clearInterval(_cycleTimer); _cycleTimer = null; }
     if (_typeTimer)  { clearInterval(_typeTimer);  _typeTimer  = null; }
     if (_tipTimer)   { clearInterval(_tipTimer);   _tipTimer   = null; }
@@ -3187,45 +3332,51 @@ window.TLIDash2 = (function () {
   // ── v1.3: Event-driven narrator override ────────────────────────────────
   // Called by EventInterpreter via window.TLIDash2.setEventMessage(msg)
   // msg: { type: "status"|"alert"|"action_prompt"|"confirmation", text: string }
-  let _eventOverrideTimer = null;
+  let _serverNarrator = null;
+  let _narratorTransition = null;
   function setEventMessage(msg) {
-    if (!msg || !msg.text) return;
-
-    // Map backend narrator type → internal type + severity
+    if (!msg || !msg.text || _sessionLocked) return;
+    if (_serverNarrator?.timestamp && msg.timestamp && msg.timestamp < _serverNarrator.timestamp) return;
+    const unchanged = _serverNarrator?.text === msg.text && _serverNarrator?.type === msg.type && _serverNarrator?.severity === msg.severity;
+    _serverNarrator = msg;
+    if (!_open || unchanged) return;
+    if (_narratorTransition) clearTimeout(_narratorTransition);
     const typeMap = {
-      status:         { type: "GUIDANCE",  severity: "info"     },
-      alert:          { type: "AWARENESS", severity: "warning"  },
-      action_prompt:  { type: "ACTION_PROMPT", severity: "info" },
-      confirmation:   { type: "CONFIRMATION",  severity: "info" },
+      status: { type: "GUIDANCE", severity: "info" },
+      alert: { type: "AWARENESS", severity: "warning" },
+      action_prompt: { type: "ACTION_PROMPT", severity: "info" },
+      confirmation: { type: "CONFIRMATION", severity: "info" },
     };
-    const mapped = typeMap[msg.type] || { type: "GUIDANCE", severity: "info" };
-
+    const mapped = typeMap[msg.type] || typeMap.status;
+    const severity = msg.severity === 'warn' ? 'warning' : ['info','warning','critical'].includes(msg.severity) ? msg.severity : mapped.severity;
     const stmt = _el("nd-statement");
     if (stmt) { stmt.style.opacity = "0"; stmt.style.transition = "opacity 0.35s"; }
-
-    setTimeout(function () {
+    _narratorTransition = setTimeout(function () {
       if (!_open) return;
       _typeText(msg.text);
-      _setNarratorCard({ text: msg.text, type: mapped.type, severity: mapped.severity });
-      if (stmt) { stmt.style.opacity = "1"; }
-
-      // Apply data-narrator-type for CSS styling
+      _setNarratorCard({ text: msg.text, type: mapped.type, severity });
+      if (stmt) stmt.style.opacity = "1";
       const narratorEl = _el("nd-narrator");
       if (narratorEl) narratorEl.dataset.narratorType = msg.type || "status";
-
-      // For "confirmation" type: fade back to normal after 8s
-      if (msg.type === "confirmation") {
-        if (_eventOverrideTimer) clearTimeout(_eventOverrideTimer);
-        _eventOverrideTimer = setTimeout(function () {
-          if (!_open) return;
-          if (narratorEl) narratorEl.dataset.narratorType = "status";
-          _narratorNext();
-        }, 8_000);
-      }
     }, 380);
   }
 
-  return { onOpen, onClose, setEventMessage };
+  window.addEventListener('tli-system-observation', () => { if (_open) _renderObservationSummary(); });
+  window.addEventListener('tli-ai-source-changed', () => { if (_open) _renderObservationSummary(); });
+  window.addEventListener('tli-session-locked', () => {
+    _sessionLocked = true; onClose(); _lastData = null; _serverNarrator = null; _seenFeedIds.clear();
+    for (const id of ['nd-feed', 'nd-mesh-nodes', 'nd-statement-text', 'nd-meta-line', 'nd-actions', 'nd-suggestions', 'nd-quickread']) _el(id)?.replaceChildren();
+    for (const name of ['storage', 'smart', 'ai']) _setVital(name, '—', 'Unlock TLI to check');
+    _setVital('node', 'Not confirmed', 'Unlock TLI to check');
+    const meter = _el('ndv-storage-meter'); if (meter) meter.hidden = true;
+    const metric = _el('ndv-node-metrics'); if (metric) metric.textContent = '';
+  });
+  window.addEventListener('tli-session-unlocked', () => {
+    _sessionLocked = false;
+    const panel = _el('panel-dashboard2');
+    if (panel && !panel.hidden && !panel.classList.contains('hidden')) Promise.resolve(_refreshPending).finally(onOpen);
+  });
+  return { onOpen, onClose, setEventMessage, refresh: _refresh, openStorage: _openStorage };
 })();
 
 // AbortController + debounce
@@ -3339,17 +3490,31 @@ async function sendChat() {
   const input   = $("chat-input");
   const sendBtn = $("chat-send-btn");
   const abortBtn = $("abort-chat-btn");
-  if (!input || !sendBtn || !abortBtn) return;
+  if (!input || !sendBtn || !abortBtn || sendBtn.disabled) return;
 
+  const requestImageB64 = _chatImageB64, requestImageMime = _chatImageMime;
+  const requestImageVersion = _chatImageReadVersion;
+  let requestContext = window.TLIIntelligence?.getContext() || {};
+  const intelligenceTicket = window.TLIIntelligence?.capture?.();
+  try {
+    if (requestImageB64) requestContext = window.TLIScreenshots?.requestContext(requestContext) || requestContext;
+    requestContext = window.TLINotebook?.requestContext(requestContext, { image: !!requestImageB64, text: window.__tliInjectedUserMessage || input.value || '' }) || requestContext;
+    requestContext = window.TLIDocuments?.requestContext(requestContext, { image: !!requestImageB64, text: window.__tliInjectedUserMessage || input.value || '' }) || requestContext;
+    requestContext = window.TLICaseContext?.requestContext(requestContext, { image: !!requestImageB64, text: window.__tliInjectedUserMessage || input.value || '' }) || requestContext;
+    requestContext = window.TLIMemory?.requestContext(requestContext) || requestContext;
+  }
+  catch (e) { showToast(e.message, "error"); return; }
   let rawText = (input.value || "").trim();
   // Allow send with no text if an image is attached — default prompt
-  if (!rawText && _chatImageB64) rawText = "What's in this image?";
+  if (_chatImageReading) { showToast("Wait for the image to finish attaching.", "info"); return; }
+  if (!rawText && requestImageB64) rawText = window.TLIScreenshots?.defaultPrompt() || "What's in this image?";
   if (!rawText) return;
+  const checkingAIStatus = !requestImageB64 && !requestContext.note_refs?.length && !requestContext.documents?.length && !requestContext.case_ref && !requestContext.diagnostic_id && !requestContext.target_id && !!window.TLIChatWorkspace?.isStatusQuestion(rawText);
   input.value = "";
 
   // Capture image preview URL immediately — before any async code can touch state
-  const _previewDataUrl = _chatImageB64
-    ? `data:${_chatImageMime || "image/jpeg"};base64,${_chatImageB64}`
+  const _previewDataUrl = requestImageB64
+    ? `data:${requestImageMime || "image/jpeg"};base64,${requestImageB64}`
     : null;
 
 // =====================================================
@@ -3370,7 +3535,7 @@ const __bypassGate = !!window.__tliSearchGateBypassOnce;
 window.__tliSearchGateBypassOnce = false;
 
 try {
-  if (!__bypassGate && tliSearchIsEnabled() && tliShouldGateForSearch(rawText)) {
+  if (!requestImageB64 && !requestContext.note_refs?.length && !requestContext.documents?.length && !requestContext.case_ref && !__bypassGate && tliSearchIsEnabled() && tliShouldGateForSearch(rawText)) {
     // Show banner and wait. Do NOT send to model yet.
     tliShowSearchBannerFor(rawText);
     return;
@@ -3379,16 +3544,77 @@ try {
   // If gating fails for any reason, fail open (offline) to preserve chat usability.
 }
 
+sendBtn.disabled = true;
+const responseIndicator = window.TLIChatWorkspace?.beginResponse?.();
+const requestController = new AbortController();
+inFlightController = requestController;
+abortBtn.disabled = false;
+let responseOutcome = null, responseBubble = null, requestStillCurrent = () => false;
+// Stop only ends this browser's wait. It cannot attest to cancellation of host actions.
+const waitForResponse = promise => new Promise((resolve, reject) => {
+  const stopped = () => { const error = new Error('You stopped waiting for this response.'); error.name = 'AbortError'; reject(error); };
+  if (requestController.signal.aborted) { stopped(); return; }
+  requestController.signal.addEventListener('abort', stopped, {once:true});
+  Promise.resolve(promise).then(resolve, reject).finally(() => requestController.signal.removeEventListener('abort', stopped));
+});
+try {
+window.TLIConversationLoad?.invalidate?.();
+const isCurrent = () => (!window.TLIMemory || window.TLIMemory.isCurrent(requestContext)) &&
+  (!window.TLICaseContext || window.TLICaseContext.isCurrent(requestContext)) &&
+  window.TLIIntelligence?.isCurrent?.(intelligenceTicket) !== false;
+requestStillCurrent = isCurrent;
+let partialReply = '';
+let requestWasStopped = false;
+let replyMetadata = null;
 // Instant render: user bubble + thinking bubble (before async AI route resolution)
-appendMessage("user", rawText, _previewDataUrl ? { imageDataUrl: _previewDataUrl } : {});
-const thinkingBubble = appendMessage("ai", "Thinking… please give me a moment while your offline AI processes this.", { thinking: true });
+const userBubble = appendMessage("user", rawText, _previewDataUrl ? { imageDataUrl: _previewDataUrl } : {});
+const thinkingBubble = appendMessage("ai", "TLI is working…", { thinking: true });
+responseBubble = thinkingBubble;
+function preserveInterruptedReply(err) {
+    if (!isCurrent()) return;
+    if (!input.value && (!requestImageB64 || requestImageVersion === _chatImageReadVersion)) input.value = rawText;
+    const stopped = requestWasStopped || err.name === "AbortError" || requestController.signal.aborted;
+    responseOutcome = stopped ? "stopped" : "interrupted";
+    const actionUncertain = replyMetadata?.handled_by === 'intent_engine' || replyMetadata?.provider === 'tli-action' ||
+      /^(?:turn|switch|toggle|run|clear|clean|delete|move|restart|shutdown|shut down)\b/i.test(rawText);
+    const review = () => {
+      if (!isCurrent() || sendBtn.disabled) return;
+      if (input.value.trim() && input.value !== rawText) {
+        showToast('Your newer draft is still in the composer. Finish or clear it before reviewing this question.', 'info');
+        input.focus?.(); return;
+      }
+      input.value = rawText; input.focus?.();
+      showToast('Review the question and current context, then choose Send.' + (actionUncertain ? ' The earlier action may already have completed.' : ''), 'info');
+    };
+    const hint = err.message || 'The connection ended before a complete response arrived.';
+    if (window.TLIChatWorkspace?.showInterrupted) {
+      window.TLIChatWorkspace.showInterrupted(thinkingBubble, { partial: partialReply, message: hint, stopped, actionUncertain, review });
+    } else {
+      thinkingBubble.textContent = (partialReply ? partialReply + '\n\nIncomplete response. ' : '') +
+        (stopped ? 'Stopped waiting for the response. ' : 'Request failed: ' + hint + ' ') +
+        'No automatic retry was sent. Check any action result before trying again.';
+      thinkingBubble.classList.remove('chat-bubble-thinking');
+    }
+    if (stopped) {
+      debugLog("warn", "POST /chat aborted by user.");
+    } else {
+      window.TLIChatWorkspace?.markFailure?.(thinkingBubble);
+      debugLog("error", "POST /chat error: " + hint);
+    }
+}
+
 
 // 🧭 Decide where intelligence comes from (Local > LAN > None)
 let __aiRoute = null;
-try { __aiRoute = await resolveIntelligenceRoute({ forceRefresh: false }); } catch {}
+try { if (!checkingAIStatus) __aiRoute = await waitForResponse(resolveIntelligenceRoute({ forceRefresh: false })); } catch (e) { if (requestController.signal.aborted) { preserveInterruptedReply(e); return; } }
+if (!isCurrent()) return;
 
-// If LAN AI is selected, try it first (best-effort). If it fails, fall through to local /chat.
-if (__aiRoute && __aiRoute.source === IntelligenceSource.LAN_LLM && __aiRoute.node) {
+// A failed LAN request is uncertain. Keep it for deliberate review rather than sending it again to another provider.
+if (requestContext.use_conversation_history === false && __aiRoute?.source === IntelligenceSource.LAN_LLM && !requestImageB64 && !requestContext.note_refs?.length && !requestContext.documents?.length && !requestContext.case_ref) {
+  preserveInterruptedReply(new Error('This LAN AI route cannot confirm that earlier conversation is excluded. Select a provider on this TLI host before retrying. Nothing was sent.'));
+  return;
+}
+if (requestContext.use_saved_memory !== false && !requestImageB64 && !requestContext.note_refs?.length && !requestContext.documents?.length && !requestContext.case_ref && !requestContext.diagnostic_id && !requestContext.target_id && !window.TLIChatWorkspace?.isStatusQuestion(rawText) && !/^(?:turn|switch|toggle|check|run .*diagnostics)\b/i.test(rawText) && __aiRoute && __aiRoute.source === IntelligenceSource.LAN_LLM && __aiRoute.node) {
   try {
     debugLog("info", `AI route=LAN → ${__aiRoute.node.name} (${__aiRoute.node.ip})`);
     const payload = {
@@ -3404,16 +3630,20 @@ if (__aiRoute && __aiRoute.source === IntelligenceSource.LAN_LLM && __aiRoute.no
       })()
     };
 
-    const lanData = await lanAiChat({ node: __aiRoute.node, payload });
-    let reply = lanData?.message?.content || lanData?.reply || lanData?.answer || "(No reply from LAN AI)";
+    const lanData = await waitForResponse(lanAiChat({ node: __aiRoute.node, payload }));
+    if (!isCurrent()) return;
+    let reply = lanData?.message?.content || lanData?.reply || lanData?.answer;
+    if (typeof reply !== 'string' || !reply.trim()) throw new Error('The LAN provider returned no usable reply.');
     reply = formatModelOutput(reply, $("mode-select")?.value || "default");
+    responseIndicator?.responding(); responseOutcome = "completed";
 
     if (thinkingBubble) {
-      thinkingBubble.innerHTML = reply;
+      thinkingBubble.innerHTML = renderAssistantHTML(reply);
       thinkingBubble.classList.remove("chat-bubble-thinking");
     }
     chatHistoryAdd("user", rawText);
     chatHistoryAdd("assistant", reply);
+    window.TLIMemory?.decorateReply(thinkingBubble, {});
 
     try { saveConversation(rawText, reply, currentConversationId); } catch {}
     try { addPreviousPrompt(rawText); } catch {}
@@ -3423,7 +3653,11 @@ if (__aiRoute && __aiRoute.source === IntelligenceSource.LAN_LLM && __aiRoute.no
     abortBtn.disabled = true;
     return;
   } catch (e) {
-    debugLog("warn", "LAN AI failed, falling back to local: " + (e?.message || e));
+    if (!isCurrent()) return;
+    debugLog("warn", "LAN AI request failed: " + (e?.message || e));
+    preserveInterruptedReply(e);
+    sendBtn.disabled = false; abortBtn.disabled = true;
+    return;
   }
 }
 
@@ -3451,11 +3685,15 @@ if (__aiRoute && __aiRoute.source === IntelligenceSource.NONE) {
   // --- end vault parsing ---
 
   const now = Date.now();
-  if (now - lastSendTs < 250) return;
   lastSendTs = now;
 
   const storedSettings = readSettings() || {};
   const brain = storedSettings.defaultBrain || "auto";
+  // Notebook turns keep the chosen provider; the owner-aware SSE note handler
+  // serves bundled inference while LM Studio uses the existing /chat handler.
+  const notebookUsesLMStudio = !requestImageB64 &&
+    (/^(?:lmstudio|lm_studio|lm-studio|lms|openai)$/i.test(brain) ||
+      (brain === "auto" && window.__tliActiveAISource === "lmstudio"));
   const mode          = $("mode-select").value || "default";
   const teachingMode  = isTeachingMode();
   const temperature   = parseFloat($("temperature-input").value || "0.7");
@@ -3466,49 +3704,15 @@ if (__aiRoute && __aiRoute.source === IntelligenceSource.NONE) {
   // Keep model context consistent
   // NOTE: we store rawText in chat history to preserve user intent exactly.
   if (thinkingBubble) {
-    thinkingBubble.textContent = "Thinking… please give me a moment while your offline AI processes this.";
+    thinkingBubble.textContent = checkingAIStatus ? "Checking AI status…" : "Preparing your reply…";
   }
 
   // lock buttons + show generic “thinking” status
   sendBtn.disabled = true;
   abortBtn.disabled = false;
-  setModelStatus(true, "Model server: thinking…");
+  // Response progress does not establish provider health; the response indicator owns this state.
 
-  // 🔹 NEW: Shelly intent fast-path (skip LLM entirely)
-  const shellyIntent = detectShellyIntent(text);
-  if (shellyIntent) {
-    debugLog(
-      "info",
-      `Shelly intent from chat: action=${shellyIntent.action}, name="${shellyIntent.name}"`
-    );
-
-    // Make it obvious this is local control, not the model
-    setModelStatus(true, "Local control: Shelly plug");
-
-    try {
-      await handleShellyIntent(shellyIntent, thinkingBubble, rawText);
-      // Persist assistant reply from the Shelly fast-path into conversation memory
-      try {
-        const txt = (thinkingBubble && thinkingBubble.textContent) ? thinkingBubble.textContent : "";
-        if (txt && !/thinking/i.test(txt)) chatHistoryAdd("assistant", txt);
-      } catch {}
-    } catch (err) {
-      // Very defensive; handleShellyIntent already has its own try/catch
-      thinkingBubble.textContent =
-        "Shelly control failed: " + (err?.message || "unknown error");
-      thinkingBubble.classList.remove("chat-bubble-thinking");
-      showToast("Shelly control failed.", "error");
-      debugLog("error", "Shelly intent outer error: " + err.message);
-    } finally {
-      sendBtn.disabled = false;
-      abortBtn.disabled = true;
-      inFlightController = null;
-    }
-
-    // ⬅️ IMPORTANT: do *not* call /chat; Shelly path ends here
-    return;
-  }
-
+  // Device commands use the backend's shared resolver and clarification path.
   // 🔹 Normal LLM path (unchanged)
   debugLog(
     "info",
@@ -3518,41 +3722,53 @@ if (__aiRoute && __aiRoute.source === IntelligenceSource.NONE) {
   );
 
   try {
-    inFlightController = new AbortController();
+
+    // Old backends ignore unknown request fields and could route the question
+    // as an ordinary command. Verify this read-only protocol before any POST.
+    if (requestContext.documents?.length) await waitForResponse(window.TLIDocuments.ensureAvailable(requestContext, requestController.signal));
+    if (requestContext.case_ref) await waitForResponse(window.TLICaseContext.ensureAvailable(requestContext, requestController.signal));
+    if (window.TLIMemory) await waitForResponse(window.TLIMemory.ensureAvailable(requestContext, requestController.signal));
     // Choose endpoint:
 // - If Bundled AI is healthy, use /api/ai/chat (fast, offline, no LM Studio).
 // - Otherwise fall back to legacy /chat routing (LM Studio / Mesh).
 let useBundled = false;
 try {
-  const st = await tliFetchBundledStatus();
-  useBundled = !!(st && st.ok === true);
-  AIStatus.local.provider = useBundled ? "bundled" : (AIStatus.local.provider || "lmstudio");
-  AIStatus.local.available = useBundled;
-} catch {}
+  if (!checkingAIStatus) {
+    const st = await waitForResponse(tliFetchBundledStatus());
+    useBundled = !!(st && st.ok === true);
+    AIStatus.local.provider = useBundled ? "bundled" : (AIStatus.local.provider || "lmstudio");
+    AIStatus.local.available = useBundled;
+  }
+} catch (e) { if (requestController.signal.aborted) throw e; }
 
 // If a LAN AI peer is available but local bundled AI is off, force the /api/ai/chat
 // path anyway — the backend already has mesh routing built in and will proxy to the peer.
 if (!useBundled && AIStatus.lan.available) {
   useBundled = true;
 }
+if (checkingAIStatus) useBundled = true;
 
+if (requestImageB64 || requestContext.note_refs?.length || requestContext.documents?.length || requestContext.case_ref || /^(?:turn|switch|toggle|check|run .*diagnostics)\b/i.test(text)) useBundled = true;
+if (notebookUsesLMStudio) useBundled = false;
+
+if (!isCurrent() || (requestContext.documents?.length && !window.TLIDocuments?.isCurrent(requestContext))) return;
 const endpoint = useBundled ? "/api/ai/chat" : "/chat";
 
 // ✅ Bundled AI: use SSE streaming for instant partial output
 if (useBundled) {
-  const wrapped = buildContextWrappedMessage({ latestUserMessage: text, teachingMode: teachingMode, mode: mode });
-  // Capture and clear image before send
-  const sentImageB64  = _chatImageB64;
-  const sentImageMime = _chatImageMime;
-  _clearChatImage();
+  // Keep the attachment available if the request fails.
+  const sentImageB64  = requestImageB64;
+  const sentImageMime = requestImageMime;
 
   let acc = "";
-  // reuse the existing thinking bubble created above
-  try { if (thinkingBubble) thinkingBubble.innerHTML = ""; } catch {}
+  let screenshotMeta = null;
+  // Keep the waiting message visible until the first response text arrives.
 
   try {
-  await tliBundledChatStream({
-      message: wrapped,
+  await waitForResponse(tliBundledChatStream({
+      ...requestContext,
+      signal: requestController.signal,
+      message: text,
       raw_input: text,
       session_id: currentConversationId || null,
       active_panel: _currentPanelId || null,
@@ -3561,12 +3777,44 @@ if (useBundled) {
       image_b64: sentImageB64 || null,
       image_mime: sentImageMime || null,
       onMeta: (m) => {
+        if (!isCurrent() || requestController.signal.aborted) return;
+        if (requestContext.documents?.length && !window.TLIDocuments?.isCurrent(requestContext)) return;
+        screenshotMeta = { ...(screenshotMeta || {}), ...m };
+        replyMetadata = screenshotMeta;
+        window.TLIIntelligence?.showMeta?.(m);
         try { currentConversationId = m.session_id || currentConversationId; } catch {}
-        // If this response is being served by a mesh peer, update the AI pill live
-        if (m.handled_by === "mesh" && m.mesh_node) {
+        window.currentConversationId = currentConversationId;
+
+      },
+      onDelta: (chunk) => {
+        if (!isCurrent() || requestController.signal.aborted) return;
+        if (requestContext.documents?.length && !window.TLIDocuments?.isCurrent(requestContext)) return;
+        if (!chunk) return;
+        if (!acc) responseIndicator?.responding();
+        acc += chunk;
+        partialReply = acc;
+        try {
+          if (thinkingBubble) {
+            thinkingBubble.classList.remove("chat-bubble-thinking");
+            thinkingBubble.innerHTML = renderAssistantHTML(acc); _attachSpeakBtn(thinkingBubble, acc);
+          }
+        } catch {}
+      },
+    }));
+  
+    // finalize
+} catch (e) {
+  requestWasStopped = e.name === 'AbortError' || requestController.signal.aborted;
+  throw e;
+}
+if (!isCurrent() || (requestContext.documents?.length && !window.TLIDocuments?.isCurrent(requestContext))) return;
+if (!acc.trim()) throw new Error("The provider returned no usable reply.");
+responseOutcome = "completed";
+// A routing announcement is not readiness. Confirm the mesh response only after completion.
+        if (acc.trim() && screenshotMeta?.handled_by === "mesh" && screenshotMeta.mesh_node) {
           try {
-            const peerName = m.mesh_node.name || m.mesh_node.ip || "Mesh";
-            const preset = m.mesh_node.preset ? ` (${m.mesh_node.preset})` : "";
+            const peerName = screenshotMeta.mesh_node.name || screenshotMeta.mesh_node.ip || "Mesh";
+            const preset = screenshotMeta.mesh_node.preset ? ` (${screenshotMeta.mesh_node.preset})` : "";
             const setPill = window.__tliSetAIPill;
             if (typeof setPill === "function") {
               setPill(`Mesh AI · ${peerName}`, "ok", `AI routed to ${peerName}${preset} via mesh`);
@@ -3576,53 +3824,39 @@ if (useBundled) {
             }
           } catch {}
         }
-      },
-      onDelta: (chunk) => {
-        if (!chunk) return;
-        acc += chunk;
-        try {
-          if (thinkingBubble) {
-            thinkingBubble.classList.remove("chat-bubble-thinking");
-            thinkingBubble.innerHTML = renderAssistantHTML(acc); _attachSpeakBtn(thinkingBubble, acc);
-          }
-        } catch {}
-      },
-    });
-  
-    // finalize
-} catch (e) {
-  // Fallback to non-streaming bundled endpoint
-  const wrappedMsg = buildContextWrappedMessage({ latestUserMessage: text, teachingMode: teachingMode, mode: mode });
-  const r = await fetch('/api/ai/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message: wrappedMsg, raw_input: text, session_id: currentConversationId || null, max_tokens: maxTokens, temperature: temperature }) });
-  if (!r.ok) { const t = await r.text().catch(()=> ''); throw new Error('Bundled chat failed ('+r.status+'): '+t); }
-  const j = await r.json();
-  currentConversationId = j.session_id || currentConversationId;
-  acc = (j.reply || '').toString();
-  try { if (thinkingBubble) { thinkingBubble.classList.remove('chat-bubble-thinking'); thinkingBubble.innerHTML = renderAssistantHTML(acc); _attachSpeakBtn(thinkingBubble, acc); } } catch {}
-  try { chatHistoryAdd('assistant', acc); } catch {}
-  try { if (acc) tliSpeak(acc); } catch {}
-  return;
-}
+if (sentImageB64 && requestImageVersion === _chatImageReadVersion) _clearChatImage();
+window.TLIScreenshots?.annotateReply(thinkingBubble, screenshotMeta);
+window.TLINotebook?.annotateReply(thinkingBubble, screenshotMeta);
+window.TLINotebook?.sent(requestContext);
+window.TLIDocuments?.sent(requestContext, screenshotMeta);
+window.TLIDocuments?.annotateReply(thinkingBubble, screenshotMeta);
+window.TLICaseContext?.sent(requestContext, screenshotMeta);
+window.TLICaseContext?.decorateReply(thinkingBubble, screenshotMeta);
+window.TLIMemory?.decorateReply(thinkingBubble, screenshotMeta || {});
+window.TLIMemory?.sent?.(requestContext);
+window.TLIMemory?.decorateMessage(userBubble, { source_ref: screenshotMeta?.user_source_ref });
 
 // finalize
   try {
     if (thinkingBubble) thinkingBubble.classList.remove("chat-bubble-thinking");
   } catch {}
-  try { chatHistoryAdd("assistant", acc); } catch {}
+  try { chatHistoryAdd("user", rawText); chatHistoryAdd("assistant", acc); } catch {}
+  try { saveConversation(rawText, acc, currentConversationId); addPreviousPrompt(rawText); } catch {}
   try { if (acc) tliSpeak(acc); } catch {}
   return;
 }
 
 
-const res = await fetch(endpoint, {
+const res = await waitForResponse(fetch(endpoint, {
 
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: inFlightController.signal,
+      signal: requestController.signal,
       body: JSON.stringify({
+        ...requestContext,
         device_id: currentDeviceId || "dev-browser",
-        message: buildContextWrappedMessage({ latestUserMessage: text, teachingMode: teachingMode, mode: mode }),                    // cleaned text without [vault:.] markers
-        brain,
+        message: text,
+        brain: notebookUsesLMStudio ? "lmstudio" : brain,
         mode,
         teaching_mode: teachingMode,
         temperature,
@@ -3632,7 +3866,7 @@ const res = await fetch(endpoint, {
         include_vault_secrets: secretKeys.length > 0,         // vault hook
         secret_keys: secretKeys.length ? secretKeys : null    // vault hook
       })
-    });
+    }));
     if (!res.ok) {
       let detail = "HTTP " + res.status;
       try {
@@ -3642,11 +3876,14 @@ const res = await fetch(endpoint, {
       debugLog("error", "POST /chat failed: " + detail);
       throw new Error(detail);
     }
-    const data  = await res.json();
-let reply = data.reply || data.answer || "(No reply from model)";
+    const data  = await waitForResponse(res.json());
+if (!isCurrent() || (requestContext.documents?.length && !window.TLIDocuments?.isCurrent(requestContext))) return;
+let reply = data.reply || data.answer;
+if (typeof reply !== 'string' || !reply.trim()) throw new Error('The provider returned no usable reply.');
 
 // 🔹 Apply response formatting based on Mode dropdown (default / concise / step / dev)
 reply = formatModelOutput(reply, mode);
+responseIndicator?.responding(); responseOutcome = "completed";
 
 
 // Bundled AI uses session_id instead of conversation_id
@@ -3672,14 +3909,26 @@ if (!data.conversation_id && data.session_id) {
   } catch {}
 }
 
+window.currentConversationId = currentConversationId;
 thinkingBubble.textContent = reply;
     thinkingBubble.classList.remove("chat-bubble-thinking");
-    try { chatHistoryAdd("assistant", reply); } catch {}
+    window.TLINotebook?.annotateReply(thinkingBubble, data);
+    window.TLINotebook?.sent(requestContext);
+    window.TLIDocuments?.sent(requestContext, data);
+    window.TLIDocuments?.annotateReply(thinkingBubble, data);
+    window.TLICaseContext?.sent(requestContext, data);
+    window.TLICaseContext?.decorateReply(thinkingBubble, data);
+    window.TLIMemory?.decorateReply(thinkingBubble, data);
+    window.TLIMemory?.sent?.(requestContext);
+    window.TLIMemory?.decorateMessage(userBubble, { source_ref: data.user_source_ref });
+    try { chatHistoryAdd("user", rawText); chatHistoryAdd("assistant", reply); } catch {}
 
     try { saveConversation(text, reply, currentConversationId); } catch {}
     try { addPreviousPrompt(text); } catch {}
 
-    setModelStatus(true, "Model server: Online");
+    // The reply identifies its provider; independent health checks own runtime
+    // readiness. Do not launch a health-generation request after an answer.
+
     debugLog(
       "info",
       "POST /chat OK, conversation_id=" +
@@ -3688,27 +3937,21 @@ thinkingBubble.textContent = reply;
         reply.length
     );
   } catch (err) {
-    if (err.name === "AbortError") {
-      thinkingBubble.textContent = "Request cancelled.";
-      thinkingBubble.classList.remove("chat-bubble-thinking");
-      setModelStatus(true, "Model server: Online");
-      debugLog("warn", "POST /chat aborted by user.");
-    } else {
-      const hint = err.message.includes("503") || err.message.includes("unavailable")
-        ? "No AI available. Download your AI model in Settings → AI."
-        : err.message.includes("401")
-        ? "Session expired. Unlock TLI to continue."
-        : "Error: " + err.message + " — check Tools → Model Health for details.";
-      thinkingBubble.textContent = hint;
-      thinkingBubble.classList.remove("chat-bubble-thinking");
-      setModelStatus(false, "Model server: error");
-      debugLog("error", "POST /chat error: " + err.message);
-    }
+    preserveInterruptedReply(err);
   } finally {
-    sendBtn.disabled = false;
-    abortBtn.disabled = true;
-    inFlightController = null;
+    if (isCurrent()) {
+      sendBtn.disabled = false;
+      abortBtn.disabled = true;
+      if (inFlightController === requestController) inFlightController = null;
+    }
   }
+} finally {
+  if (requestStillCurrent()) {
+    sendBtn.disabled = false; abortBtn.disabled = true;
+    if (inFlightController === requestController) inFlightController = null;
+  }
+  responseIndicator?.finish({ outcome: requestStillCurrent() ? responseOutcome : null, bubble: responseBubble });
+}
 }
 // =====================================================
 // Shelly Chat Helpers (NEW)
@@ -3940,7 +4183,7 @@ async function _refreshNoAiBanner() {
     const r = await fetch("/api/ai/model/info", { signal: AbortSignal.timeout(4000) });
     if (!r.ok) { banner.classList.add("hidden"); return; }
     const info = await r.json();
-    if (info.exists) { banner.classList.add("hidden"); return; }
+    if (info.exists !== false || info.healthy === true) { banner.classList.add("hidden"); return; }
     // No bundled model — check if LM Studio is reachable before showing the banner
     try {
       const lr = await fetch("/health/llm", { signal: AbortSignal.timeout(2000) });
@@ -3959,7 +4202,7 @@ async function _refreshNoAiBanner() {
           const btnEl   = $("tli-no-ai-download-btn");
           const peerName = md.peer.name || "a LAN node";
           if (titleEl) titleEl.textContent = "AI available via LAN";
-          if (subEl)   subEl.textContent   = `${peerName} is running AI on your LAN — your messages will be routed there automatically.`;
+          if (subEl)   subEl.textContent   = `${peerName} reports AI availability. Review your AI source in Settings to choose where chat should run.`;
           if (btnEl)   { btnEl.textContent = "Open AI Settings"; btnEl.dataset.tliMeshMode = "1"; }
           banner.classList.remove("hidden");
           return;
@@ -3970,9 +4213,9 @@ async function _refreshNoAiBanner() {
     const titleEl = banner.querySelector(".tli-no-ai-banner-title");
     const subEl   = banner.querySelector(".tli-no-ai-banner-sub");
     const btnEl   = $("tli-no-ai-download-btn");
-    if (titleEl) titleEl.textContent = "No AI downloaded";
-    if (subEl)   subEl.textContent   = "Download Qwen2.5 to start chatting — runs 100% on your machine, no internet after download.";
-    if (btnEl)   { btnEl.textContent = "Download Qwen2.5"; delete btnEl.dataset.tliMeshMode; }
+    if (titleEl) titleEl.textContent = "Selected model files are unavailable";
+    if (subEl)   subEl.textContent   = "Open the model library to check installed models and compatibility, or choose another AI source in Settings.";
+    if (btnEl)   { btnEl.textContent = "Open model library"; delete btnEl.dataset.tliMeshMode; }
     banner.classList.remove("hidden");
   } catch {
     banner.classList.add("hidden");
@@ -3982,8 +4225,12 @@ async function _refreshNoAiBanner() {
 // ── Image attach state ──────────────────────────────────────────────────
 let _chatImageB64 = null;
 let _chatImageMime = null;
+let _chatImageReadVersion = 0;
+let _chatImageReading = false;
 
 function _clearChatImage() {
+  _chatImageReadVersion++;
+  _chatImageReading = false;
   _chatImageB64 = null;
   _chatImageMime = null;
   const preview = $("chat-image-preview");
@@ -3992,6 +4239,7 @@ function _clearChatImage() {
   if (preview) preview.classList.add("hidden");
   if (thumb)   thumb.src = "";
   if (attachBtn) attachBtn.classList.remove("has-image");
+  window.TLIScreenshots?.attachmentChanged(null);
 }
 
 function setupChat() {
@@ -4009,20 +4257,30 @@ function setupChat() {
   const removeBtn    = $("chat-image-remove");
 
   if (attachBtn && fileInput) {
-    attachBtn.addEventListener("click", () => fileInput.click());
+    attachBtn.addEventListener("click", () => { window.TLIScreenshots?.chooseImage(); fileInput.click(); });
     fileInput.addEventListener("change", () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) return;
-      _chatImageMime = file.type || "image/jpeg";
+      _clearChatImage();
+      if (!["image/jpeg", "image/png"].includes(file.type) || file.size > 6 * 1024 * 1024) {
+        showToast("Use a JPEG or PNG image up to 6 MB.", "error"); fileInput.value = ""; return;
+      }
+      const readVersion = _chatImageReadVersion;
+      _chatImageReading = true;
+      _chatImageMime = file.type;
       const reader = new FileReader();
       reader.onload = (e) => {
+        if (readVersion !== _chatImageReadVersion) return;
+        _chatImageReading = false;
         const dataUrl = e.target.result;
         // strip the data:...;base64, prefix
         _chatImageB64 = dataUrl.split(",")[1] || null;
         if (imageThumb)   imageThumb.src = dataUrl;
         if (imagePreview) imagePreview.classList.remove("hidden");
         attachBtn.classList.add("has-image");
+        window.TLIScreenshots?.attachmentChanged({ name: file.name });
       };
+      reader.onerror = () => { if (readVersion === _chatImageReadVersion) { _clearChatImage(); showToast("Image could not be read.", "error"); } };
       reader.readAsDataURL(file);
       fileInput.value = ""; // reset so same file can be re-selected
     });
@@ -4059,10 +4317,18 @@ function setupChat() {
   });
   newBtn.addEventListener("click", () => {
     // reset conversation thread
+    window.TLIConversationLoad?.invalidate?.();
+    inFlightController?.abort();
+    window.TLIMemory?.clear();
+    window.TLIIntelligence?.clearContext?.();
     currentConversationId = null;
+    window.currentConversationId = null;
+    sendBtn.disabled = false;
+    abortBtn.disabled = true;
     resetChatHistory({ alsoClearStorage: true });
     clearChatWithPlaceholder("New chat started. Ask anything.");
   });
+  input.addEventListener("input", () => window.TLIConversationLoad?.invalidate?.());
   abortBtn.addEventListener("click", () => {
     if (inFlightController) inFlightController.abort();
   });
@@ -4073,15 +4339,19 @@ function setupChat() {
 
   const rcClear = $("recent-chats-clear");
   if (rcClear) rcClear.addEventListener("click", async () => {
+    if (rcClear.disabled) return;
+    if (sendBtn.disabled) { showToast("Wait for the current reply or cancel it before clearing history.", "info"); return; }
     if (!confirm("Clear all chat history? This cannot be undone.")) return;
+    rcClear.disabled = true;
     try {
-      await fetch("/api/ai/conversations", { method: "DELETE" });
-      currentConversationId = null;
+      const response = await fetch("/api/ai/conversations", { method: "DELETE" });
+      if (!response.ok || (await response.json()).ok !== true) throw new Error("History was not cleared.");
+      window.TLIConversationLoad?.deleted?.();
       if (typeof clearChatWithPlaceholder === "function") clearChatWithPlaceholder("Chat history cleared.");
       loadPreviousPrompts();
     } catch (e) {
       if (typeof showToast === "function") showToast("Could not clear history.", "warn");
-    }
+    } finally { rcClear.disabled = false; }
   });
 
   // ── Voice input (mic button) ─────────────────────────────────────
@@ -4092,221 +4362,25 @@ function setupChat() {
 }
 
 
-// ==================================================================
-//  Voice Input — Web Speech API (SpeechRecognition)
-// ==================================================================
-
-let _micActive = false;
-let _speechRec = null;
-
-function _setupVoiceInput() {
-  const micBtn = $("chat-mic-btn");
-  const chatInput = $("chat-input");
-  if (!micBtn) return;
-
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    micBtn.classList.add("unsupported");
-    micBtn.title = "Voice input not supported in this browser (use Chrome or Edge)";
-    return;
-  }
-
-  _speechRec = new SpeechRecognition();
-  _speechRec.continuous = false;
-  _speechRec.interimResults = true;
-  _speechRec.lang = "en-US";
-
-  let _interimSpan = null;
-
-  _speechRec.onstart = () => {
-    _micActive = true;
-    micBtn.classList.add("recording");
-    micBtn.title = "Listening… click to stop";
-    // placeholder to show interim text
-    _interimSpan = document.createElement("span");
-    _interimSpan.style.opacity = "0.5";
-    _interimSpan.style.fontStyle = "italic";
-    if (chatInput) chatInput.parentNode.insertBefore(_interimSpan, chatInput.nextSibling);
-  };
-
-  _speechRec.onresult = (e) => {
-    let interim = "", final = "";
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) final += t;
-      else interim += t;
-    }
-    if (_interimSpan) _interimSpan.textContent = interim ? `"${interim}"` : "";
-    if (final && chatInput) {
-      chatInput.value = (chatInput.value ? chatInput.value + " " : "") + final.trim();
-      chatInput.dispatchEvent(new Event("input"));
-    }
-  };
-
-  _speechRec.onend = () => {
-    _micActive = false;
-    micBtn.classList.remove("recording");
-    micBtn.title = "Voice input";
-    if (_interimSpan) { _interimSpan.remove(); _interimSpan = null; }
-  };
-
-  _speechRec.onerror = (e) => {
-    _micActive = false;
-    micBtn.classList.remove("recording");
-    micBtn.title = "Voice input";
-    if (_interimSpan) { _interimSpan.remove(); _interimSpan = null; }
-    if (e.error === "not-allowed") {
-      const isLocalhost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
-      const msg = isLocalhost
-        ? "Microphone access denied. Click the lock icon in your browser address bar and allow microphone."
-        : "Microphone requires HTTPS on LAN. Access TLI via https:// or use http://localhost:8000 on this machine.";
-      if (typeof showToast === "function") showToast(msg, "warn");
-    } else if (e.error !== "aborted" && e.error !== "no-speech") {
-      if (typeof showToast === "function") showToast(`Mic error: ${e.error}`, "warn");
-    }
-  };
-
-  micBtn.addEventListener("click", () => {
-    if (_micActive) {
-      _speechRec.stop();
-    } else {
-      try { _speechRec.start(); }
-      catch (err) { if (typeof showToast === "function") showToast("Could not start microphone.", "warn"); }
-    }
-  });
-}
-
-
-// ==================================================================
-//  TTS — Web Speech Synthesis
-// ==================================================================
-
-let _ttsEnabled = false;
-try { _ttsEnabled = localStorage.getItem("tli_tts_enabled") === "1"; } catch {}
-
-let _ttsVoice = null;
-
-function _setupTTSToggle() {
-  const btn = $("tts-toggle");
-  const voiceSel = $("tts-voice-select");
-  if (!btn) return;
-
-  const hasTTS = "speechSynthesis" in window;
-  if (!hasTTS) { btn.style.display = "none"; return; }
-
-  function _applyState() {
-    btn.classList.toggle("active", _ttsEnabled);
-    const dot = btn.querySelector(".toggle-pill-dot");
-    if (dot) dot.style.background = _ttsEnabled ? "var(--accent)" : "";
-    if (voiceSel) voiceSel.classList.toggle("hidden", !_ttsEnabled);
-  }
-
-  function _populateVoices() {
-    if (!voiceSel) return;
-    const voices = window.speechSynthesis.getVoices();
-    if (!voices.length) return;
-    const saved = localStorage.getItem("tli_tts_voice") || "";
-    voiceSel.innerHTML = voices.map((v, i) => {
-      const label = `${v.name} (${v.lang})`;
-      const sel = saved ? v.name === saved : v.default;
-      return `<option value="${v.name}" ${sel ? "selected" : ""}>${label}</option>`;
-    }).join("");
-    // restore saved voice object
-    _ttsVoice = voices.find(v => v.name === (saved || null)) || voices.find(v => v.default) || voices[0];
-  }
-
-  window.speechSynthesis.addEventListener("voiceschanged", _populateVoices);
-  _populateVoices();
-
-  if (voiceSel) {
-    voiceSel.addEventListener("change", () => {
-      const voices = window.speechSynthesis.getVoices();
-      _ttsVoice = voices.find(v => v.name === voiceSel.value) || null;
-      try { localStorage.setItem("tli_tts_voice", voiceSel.value); } catch {}
-    });
-  }
-
-  _applyState();
-
-  btn.addEventListener("click", () => {
-    _ttsEnabled = !_ttsEnabled;
-    try { localStorage.setItem("tli_tts_enabled", _ttsEnabled ? "1" : "0"); } catch {}
-    if (!_ttsEnabled) window.speechSynthesis.cancel();
-    _applyState();
-  });
-}
-
-function _attachSpeakBtn(bubble, rawText) {
-  if (!bubble || !("speechSynthesis" in window)) return;
-  bubble.querySelectorAll(".chat-bubble-speak").forEach(b => b.remove());
-  const speakBtn = document.createElement("button");
-  speakBtn.className = "chat-bubble-speak";
-  speakBtn.textContent = "▶";
-  speakBtn.title = "Read aloud";
-  speakBtn.addEventListener("click", () => tliSpeakBubble(speakBtn, rawText));
-  bubble.appendChild(speakBtn);
-}
-
-function tliSpeak(text) {
-  if (!_ttsEnabled || !("speechSynthesis" in window)) return;
-  window.speechSynthesis.cancel();
-  // Strip markdown syntax before speaking
-  const clean = text
-    .replace(/```[\s\S]*?```/g, "code block omitted")
-    .replace(/`[^`]+`/g, m => m.slice(1, -1))
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")
-    .replace(/#+\s*/g, "")
-    .replace(/\[(.+?)\]\(.+?\)/g, "$1")
-    .trim();
-  if (!clean) return;
-  const utt = new SpeechSynthesisUtterance(clean);
-  utt.rate = 1.0;
-  utt.pitch = 1.0;
-  if (_ttsVoice) utt.voice = _ttsVoice;
-  window.speechSynthesis.speak(utt);
-}
-
-function tliSpeakBubble(btn, text) {
-  if (!("speechSynthesis" in window)) return;
-  if (btn.classList.contains("speaking")) {
-    window.speechSynthesis.cancel();
-    btn.classList.remove("speaking");
-    btn.textContent = "▶";
-    return;
-  }
-  window.speechSynthesis.cancel();
-  document.querySelectorAll(".chat-bubble-speak.speaking").forEach(b => {
-    b.classList.remove("speaking"); b.textContent = "▶";
-  });
-  btn.classList.add("speaking");
-  btn.textContent = "■";
-  const clean = text
-    .replace(/```[\s\S]*?```/g, "code block omitted")
-    .replace(/`[^`]+`/g, m => m.slice(1, -1))
-    .replace(/\*\*(.+?)\*\*/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")
-    .replace(/#+\s*/g, "")
-    .replace(/\[(.+?)\]\(.+?\)/g, "$1")
-    .trim();
-  const utt = new SpeechSynthesisUtterance(clean);
-  utt.rate = 1.0;
-  if (_ttsVoice) utt.voice = _ttsVoice;
-  utt.onend = utt.onerror = () => {
-    btn.classList.remove("speaking"); btn.textContent = "▶";
-  };
-  window.speechSynthesis.speak(utt);
-}
+// Existing Chat entry points delegate to one browser-local voice controller.
+// It owns microphone/playback lifecycles and never sends Chat automatically.
+function _setupVoiceInput() { window.TLILocalVoice?.setup(); }
+function _setupTTSToggle() { window.TLILocalVoice?.setup(); }
+function _attachSpeakBtn(bubble, rawText) { window.TLILocalVoice?.attach(bubble, rawText); }
+function tliSpeak(text) { window.TLILocalVoice?.speak(text, {automatic: true}); }
+function tliSpeakBubble(btn, text) { window.TLILocalVoice?.speak(text, {button: btn}); }
 
 // ---------- recent chats ----------
 async function loadPreviousPrompts() {
   const listEl = $("recent-chats-list");
   if (!listEl) return;
+  const generation = window.TLIConversationLoad?.generation;
   listEl.innerHTML = `<div class="small-meta">Loading…</div>`;
   try {
     const r = await fetch("/api/ai/conversations", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const { conversations } = await r.json();
+    if (generation !== window.TLIConversationLoad?.generation) return;
     if (!conversations.length) {
       listEl.innerHTML = `<div class="small-meta">No chats yet.</div>`;
       return;
@@ -4318,37 +4392,66 @@ async function loadPreviousPrompts() {
       const title = (c.title || "Untitled").slice(0, 72);
       const turnCount = Math.max(1, Math.floor((c.message_count || 0) / 2));
       const turns = `${turnCount} turn${turnCount !== 1 ? "s" : ""}`;
-      btn.innerHTML = `<span class="rc-title">${title}</span><span class="rc-meta">${turns}</span>`;
+      const label = document.createElement("span"), meta = document.createElement("span");
+      label.className = "rc-title"; label.textContent = title;
+      meta.className = "rc-meta"; meta.textContent = turns;
+      btn.append(label, meta);
       btn.title = "Resume: " + title;
       btn.addEventListener("click", () => loadConversation(c.id, title));
       listEl.appendChild(btn);
     });
   } catch (e) {
+    if (generation !== window.TLIConversationLoad?.generation) return;
     listEl.innerHTML = `<div class="small-meta">Could not load chats.</div>`;
   }
 }
 
-async function loadConversation(convId, title) {
+async function loadConversation(convId, title, options = {}) {
+  const navigation = window.TLIConversationLoad || (window.TLIConversationLoad = { generation: 0 });
+  const input = $("chat-input");
+  const draft = input?.value || "";
+  if ($("chat-send-btn")?.disabled) {
+    if (!options.restore && typeof showToast === "function") showToast("Wait for this reply or cancel it before changing conversations.", "info");
+    return false;
+  }
+  if (options.restore && (navigation.generation || currentConversationId || draft.trim())) return false;
+  const generation = ++navigation.generation;
+  const current = () => generation === navigation.generation && (input?.value || "") === draft && !$("chat-send-btn")?.disabled;
+  // A document question belongs to the conversation in which it was sent.
+  // Invalidate its callbacks before awaiting another conversation's history.
+  window.TLIDocuments?.clear();
+  window.TLICaseContext?.clear();
+  window.TLIMemory?.clear();
   try {
-    const r = await fetch(`/api/ai/conversations/${convId}`);
+    const r = await fetch(`/api/ai/conversations/${encodeURIComponent(convId)}`, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const conv = await r.json();
+    if (!current()) return false;
+    if (!Array.isArray(conv.messages)) throw new Error("Conversation messages were not returned.");
+    window.TLIIntelligence?.clearContext?.();
     // Set as active conversation
     currentConversationId = convId;
+    window.currentConversationId = convId;
+    if (typeof chatHistory !== "undefined") chatHistory = conv.messages.filter(m => ["user", "assistant"].includes(m.role) && typeof m.content === "string").map(m => ({ role: m.role, content: m.content }));
+    try { if (typeof saveConversation === "function") saveConversation("", "", convId); } catch {}
     // Render messages
     const output = $("chat-output");
     if (output) {
       output.innerHTML = "";
       (conv.messages || []).forEach(m => {
-        appendMessage(m.role === "user" ? "user" : "ai", m.content);
+        const bubble = appendMessage(m.role === "user" ? "user" : "ai", m.content);
+        if (m.role === "assistant") { window.TLIScreenshots?.annotateReply(bubble, m); window.TLINotebook?.annotateReply(bubble, m); window.TLIDocuments?.annotateReply(bubble, m); window.TLICaseContext?.decorateReply(bubble, m); }
+        if (m.role === "assistant") window.TLIMemory?.decorateReply(bubble, m);
+        else window.TLIMemory?.decorateMessage(bubble, m);
       });
     }
     // Focus input
-    const input = $("chat-input");
-    if (input) input.focus();
-    if (typeof showToast === "function") showToast(`Resumed: ${title}`, "info");
+    if (!options.restore && input) input.focus();
+    if (!options.restore && typeof showToast === "function") showToast(`Resumed: ${title}`, "info");
+    return true;
   } catch (e) {
-    if (typeof showToast === "function") showToast("Could not load conversation.", "warn");
+    if (current() && typeof showToast === "function") showToast("Could not load conversation.", "warn");
+    return false;
   }
 }
 
@@ -4359,6 +4462,7 @@ function addPreviousPrompt(_text) {
 
 // ---------- status ----------
 async function refreshStatus() {
+  const identityGeneration = window.TLIUI?.hostIdentity?.get().generation;
   try {
     const res = await fetch("/status");
     if (!res.ok) throw new Error("HTTP " + res.status);
@@ -4379,28 +4483,14 @@ async function refreshStatus() {
       }
     } catch {}
 
-if (data.device_nickname) {
-  $("device-name-chip").textContent = data.device_nickname;
-  $("footer-device").textContent    = data.device_nickname;
+window.TLIUI?.hostIdentity?.observe({id: data.device_id || data.node_id, name: data.device_nickname,
+  source: 'status', generation: identityGeneration});
 
-  // NEW: update Visualizer device pill, if present
-  const visTag = $("visualizer-device-tag");
-  if (visTag) {
-    visTag.textContent = "Device: " + data.device_nickname;
-  }
-
-  // NEW: update Tools device pill, if present
-  const toolsTag = $("tools-device-tag");
-  if (toolsTag) {
-    toolsTag.textContent = "Device: " + data.device_nickname;
-  }
-}
-
-if (data.device_id) currentDeviceId = data.device_id;
+if (data.device_id && (!window.TLIUI?.hostIdentity || (window.TLIUI.hostIdentity.get().generation === identityGeneration && window.TLIUI.hostIdentity.get().status !== 'locked'))) currentDeviceId = data.device_id;
 
 
-    const vaultStatus = data.vault_status || {};
-    updateVaultUIFromStatus(vaultStatus);
+    // Vault owns its authenticated reads and discards responses from before a
+    // lock. A delayed general-status snapshot must not reopen private content.
 
     debugLog("info", "GET /status OK: " + JSON.stringify(data));
   } catch (err) {
@@ -4414,74 +4504,64 @@ if (data.device_id) currentDeviceId = data.device_id;
 
 // ---------- device rename ----------
 function setupDeviceRename() {
-  const btn    = $("rename-device-btn");
+  const btn = $("rename-device-btn");
   const nameEl = $("device-name-chip");
-  if (!btn || !nameEl) return;
-
-  let _editing = false;
-
-  function startEdit() {
-    if (_editing) return;
-    _editing = true;
-
-    const current = nameEl.textContent.trim() || "Device";
-    const input = document.createElement("input");
-    input.type      = "text";
-    input.value     = current;
-    input.maxLength = 32;
-    input.className = "device-chip-edit";
-    input.setAttribute("aria-label", "Device name");
-
-    nameEl.style.display = "none";
-    nameEl.insertAdjacentElement("afterend", input);
-    btn.textContent = "Save";
-    input.focus();
-    input.select();
-
-    async function save() {
-      const name = input.value.trim();
-      cancel(name || current);
-      if (!name || name === current) return;
-      try {
-        await fetch("/device/nickname", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nickname: name }),
-        });
-        // Also update the mesh node name so other nodes see it
-        await fetch("/mesh/node/identity", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ node_name: name }),
-        });
-      } catch (err) {
-        debugLog("warn", "device rename save failed: " + err.message);
-      }
-    }
-
-    function cancel(finalName) {
-      _editing = false;
-      input.remove();
-      nameEl.style.display = "";
-      if (finalName) {
-        nameEl.textContent           = finalName;
-        $("footer-device").textContent = finalName;
-      }
-      btn.textContent = "Rename";
-      btn.onclick     = null;
-      btn.addEventListener("click", startEdit, { once: true });
-    }
-
-    input.addEventListener("keydown", e => {
-      if (e.key === "Enter")  { e.preventDefault(); save(); }
-      if (e.key === "Escape") { e.preventDefault(); cancel(); }
-    });
-    input.addEventListener("blur", () => { if (_editing) cancel(); });
-    btn.onclick = (e) => { e.stopPropagation(); save(); };
+  const form = $("tli-rename-form");
+  const input = $("tli-rename-input");
+  const error = $("tli-rename-error");
+  if (!btn || !nameEl || !form) return;
+  let saving = false;
+  function cancel(focus = false) {
+    form.hidden = true;
+    btn.hidden = false;
+    error.hidden = true;
+    if (focus) btn.focus();
   }
-
-  btn.addEventListener("click", startEdit, { once: true });
-  nameEl.addEventListener("dblclick", startEdit);
+  btn.addEventListener('click', () => {
+    btn.hidden = true;
+    form.hidden = false;
+    input.value = nameEl.textContent.trim();
+    input.focus(); input.select();
+  });
+  $('tli-rename-cancel').addEventListener('click', () => cancel(true));
+  document.addEventListener('tli-device-menu-closed', () => cancel());
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (saving) return;
+    const name = input.value.trim();
+    if (!name) { error.textContent = 'Enter a device name.'; error.hidden = false; return; }
+    if (name === nameEl.textContent.trim()) { cancel(true); return; }
+    saving = true;
+    const identity = window.TLIUI?.hostIdentity;
+    const identityBefore = identity?.get();
+    const current = () => !identity || (identity.get().generation === identityBefore.generation && identity.get().status !== 'locked');
+    const submit = form.querySelector('[type="submit"]');
+    submit.disabled = true;
+    try {
+      const response = await fetch('/device/nickname', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nickname: name }),
+      });
+      if (!response.ok) throw new Error('Could not save device name. Please try again.');
+      const saved = await response.json();
+      if (!current()) return;
+      if (saved?.status !== 'ok' || typeof saved.nickname !== 'string' || !saved.nickname.trim()) throw new Error('The name change could not be confirmed. Refresh the host before retrying.');
+      identity?.observe({id: identityBefore.id, name: saved.nickname, source: 'host-rename', generation: identityBefore.generation});
+      const meshResponse = await fetch('/mesh/node/identity', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ node_name: name }),
+      });
+      if (!current()) return;
+      if (!meshResponse.ok) throw new Error('Device renamed, but the mesh name could not be updated.');
+      cancel(!document.getElementById('tli-device-popover').hidden);
+    } catch (err) {
+      if (!current()) return;
+      error.textContent = err.message || 'Could not save device name. Please try again.';
+      error.hidden = false;
+      if (form.hidden && typeof showToast === 'function') showToast(error.textContent, 'warn');
+    } finally { saving = false; submit.disabled = false; }
+  });
+  window.addEventListener('tli-session-locked', () => { input.value = ''; cancel(); });
 }
 
 // ---------- hamburger ----------
@@ -4829,8 +4909,8 @@ if (settingsLanSel) {
   // Landing selection (clean):
   const didDeepLink = openPanelFromQuery();
   if (!didDeepLink) {
-    const mode = getUiMode();
-    const preferredId = mode === "dash2" ? "panel-dashboard2" : "panel-main";
+    // Interface style never changes startup navigation or the active workspace.
+    const preferredId = "panel-dashboard2";
     const preferred = document.getElementById(preferredId);
     const fallback =
       document.querySelector(".panel-container.active") ||
@@ -4842,8 +4922,6 @@ if (settingsLanSel) {
   // Critical UI setup
   setupTeachingToggle();
   setupChatHistoryDrawer();
-  setupUiModeSelect();
-  try { setupDash2HeaderButton(); } catch {}
   setupChat();
 
   setTimeout(() => {

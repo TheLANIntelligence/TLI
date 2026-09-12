@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
 
 from .safety import classify_command, is_within_root
+
+
+SHELL_META_CHARS = {"&", "|", ";", "<", ">", "\n", "\r"}
+
+
+def _command_args(command: str) -> list[str]:
+    if any(ch in command for ch in SHELL_META_CHARS):
+        raise ValueError("Shell operators are blocked unless TLI_BUILDER_ALLOW_SHELL=1.")
+    args = shlex.split(command, posix=(os.name != "nt"))
+    if not args:
+        raise ValueError("Command was empty.")
+    return args
 
 
 def run_approved_command(
@@ -30,11 +44,13 @@ def run_approved_command(
 
     timeout = max(1, min(int(timeout_seconds), 600))
     started = time.monotonic()
+    use_shell = os.environ.get("TLI_BUILDER_ALLOW_SHELL") == "1"
+    command_to_run: str | list[str] = safety["command"] if use_shell else _command_args(safety["command"])
     try:
         completed = subprocess.run(
-            command,
+            command_to_run,
             cwd=str(workdir),
-            shell=True,
+            shell=use_shell,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -69,4 +85,3 @@ def truncate(text: str, max_chars: int = 20000) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n...[truncated]..."
-

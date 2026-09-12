@@ -27,10 +27,18 @@ function setupHubPanel() {
   let _packages   = [];
   let _installed  = new Set();
   let _searchQ    = "";
+  let _sourceIsSample = true, _settingsBusy = false;
+  const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  async function responseJSON(response) {
+    const data = await response.json().catch(() => null);
+    if (!response.ok || data?.ok === false) throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
+    if (!data || typeof data !== 'object') throw new Error('TLI returned an incomplete response.');
+    return data;
+  }
 
   const TYPE_LABELS = {
     theme:      "Theme",
-    ai_preset:  "AI Preset",
+    ai_preset:  "Prompt preset",
     script:     "Script",
     automation: "Automation",
     app:        "TLI App",
@@ -51,31 +59,39 @@ function setupHubPanel() {
 
   if (urlSave && urlInput) {
     urlSave.addEventListener("click", async () => {
+      if (_settingsBusy) return;
+      _settingsBusy = true; urlSave.disabled = true;
       urlSave.textContent = "Saving…";
       try {
-        await fetch("/hub/settings", {
+        const result = await responseJSON(await fetch("/hub/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ hub_url: urlInput.value.trim() }),
-        });
+        }));
+        if (result.ok !== true) throw new Error('The host did not confirm the URL save.');
         urlSave.textContent = "Saved ✓";
         setTimeout(() => { urlSave.textContent = "Save"; }, 2000);
-      } catch { urlSave.textContent = "Save"; }
+      } catch (error) { urlSave.textContent = 'Save'; _showStatus('URL save failed: ' + error.message + ' Your draft is unchanged.'); }
+      finally { _settingsBusy = false; urlSave.disabled = false; }
     });
   }
 
   if (toggle) {
     toggle.addEventListener("change", async () => {
+      if (_settingsBusy) { toggle.checked = !toggle.checked; return; }
       const enabled = toggle.checked;
+      _settingsBusy = true; toggle.disabled = true;
       try {
-        await fetch("/hub/settings", {
+        const result = await responseJSON(await fetch("/hub/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled }),
-        });
+        }));
+        if (result.ok !== true) throw new Error('The host did not confirm the connection setting.');
         if (enabled) _loadRegistry(false);
-        else _showStatus("Hub disconnected. Showing built-in starter pack.");
-      } catch {}
+        else { _showStatus('Hub disconnected.'); _loadRegistry(true); }
+      } catch (error) { toggle.checked = !enabled; _showStatus('Connection change failed: ' + error.message); }
+      finally { _settingsBusy = false; toggle.disabled = false; }
     });
   }
 
@@ -128,10 +144,12 @@ function setupHubPanel() {
   async function _loadRegistry(forceSample = false) {
     _showStatus("Loading…");
     try {
-      const hubStatus = await fetch("/hub/status").then(r => r.json()).catch(() => ({}));
+      const hubStatus = await responseJSON(await fetch('/hub/status'));
       const useSample = forceSample || !hubStatus.enabled;
       const url = useSample ? "/hub/sample" : "/hub/registry";
-      const data = await fetch(url).then(r => r.json());
+      const data = await responseJSON(await fetch(url));
+      if (!Array.isArray(data.packages)) throw new Error('The registry did not return a package list.');
+      _sourceIsSample = useSample;
 
       _packages  = data.packages || [];
       _installed = new Set(_packages.filter(p => p.installed).map(p => p.id));
@@ -140,7 +158,7 @@ function setupHubPanel() {
       _showStatus(`${_packages.length} packages · ${src}`, true);
       _render();
     } catch (e) {
-      _showStatus("Failed to load registry: " + (e.message || "network error"));
+      _showStatus('Registry unavailable: ' + (e.message || 'network error') + (_packages.length ? ' Previous package cards may be out of date.' : ''));
     }
   }
 
@@ -179,7 +197,7 @@ function setupHubPanel() {
       empty.innerHTML = `
         <div class="hub-empty-icon">📭</div>
         <div class="hub-empty-title">Nothing here yet</div>
-        <div class="hub-empty-sub">No ${_activeType === "installed" ? "installed packages" : _activeType === "all" ? "packages" : _activeType + "s"} found${_searchQ ? ' matching "' + _searchQ + '"' : ""}.</div>`;
+        <div class="hub-empty-sub">No ${_activeType === "installed" ? "installed packages" : _activeType === "all" ? "packages" : esc(_activeType) + "s"} found${_searchQ ? ' matching "' + esc(_searchQ) + '"' : ""}.</div>`;
       grid.appendChild(empty);
       return;
     }
@@ -193,7 +211,7 @@ function setupHubPanel() {
     card.className = "hub-pkg-card" + (_installed.has(pkg.id) ? " installed" : "");
 
     const typeLabel  = TYPE_LABELS[pkg.type] || pkg.type;
-    const tags       = (pkg.tags || []).map(t => `<span class="hub-pkg-tag">${t}</span>`).join("");
+    const tags       = (Array.isArray(pkg.tags) ? pkg.tags : []).map(t => `<span class="hub-pkg-tag">${esc(t)}</span>`).join("");
     const isInstalled = _installed.has(pkg.id);
 
     // Theme swatch
@@ -204,8 +222,8 @@ function setupHubPanel() {
       const bg  = bgMatch  ? bgMatch[1].trim()  : "#0b0f14";
       const acc = accMatch ? accMatch[1].trim()  : "#38e8b2";
       swatchHtml = `<div class="hub-theme-swatch">
-        <div class="hub-theme-swatch-bg" style="background:${bg}"></div>
-        <div class="hub-theme-swatch-accent" style="background:${acc}"></div>
+        <div class="hub-theme-swatch-bg" style="background:${esc(bg)}"></div>
+        <div class="hub-theme-swatch-accent" style="background:${esc(acc)}"></div>
       </div>`;
     }
 
@@ -214,40 +232,42 @@ function setupHubPanel() {
     if (isInstalled) {
       if (pkg.type === "script") {
         actionsHtml = `
-          <button class="hub-action-btn hub-run-btn" data-pkg-id="${pkg.id}" data-pkg-name="${pkg.name}">▶ Run</button>
-          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${pkg.id}">Uninstall</button>`;
+          <button class="hub-action-btn hub-run-btn" data-pkg-id="${esc(pkg.id)}" data-pkg-name="${esc(pkg.name)}">Run script on host</button>
+          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       } else if (pkg.type === "ai_preset") {
         actionsHtml = `
-          <button class="hub-action-btn hub-activate-btn" data-pkg-id="${pkg.id}" data-pkg-name="${pkg.name}">Activate</button>
-          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${pkg.id}">Uninstall</button>`;
+          <button class="hub-action-btn hub-activate-btn" data-pkg-id="${esc(pkg.id)}" data-pkg-name="${esc(pkg.name)}">Use prompt preset</button>
+          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       } else if (pkg.type === "theme" && pkg.preview_css) {
         actionsHtml = `
-          <button class="hub-action-btn hub-preview-btn" data-pkg-id="${pkg.id}" data-pkg-css="${encodeURIComponent(pkg.preview_css || "")}">Preview</button>
-          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${pkg.id}">Uninstall</button>`;
+          <button class="hub-action-btn hub-preview-btn" data-pkg-id="${esc(pkg.id)}" data-pkg-css="${encodeURIComponent(pkg.preview_css || "")}">Apply for this session</button>
+          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       } else if (pkg.type === "app") {
         actionsHtml = `
-          <button class="hub-action-btn hub-open-btn" data-pkg-id="${pkg.id}" data-pkg-name="${pkg.name}">Open</button>
-          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${pkg.id}">Uninstall</button>`;
+          <button class="hub-action-btn hub-open-btn" data-pkg-id="${esc(pkg.id)}" data-pkg-name="${esc(pkg.name)}">Open</button>
+          <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       } else {
-        actionsHtml = `<button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${pkg.id}">Uninstall</button>`;
+        actionsHtml = `<button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       }
     } else {
-      actionsHtml = `<button class="hub-install-btn" data-pkg-id="${pkg.id}">Install</button>`;
+      actionsHtml = `<button class="hub-install-btn" data-pkg-id="${esc(pkg.id)}">Install</button>`;
     }
 
     card.innerHTML = `
       <div class="hub-pkg-top">
         <div>
-          <div class="hub-pkg-name">${pkg.name}</div>
-          <div class="hub-pkg-author">by ${pkg.author || "Unknown"} · v${pkg.version || "1.0"}</div>
+          <div class="hub-pkg-name">${esc(pkg.name)}</div>
+          <div class="hub-pkg-author">by ${esc(pkg.author || "Unknown")} · v${esc(pkg.version || "1.0")}</div>
         </div>
-        <span class="hub-pkg-type-badge type-${pkg.type}">${typeLabel}</span>
+        <span class="hub-pkg-type-badge type-${esc(pkg.type)}">${esc(typeLabel)}</span>
       </div>
       ${swatchHtml}
-      <div class="hub-pkg-desc">${pkg.description || ""}</div>
+      <p class="small-meta">Source: ${esc(_sourceIsSample ? 'Bundled sample catalogue' : 'Configured host registry')} · ${isInstalled ? 'Installed on this host' : 'Not installed'}. Listing does not mean reviewed or verified.</p>
+      <div class="hub-pkg-desc">${esc(pkg.description || "")}</div>
+      <p class="small-meta">${esc(({script: 'Installing stores the script. Run script on host executes its code.', theme: 'Install stores the package. Apply for this session changes this browser’s appearance.', ai_preset: 'Installing stores the preset. Use prompt preset changes the configured AI prompt.', app: 'Installing adds the app package to this host. Open loads its interface.'})[pkg.type] || 'Inspect this package before installing it on the TLI host.')}</p>
       ${tags ? `<div class="hub-pkg-tags">${tags}</div>` : ""}
       <div class="hub-pkg-footer">
-        <div class="hub-pkg-rating"><span>★</span> ${pkg.rating ? pkg.rating.toFixed(1) : "—"}</div>
+        <div class="hub-pkg-rating"><span>★</span> ${Number.isFinite(pkg.rating) ? pkg.rating.toFixed(1) : "—"}</div>
         <div class="hub-card-actions">${actionsHtml}</div>
       </div>
     `;
@@ -256,21 +276,23 @@ function setupHubPanel() {
     const installBtn = card.querySelector(".hub-install-btn");
     if (installBtn) {
       installBtn.addEventListener("click", async () => {
+        if (installBtn.disabled) return;
         installBtn.textContent = "Installing…";
         installBtn.disabled = true;
         try {
           const r = await fetch("/hub/install", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ package_id: pkg.id, use_sample: true }),
+            body: JSON.stringify({ package_id: pkg.id, use_sample: _sourceIsSample }),
           });
           if (!r.ok) {
             const d = await r.json().catch(() => ({}));
             throw new Error(d.detail || "Install failed");
           }
+          const data = await r.json();
+          if (data.ok !== true) throw new Error('The host did not confirm installation.');
           _installed.add(pkg.id);
           if (typeof showToast === "function") showToast(`${pkg.name} installed`, "success");
-          if (pkg.type === "theme" && pkg.preview_css) _applyTheme(pkg.id, pkg.preview_css);
           if (pkg.type === "app" && window.TLIApps) window.TLIApps.reload();
           _render();
         } catch (err) {
@@ -285,11 +307,12 @@ function setupHubPanel() {
     const uninstallBtn = card.querySelector(".hub-uninstall-btn");
     if (uninstallBtn) {
       uninstallBtn.addEventListener("click", async () => {
+        if (uninstallBtn.disabled) return;
         uninstallBtn.textContent = "Removing…";
         uninstallBtn.disabled = true;
         try {
-          const r = await fetch(`/hub/packages/${pkg.id}`, { method: "DELETE" });
-          if (!r.ok) throw new Error("Uninstall failed");
+          const result = await responseJSON(await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}`, { method: "DELETE" }));
+          if (result.ok !== true) throw new Error('The host did not confirm removal.');
           _installed.delete(pkg.id);
           if (typeof showToast === "function") showToast(`${pkg.name} uninstalled`);
           _render();
@@ -305,6 +328,8 @@ function setupHubPanel() {
     const runBtn = card.querySelector(".hub-run-btn");
     if (runBtn) {
       runBtn.addEventListener("click", async () => {
+        if (runBtn.disabled) return;
+        if (!window.confirm(`Run “${pkg.name}” on the TLI host? This executes the installed script and may change host files or settings. Continue only after reviewing its code.`)) return;
         runBtn.textContent = "Running…";
         runBtn.disabled = true;
         if (runDrawer) {
@@ -313,16 +338,18 @@ function setupHubPanel() {
           if (runOutput) runOutput.textContent = "Running…";
         }
         try {
-          const r = await fetch(`/hub/packages/${pkg.id}/run`, { method: "POST" });
+          const r = await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}/run`, { method: "POST" });
           const d = await r.json();
+          if (!r.ok) throw new Error(d.detail || `Request failed (${r.status}).`);
           const out = (d.stdout || "") + (d.stderr ? "\n[stderr]\n" + d.stderr : "");
           if (runOutput) runOutput.textContent = out || "(no output)";
-          if (!d.ok && typeof showToast === "function") showToast(`Script exited with code ${d.exit_code}`, "error");
+          if (d.ok !== true) { if (runTitle) runTitle.textContent = pkg.name + ' — failed or incomplete'; if (typeof showToast === 'function') showToast(`Script did not complete successfully${Number.isInteger(d.exit_code) ? ' (exit ' + d.exit_code + ')' : ''}.`, 'error'); }
+          else if (runTitle) runTitle.textContent = pkg.name + ' — completed';
         } catch (err) {
           if (runOutput) runOutput.textContent = "Error: " + err.message;
           if (typeof showToast === "function") showToast("Script failed: " + err.message, "error");
         } finally {
-          runBtn.textContent = "▶ Run";
+          runBtn.textContent = "Run script on host";
           runBtn.disabled = false;
         }
       });
@@ -332,11 +359,12 @@ function setupHubPanel() {
     const activateBtn = card.querySelector(".hub-activate-btn");
     if (activateBtn) {
       activateBtn.addEventListener("click", async () => {
+        if (activateBtn.disabled) return;
+        activateBtn.disabled = true;
         try {
-          const r = await fetch("/hub/presets");
-          const d = await r.json();
+          const d = await responseJSON(await fetch('/hub/presets'));
           const preset = (d.presets || []).find(p => p.id === pkg.id);
-          if (!preset) throw new Error("Preset data not found");
+          if (!preset || typeof preset.system_prompt !== 'string') throw new Error("Preset data not found");
           // Write system prompt into settings
           const settings = JSON.parse(localStorage.getItem("tli_settings") || "{}");
           settings.defaultBrain = "custom";
@@ -345,7 +373,7 @@ function setupHubPanel() {
           if (typeof showToast === "function") showToast(`${pkg.name} activated as system prompt`, "success");
         } catch (err) {
           if (typeof showToast === "function") showToast("Could not activate preset: " + err.message, "error");
-        }
+        } finally { activateBtn.disabled = false; }
       });
     }
 
@@ -393,7 +421,7 @@ function setupHubPanel() {
     style.id = `hub-theme-${id}`;
     style.textContent = css;
     document.head.appendChild(style);
-    if (typeof showToast === "function") showToast("Theme applied — reload to make permanent", "info");
+    if (typeof showToast === "function") showToast("Theme applied for this browser session. Reload to return to the saved theme.", "info");
   }
 
   // ── Publish panel ──────────────────────────────────────────────
@@ -424,6 +452,7 @@ function setupHubPanel() {
     const pubStatus = document.getElementById("pub-status");
     if (submitBtn) {
       submitBtn.onclick = async () => {
+        if (submitBtn.disabled) return;
         const id   = (document.getElementById("pub-id")?.value || "").trim().replace(/[^a-z0-9\-_]/gi, "-");
         const name = (document.getElementById("pub-name")?.value || "").trim();
         const type = document.getElementById("pub-type")?.value;
@@ -467,16 +496,13 @@ function setupHubPanel() {
         submitBtn.disabled = true;
         if (pubStatus) pubStatus.textContent = "Publishing…";
         try {
-          const r = await fetch("/hub/publish", {
+          const result = await responseJSON(await fetch("/hub/publish", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-          });
-          if (!r.ok) {
-            const d = await r.json().catch(() => ({}));
-            throw new Error(d.detail || "Publish failed");
-          }
-          if (pubStatus) pubStatus.textContent = `Published: ${name}`;
+          }));
+          if (result.ok !== true) throw new Error('The host did not confirm publication.');
+          if (pubStatus) pubStatus.textContent = `Published to this host’s registry: ${name}`;
           if (typeof showToast === "function") showToast(`${name} published to local registry`, "success");
           _renderPublishedList();
         } catch (err) {
@@ -494,9 +520,9 @@ function setupHubPanel() {
     const listEl = document.getElementById("pub-list");
     if (!listEl) return;
     try {
-      const r = await fetch("/hub/local-registry");
-      const d = await r.json();
-      const pkgs = d.packages || [];
+      const d = await responseJSON(await fetch('/hub/local-registry'));
+      if (!Array.isArray(d.packages)) throw new Error('The host did not return a package list.');
+      const pkgs = d.packages;
       if (!pkgs.length) {
         listEl.innerHTML = `<div class="hub-empty-sub" style="padding:10px 0;">No published packages yet.</div>`;
         return;
@@ -504,19 +530,20 @@ function setupHubPanel() {
       listEl.innerHTML = pkgs.map(p => `
         <div class="hub-pub-row">
           <div class="hub-pub-row-info">
-            <span class="hub-pkg-type-badge type-${p.type}" style="font-size:10px;">${TYPE_LABELS[p.type] || p.type}</span>
-            <strong>${p.name}</strong>
-            <span style="opacity:0.6; font-size:11px;">v${p.version}</span>
+            <span class="hub-pkg-type-badge type-${esc(p.type)}" style="font-size:10px;">${esc(TYPE_LABELS[p.type] || p.type)}</span>
+            <strong>${esc(p.name)}</strong>
+            <span style="opacity:0.6; font-size:11px;">v${esc(p.version)}</span>
           </div>
-          <button class="hub-action-btn danger" data-unpublish-id="${p.id}" style="font-size:11px; padding:3px 10px;">Remove</button>
+          <button class="hub-action-btn danger" data-unpublish-id="${esc(p.id)}" style="font-size:11px; padding:3px 10px;">Remove</button>
         </div>
       `).join("");
 
       listEl.querySelectorAll("[data-unpublish-id]").forEach(btn => {
         btn.addEventListener("click", async () => {
+          if (btn.disabled) return;
           btn.disabled = true;
-          await fetch(`/hub/local-registry/${btn.dataset.unpublishId}`, { method: "DELETE" }).catch(() => {});
-          _renderPublishedList();
+          try { const result = await responseJSON(await fetch(`/hub/local-registry/${encodeURIComponent(btn.dataset.unpublishId)}`, { method: 'DELETE' })); if (result.ok !== true) throw new Error('The host did not confirm removal.'); await _renderPublishedList(); }
+          catch (error) { btn.disabled = false; _showStatus('Removal failed: ' + error.message); }
         });
       });
     } catch {

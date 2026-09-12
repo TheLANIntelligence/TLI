@@ -9,13 +9,15 @@ from collections import deque
 from typing import List, Optional, Dict, Any
 
 import psutil
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
 
 import tli_state as S
+import peer_trust
+import node_identity
 from routers.system_routes import require_session
 
-router = APIRouter()
+router = APIRouter(route_class=peer_trust.BoundedPeerRoute)
 
 NODE_START_TIME = time.time()
 
@@ -97,94 +99,12 @@ class AgentTaskRunRequest(BaseModel):
 
 # ---------- INTERNAL HELPERS (V0.3) ----------
 
-def _safe_clean_dir(path: str, allow_subdirs: bool = False, max_files: int = 5000) -> Dict[str, Any]:
-    """
-    Safely clean a directory:
-
-    - Deletes regular files directly under `path`.
-    - Optionally removes empty subdirectories when allow_subdirs=True.
-    - Does NOT recursively descend into nested directories (no deep nukes).
-    - Enforces a max_files limit per directory.
-    """
-    summary: Dict[str, Any] = {
-        "path": path,
-        "files_deleted": 0,
-        "bytes_reclaimed": 0,
-        "errors": [],
-    }
-
-    if not os.path.isdir(path):
-        # Nothing to clean; this is not an error for maintenance purposes.
-        return summary
-
-    try:
-        entries = list(os.scandir(path))
-    except Exception as e:
-        summary["errors"].append(f"Failed to list directory: {e!r}")
-        return summary
-
-    count = 0
-    for entry in entries:
-        if count >= max_files:
-            summary["errors"].append("Max file limit reached; stopped early.")
-            break
-
-        try:
-            if entry.is_file(follow_symlinks=False):
-                try:
-                    size = entry.stat().st_size
-                except Exception:
-                    size = 0
-                os.remove(entry.path)
-                summary["files_deleted"] += 1
-                summary["bytes_reclaimed"] += size
-                count += 1
-
-            elif entry.is_dir(follow_symlinks=False) and allow_subdirs:
-                # Only attempt to remove if empty; no recursive deletion.
-                try:
-                    os.rmdir(entry.path)
-                except OSError:
-                    # Non-empty or in use; skip silently.
-                    continue
-
-        except Exception as e:
-            summary["errors"].append(f"{entry.path}: {e!r}")
-
-    return summary
+def _safe_clean_dir(*args, **kwargs):
+    raise HTTPException(409, {"code": "review_required", "message": "Review the exact file selection in Free Space. No legacy cleanup ran."})
 
 
-def _clean_temp_internal() -> Dict[str, Any]:
-    """
-    Perform a safe temp cleanup on this node.
-
-    - System temp directory (tempfile.gettempdir()) — files only.
-    - TLI cache directory (TLI_CACHE_DIR) — files + empty subdirs only.
-
-    No recursion, no user home folders, no arbitrary paths.
-    """
-    system_temp = tempfile.gettempdir()
-
-    sys_report = _safe_clean_dir(system_temp, allow_subdirs=False, max_files=5000)
-    cache_report = _safe_clean_dir(TLI_CACHE_DIR, allow_subdirs=True, max_files=5000)
-
-    total_files = sys_report["files_deleted"] + cache_report["files_deleted"]
-    total_bytes = sys_report["bytes_reclaimed"] + cache_report["bytes_reclaimed"]
-
-    errors: List[str] = []
-    errors.extend(sys_report.get("errors", []))
-    errors.extend(cache_report.get("errors", []))
-
-    return {
-        "ok": True,
-        "summary": {
-            "total_files_deleted": total_files,
-            "total_bytes_reclaimed": total_bytes,
-            "total_bytes_reclaimed_human": _bytes_to_human(total_bytes),
-            "directories": [sys_report, cache_report],
-            "errors": errors,
-        },
-    }
+def _clean_temp_internal(*args, **kwargs):
+    raise HTTPException(409, {"code": "review_required", "message": "Review the exact file selection in Free Space. No legacy cleanup ran."})
 
 
 def _tail_file(path: str, limit: int) -> List[str]:
@@ -220,11 +140,8 @@ def _task_refresh_status() -> Dict[str, Any]:
     }
 
 
-def _task_clean_temp() -> Dict[str, Any]:
-    """
-    Whitelisted maintenance task: clean safe temp locations.
-    """
-    return _clean_temp_internal()
+def _task_clean_temp(*args, **kwargs):
+    raise HTTPException(409, {"code": "review_required", "message": "Review the exact file selection in Free Space. No legacy cleanup ran."})
 
 
 def _task_rotate_logs() -> Dict[str, Any]:
@@ -294,7 +211,7 @@ TASK_HANDLERS: Dict[str, Any] = {
 
 # ---------- ENDPOINTS V0.2 ----------
 
-@router.get("/agent/disk", response_model=DiskUsageResponse)
+@router.get("/agent/disk", dependencies=[Depends(peer_trust.read_access)], response_model=DiskUsageResponse)
 def get_disk_usage() -> DiskUsageResponse:
     partitions_data: List[DiskPartitionUsage] = []
     percents: List[float] = []
@@ -320,7 +237,7 @@ def get_disk_usage() -> DiskUsageResponse:
     return DiskUsageResponse(overall_percent_used=overall, partitions=partitions_data)
 
 
-@router.get("/agent/cpu", response_model=CPUUsageResponse)
+@router.get("/agent/cpu", dependencies=[Depends(peer_trust.read_access)], response_model=CPUUsageResponse)
 def get_cpu_usage(per_core: bool = Query(default=False)) -> CPUUsageResponse:
     if per_core:
         per = psutil.cpu_percent(interval=0.3, percpu=True)
@@ -331,7 +248,7 @@ def get_cpu_usage(per_core: bool = Query(default=False)) -> CPUUsageResponse:
         return CPUUsageResponse(percent=overall)
 
 
-@router.get("/agent/ram", response_model=RAMUsageResponse)
+@router.get("/agent/ram", dependencies=[Depends(peer_trust.read_access)], response_model=RAMUsageResponse)
 def get_ram_usage() -> RAMUsageResponse:
     v = psutil.virtual_memory()
     return RAMUsageResponse(
@@ -345,7 +262,7 @@ def get_ram_usage() -> RAMUsageResponse:
     )
 
 
-@router.get("/agent/uptime", response_model=UptimeResponse)
+@router.get("/agent/uptime", dependencies=[Depends(peer_trust.read_access)], response_model=UptimeResponse)
 def get_uptime() -> UptimeResponse:
     seconds = int(time.time() - NODE_START_TIME)
     mins, s = divmod(seconds, 60)
@@ -362,7 +279,7 @@ def get_uptime() -> UptimeResponse:
     return UptimeResponse(seconds=seconds, human_readable=" ".join(parts))
 
 
-@router.get("/agent/system_summary")
+@router.get("/agent/system_summary", dependencies=[Depends(peer_trust.read_access)])
 def get_system_summary() -> Dict[str, Any]:
     """Convenience endpoint for the Mesh panel."""
     now = time.time()
@@ -381,7 +298,7 @@ def get_system_summary() -> Dict[str, Any]:
 
 # ---------- ENDPOINTS V0.3 (Maintenance & Logs) ----------
 
-@router.post("/agent/maintenance/refresh")
+@router.post("/agent/maintenance/refresh", dependencies=[Depends(peer_trust.read_access)])
 def agent_maintenance_refresh() -> Dict[str, Any]:
     """
     Force a fresh system summary snapshot on THIS node.
@@ -400,19 +317,11 @@ def agent_maintenance_refresh() -> Dict[str, Any]:
 
 
 @router.post("/agent/maintenance/clean_temp")
-def agent_maintenance_clean_temp(_session=Depends(require_session)) -> Dict[str, Any]:
-    """
-    Clean only OS-safe temp locations on THIS node:
-
-    - System temp directory (tempfile.gettempdir())
-    - TLI cache folder (DATA_DIR/cache)
-
-    No recursion, no home directories, no arbitrary paths.
-    """
+def agent_maintenance_clean_temp(_session=Depends(require_session)):
     return _clean_temp_internal()
 
 
-@router.get("/agent/logs/recent")
+@router.get("/agent/logs/recent", dependencies=[Depends(require_session)])
 def agent_logs_recent(
     limit: int = Query(100, ge=1, le=1000),
 ) -> Dict[str, Any]:
@@ -445,7 +354,7 @@ def agent_logs_recent(
 
 
 @router.post("/agent/tasks/run")
-def agent_tasks_run(body: AgentTaskRunRequest, _session=Depends(require_session)) -> Dict[str, Any]:
+def agent_tasks_run(body: AgentTaskRunRequest, _session=Depends(peer_trust.read_access)) -> Dict[str, Any]:
     """
     Run a whitelisted maintenance task on THIS node.
 
@@ -463,6 +372,8 @@ def agent_tasks_run(body: AgentTaskRunRequest, _session=Depends(require_session)
       }
     """
     task_id = (body.task_id or "").strip()
+    if task_id != "refresh_status":
+        raise HTTPException(409, {"code": "review_required", "message": "Only read-only refresh is available here. Review other actions in the computer’s own console."})
 
     if task_id not in TASK_HANDLERS:
         return {
@@ -488,3 +399,48 @@ def agent_tasks_run(body: AgentTaskRunRequest, _session=Depends(require_session)
             "result": None,
             "error": f"Task execution error: {e!r}",
         }
+
+
+@router.get("/agent/peer/health")
+def peer_health(access=Depends(peer_trust.coordinate_access)):
+    peer_trust.revalidate(access)
+    cfg = S.load_node_config()
+    return {"ok": True, "online": True, "node_id": cfg.node_id, "node_name": cfg.node_name,
+            "identity_fingerprint": node_identity.fingerprint(), "observed_at": S.now_iso(),
+            "capabilities": ["system_observation_v1", "coordination_v1", "messages_v1"]}
+
+class PeerObservationRequest(BaseModel):
+    kind: str
+
+@router.post("/agent/peer/observe")
+def peer_observe(body: PeerObservationRequest, access=Depends(peer_trust.observe_access)):
+    if body.kind != "system":
+        raise HTTPException(422, "Only bounded native system observation is supported.")
+    peer_trust.revalidate(access)
+    cfg = S.load_node_config()
+    facts = dict.fromkeys(["cpu_percent", "logical_cpus", "ram_total_bytes", "ram_used_bytes", "ram_available_bytes", "ram_percent", "uptime_seconds"])
+    try:
+        ram = psutil.virtual_memory()
+        for key, attr in [("ram_total_bytes", "total"), ("ram_used_bytes", "used"), ("ram_available_bytes", "available"), ("ram_percent", "percent")]:
+            facts[key] = getattr(ram, attr, None)
+    except Exception:
+        pass
+    for key, read in [("cpu_percent", lambda: psutil.cpu_percent(interval=0.1)), ("logical_cpus", psutil.cpu_count),
+                      ("uptime_seconds", lambda: max(0, time.time() - psutil.boot_time()))]:
+        try:
+            facts[key] = read()
+        except Exception:
+            pass
+    for key, value in facts.items():
+        if (type(value) not in (int, float) or not math.isfinite(value) or value < 0 or value > 2**60
+                or (key.endswith("percent") and value > 100)):
+            facts[key] = None
+    known = sum(value is not None for value in facts.values())
+    peer_trust.revalidate(access)
+    return {"protocol": "tli-peer-observation-v1", "host": {"id": cfg.node_id, "name": cfg.node_name,
+             "identity_fingerprint": node_identity.fingerprint()}, "observed_at": S.now_iso(), "facts": facts,
+            "coverage": {"complete": known == 7, "known_metrics": known, "total_metrics": 7},
+            "scope": "Measurements made on this TLI peer, not the requesting host, phone or browser.",
+            "limitations": ["One short CPU/RAM observation is not a diagnosis or proof of a fix.",
+                            "No disk scan, network probe, process observation or action was performed."] +
+                           (["Some metrics were unavailable and remain unknown."] if known < 7 else [])}

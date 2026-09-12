@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+from functools import wraps
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -28,10 +30,19 @@ from vault_security import (
     reset_vault as _security_reset_vault,
     verify_password as _verify_vault_password,
     generate_api_key, validate_api_key, revoke_api_key, has_api_key,
+    VaultSessionRevocationError, content_transaction,
 )
 from routers.system_routes import require_session
 
 router = APIRouter(tags=["vault"])
+
+
+def _content_mutation(fn):
+    @wraps(fn)
+    def guarded(*args, **kwargs):
+        with content_transaction():
+            return fn(*args, **kwargs)
+    return guarded
 
 
 # ============================================
@@ -49,12 +60,49 @@ def _vault_path(name_or_base: str) -> str:
     if name_or_base.lower().endswith(".vault"):
         name_or_base = name_or_base[:-6]
     filename = _safe_vault_filename(name_or_base)
-    resolved = os.path.normpath(os.path.join(S.VAULT_DIR, filename))
-    # Ensure the resolved path stays inside VAULT_DIR (prevent any traversal)
-    vault_dir_real = os.path.normpath(S.VAULT_DIR)
-    if not resolved.startswith(vault_dir_real + os.sep) and resolved != vault_dir_real:
+    candidate = Path(S.VAULT_DIR) / filename
+    vault_dir_real = Path(S.VAULT_DIR).resolve()
+    resolved = candidate.resolve()
+    # Existing linked files must never read, replace or delete another store.
+    if candidate.is_symlink() or resolved.parent != vault_dir_real:
         raise HTTPException(status_code=400, detail="Invalid vault path.")
-    return resolved
+    return str(resolved)
+
+
+def _file_identifier(value: str) -> str:
+    base = value[:-6] if value.lower().endswith(".vault") else value
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", base) or base.startswith("__"):
+        raise HTTPException(status_code=400, detail="Invalid Vault file identifier.")
+    return base
+
+
+def _note_identifier(value: str) -> str:
+    if not re.fullmatch(r"[a-zA-Z0-9_-]+", value):
+        raise HTTPException(status_code=400, detail="Invalid Vault note identifier.")
+    return value if value.startswith(NOTE_PREFIX) else NOTE_PREFIX + value
+
+
+@_content_mutation
+def _write_encrypted_blob(path: str, blob: bytes) -> None:
+    """Replace only after a complete encrypted payload is durably written."""
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=Path(path).parent,
+                                         prefix=".tli-vault-", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(blob)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        temporary = None
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Vault content could not be saved. Existing encrypted data was preserved.") from exc
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
 
 
 def _get_aes_key_for_user(user_id: str) -> bytes:
@@ -96,10 +144,11 @@ def _list_vault_files_base() -> List[str]:
 
 
 def _write_vault_file(user_id: str, title: str, content_bytes: bytes) -> str:
+    if _safe_vault_filename(title).startswith("__"):
+        raise HTTPException(status_code=400, detail="Filenames beginning with two underscores are reserved for internal Vault data. Rename the file before uploading.")
     path = _vault_path(title)
     enc = _encrypt_for_user(user_id, content_bytes)
-    with open(path, "wb") as f:
-        f.write(enc)
+    _write_encrypted_blob(path, enc)
     base = os.path.basename(path)
     if base.lower().endswith(".vault"):
         base = base[:-6]
@@ -107,7 +156,7 @@ def _write_vault_file(user_id: str, title: str, content_bytes: bytes) -> str:
 
 
 def _read_vault_file(user_id: str, base_name: str) -> bytes:
-    path = _vault_path(base_name)
+    path = _vault_path(_file_identifier(base_name))
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Vault file not found")
     with open(path, "rb") as f:
@@ -115,8 +164,9 @@ def _read_vault_file(user_id: str, base_name: str) -> bytes:
     return _decrypt_for_user(user_id, blob)
 
 
+@_content_mutation
 def _delete_vault_file(user_id: str, base_name: str) -> bool:
-    path = _vault_path(base_name)
+    path = _vault_path(_file_identifier(base_name))
     if not os.path.exists(path):
         return False
     os.remove(path)
@@ -134,26 +184,29 @@ def _vault_secrets_path(user_id: str) -> str:
 
 def load_vault_secrets(user_id: str) -> Dict[str, str]:
     path = _vault_secrets_path(user_id)
-    if not os.path.exists(path):
-        return {}
     try:
         with open(path, "rb") as f:
             blob = f.read()
+    except FileNotFoundError:
+        return {}
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="The saved Vault secrets could not be read. Existing encrypted data was preserved.") from exc
+    try:
         decrypted = _decrypt_for_user(user_id, blob)
         data = json.loads(decrypted.decode("utf-8"))
         if isinstance(data, dict):
             return {str(k): str(v) for k, v in data.items()}
-    except Exception:
-        return {}
-    return {}
+        raise ValueError("Invalid secrets store")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="The saved Vault secrets could not be read. Existing encrypted data was preserved.") from exc
 
 
+@_content_mutation
 def save_vault_secrets(user_id: str, secrets: Dict[str, str]) -> None:
     path = _vault_secrets_path(user_id)
     payload = json.dumps(secrets, ensure_ascii=False, indent=2).encode("utf-8")
     enc = _encrypt_for_user(user_id, payload)
-    with open(path, "wb") as f:
-        f.write(enc)
+    _write_encrypted_blob(path, enc)
 
 
 # ============================================
@@ -187,7 +240,7 @@ class VaultResetRequest(BaseModel):
 # ============================================
 
 @router.post("/vault/setup")
-def vault_setup(body: VaultSetupRequest, _l=Depends(_gate("vault"))):
+def vault_setup(body: VaultSetupRequest, _l=Depends(_gate("vault")), _session: str = Depends(require_session)):
     if vault_is_initialized():
         raise HTTPException(status_code=400, detail="Vault already initialized")
     if len(body.password) < 8:
@@ -195,6 +248,8 @@ def vault_setup(body: VaultSetupRequest, _l=Depends(_gate("vault"))):
     try:
         setup_password(body.password)
         S.log_debug("vault", "INFO", "Vault setup completed")
+    except HTTPException:
+        raise
     except Exception as e:
         S.log_debug("vault", "ERROR", "Error setting up vault", error=str(e))
         raise HTTPException(status_code=500, detail=f"Error setting up vault: {e}")
@@ -226,7 +281,10 @@ def vault_unlock_route(body: VaultUnlockRequest, user_id: str = Depends(require_
 
 @router.post("/vault/lock")
 def vault_lock_route(user_id: str = Depends(require_session)):
-    lock(user_id)
+    try:
+        lock(user_id)
+    except VaultSessionRevocationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     S.log_debug("vault", "INFO", "Vault locked", user_id=user_id)
     return {"ok": True}
 
@@ -278,6 +336,7 @@ def vault_export_backup(user_id: str = Depends(require_session)):
 
 
 @router.post("/vault/reset")
+@_content_mutation
 def vault_reset(body: VaultResetRequest, user_id: str = Depends(require_session)):
     """
     Hard reset: wipes all vault data and password hash.
@@ -297,8 +356,11 @@ def vault_reset(body: VaultResetRequest, user_id: str = Depends(require_session)
                 try:
                     os.remove(os.path.join(S.VAULT_DIR, fname))
                     deleted_files += 1
-                except Exception:
-                    pass
+                except OSError:
+                    raise HTTPException(status_code=503, detail={
+                        "message": "Vault reset did not complete because a saved file could not be removed. Password metadata was preserved.",
+                        "deleted_files": deleted_files,
+                    })
 
     # Wipe password hash + in-memory keys
     _security_reset_vault()
@@ -385,6 +447,7 @@ def vault_get_secret(key: str, user_id: str = Depends(require_session)):
 
 
 @router.post("/vault/secret/{key}")
+@_content_mutation
 def vault_set_secret(key: str, body: VaultSecretSetRequest, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
@@ -396,6 +459,7 @@ def vault_set_secret(key: str, body: VaultSecretSetRequest, user_id: str = Depen
 
 
 @router.delete("/vault/secret/{key}")
+@_content_mutation
 def vault_delete_secret(key: str, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
@@ -449,10 +513,9 @@ def vault_write_note(body: VaultNoteWriteRequest, user_id: str = Depends(require
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
     base = _note_base(body.title)
-    path = os.path.join(S.VAULT_DIR, base + ".vault")
+    path = _vault_path(base)
     enc = _encrypt_for_user(user_id, body.content.encode("utf-8"))
-    with open(path, "wb") as f:
-        f.write(enc)
+    _write_encrypted_blob(path, enc)
     S.log_debug("vault", "INFO", "Vault note saved", user_id=user_id, title=body.title)
     return {"ok": True, "id": base, "title": body.title}
 
@@ -462,9 +525,8 @@ def vault_read_note(note_id: str, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
     # note_id may be the base (with prefix) or just the title slug
-    if not note_id.startswith(NOTE_PREFIX):
-        note_id = NOTE_PREFIX + note_id
-    path = os.path.join(S.VAULT_DIR, note_id + ".vault")
+    note_id = _note_identifier(note_id)
+    path = _vault_path(note_id)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Note not found")
     with open(path, "rb") as f:
@@ -475,12 +537,12 @@ def vault_read_note(note_id: str, user_id: str = Depends(require_session)):
 
 
 @router.delete("/vault/note/{note_id}")
+@_content_mutation
 def vault_delete_note(note_id: str, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
-    if not note_id.startswith(NOTE_PREFIX):
-        note_id = NOTE_PREFIX + note_id
-    path = os.path.join(S.VAULT_DIR, note_id + ".vault")
+    note_id = _note_identifier(note_id)
+    path = _vault_path(note_id)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Note not found")
     os.remove(path)
@@ -502,24 +564,33 @@ def _vault_logins_path(user_id: str) -> str:
 
 def load_vault_logins(user_id: str) -> List[Dict]:
     path = _vault_logins_path(user_id)
-    if not os.path.exists(path):
-        return []
     try:
         with open(path, "rb") as f:
             blob = f.read()
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="The saved Vault logins could not be read. Existing encrypted data was preserved.") from exc
+    try:
         decrypted = _decrypt_for_user(user_id, blob)
         data = json.loads(decrypted.decode("utf-8"))
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
+        if not isinstance(data, list) or any(
+            not isinstance(entry, dict) or any(not isinstance(entry.get(key), str)
+                for key in ("id", "name", "domain", "username", "password"))
+            for entry in data
+        ):
+            raise ValueError("Invalid login store")
+        return data
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="The saved Vault logins could not be read. Existing encrypted data was preserved.") from exc
 
 
+@_content_mutation
 def save_vault_logins(user_id: str, logins: List[Dict]) -> None:
     path = _vault_logins_path(user_id)
     payload = json.dumps(logins, ensure_ascii=False, indent=2).encode("utf-8")
     enc = _encrypt_for_user(user_id, payload)
-    with open(path, "wb") as f:
-        f.write(enc)
+    _write_encrypted_blob(path, enc)
 
 
 class VaultLoginCreateRequest(BaseModel):
@@ -563,6 +634,7 @@ def vault_list_logins(user_id: str = Depends(require_session)):
 
 
 @router.post("/vault/logins")
+@_content_mutation
 def vault_create_login(body: VaultLoginCreateRequest, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
@@ -585,6 +657,7 @@ def vault_create_login(body: VaultLoginCreateRequest, user_id: str = Depends(req
 
 
 @router.put("/vault/logins/{login_id}")
+@_content_mutation
 def vault_update_login(login_id: str, body: VaultLoginUpdateRequest, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
@@ -609,6 +682,7 @@ def vault_update_login(login_id: str, body: VaultLoginUpdateRequest, user_id: st
 
 
 @router.delete("/vault/logins/{login_id}")
+@_content_mutation
 def vault_delete_login(login_id: str, user_id: str = Depends(require_session)):
     if not is_vault_unlocked(user_id):
         raise HTTPException(status_code=403, detail="Vault is locked for this user")
@@ -679,6 +753,7 @@ def vault_ext_logins(domain: Optional[str] = None, ext_user: str = Depends(_requ
 
 
 @router.post("/vault/ext/logins")
+@_content_mutation
 def vault_ext_save_login(body: VaultLoginCreateRequest, ext_user: str = Depends(_require_api_key)):
     """Browser extension saves a newly detected login to the vault."""
     if not is_vault_unlocked(ext_user):

@@ -1,150 +1,58 @@
-# TheLANIntelligence — v1.1.1 Beta
+# TLI - Anniversary Preview 1
 
-A private home operating system. Runs on your LAN. No cloud, no accounts, no subscriptions.
-Works on **Windows, macOS, and Linux** — TLI detects your OS and adjusts automatically.
+A private home console for your computers, useful notes, local AI, storage,
+troubleshooting and connected work.
 
----
+This is the **anniversary preview branch**. Original TLI branches and releases
+remain unchanged. The historical **v1.0-beta** release is titled **TLI Beta v1.2.0**
+and contains the v1.2.0 ZIP; it is not verified 1.0 source.
 
-## Start Here
+- [Preserved v1.0-beta tag / v1.2.0 release](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.0-beta)
+- [Previous v1.3.5-beta release](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.3.5-beta)
+- [Version preservation](docs/VERSION_PRESERVATION.md)
 
-**Windows** — double-click `TLI_Start.bat`
+## Get this separate version
 
-**macOS** — double-click `TLI_Start.command`
-(first time: right-click → Open to allow it past Gatekeeper, or use the one-line installer below)
+[Anniversary Preview 1](https://github.com/TheLANIntelligence/TLI/releases/tag/anniversary-preview-1) provides the verified desktop
+source ZIP, Android Companion Beta8 APK, upgrade inventory and artifact hashes.
+Retain your current installation and data; the preview does not replace them
+automatically. The previous release remains the default GitHub download.
 
-**Linux** — open a terminal in this folder and run `bash TLI_Start.sh`
+- [Everything upgraded](docs/TLI_ANNIVERSARY_UPGRADE_SUMMARY.md)
+- [Hands-on testing guide](docs/TLI_ANNIVERSARY_HANDS_ON.md)
+- [Capabilities and prerequisites](docs/TLI_CAPABILITIES.md)
+- [Verification and limitations](release/verification.json)
+- [Actual AI quality results](docs/TLI_ANNIVERSARY_FINAL_MODEL_CHECK.md)
 
----
+## What changed
 
-### macOS — One-Line Installer
+Modern and full Classic interfaces, refreshed themes, Chat and shared history,
+Notes & fixes, guided Troubleshooting, Performance & apps, the rebuilt Free Space
+map and reviewed cleanup, Vault backup and separate-copy recovery, computer trust,
+LAN messages and reviewed file handoffs. Companion opens Chat with a visible
+message field. Existing tools and optional configured services remain available.
 
-Open Terminal and paste:
+## Verification
 
-```
-curl -fsSL https://thelanintelligence.com/install_mac.sh | bash
-```
+The accepted application passed all **27 software stages**: 2,769 repository
+backend, 2,757 extracted-package backend, 1,133 desktop, 178 tooling and
+191 Companion tests, plus TypeScript, clean Android/iOS/web exports,
+isolated HTTPS restart and synthetic recovery.
 
-This downloads TLI, strips the quarantine flag, fixes permissions, and launches it — no security warnings.
+**AI answer quality remains limited.** An experimental preparation change was
+rejected after regressions. Neither version passed the strict quality gate.
+Physical Android, two-computer, native-installation and real-data recovery
+acceptance remain not run. Remote access is deferred.
 
-**Already have the zip?**
-```
-bash ~/Downloads/TLI_Beta_V1.1.1/TLI_Start.command
-```
+## Running the source preview
 
----
+The desktop ZIP includes the verified runtime files and launchers. Read the
+included manual and testing guide. Setup dependencies may require network access.
+Model weights and personal stores are not included. Visiting this repository
+does not download models or change your current selection.
 
-## Requirements
-
-- **Python 3.10 or later** — [python.org/downloads](https://www.python.org/downloads/)
-  - Windows: tick "Add Python to PATH" during install
-  - macOS / Linux: the launcher auto-installs Python if it is missing
-- Windows 10+, macOS 12+, or Ubuntu 20.04+ (other Linux distros with CUPS will work)
-
----
-
-## First Run
-
-1. Run the start script for your platform — wait for the browser to open
-2. Complete the **onboarding wizard** — set your node name, PIN, and optionally download an AI model
-3. Everything else is optional — explore from the Dashboard
-
-### AI Model (first-time setup)
-
-On Mac and Linux, the launcher will ask if you want to download the bundled AI runtime on first run.
-Say **Y** — it downloads the correct `llama-server` binary for your platform automatically (~50 MB).
-Then go to **Settings → AI Model** to download a model (1–4 GB depending on tier).
-
-If you prefer LM Studio, skip the runtime download and point TLI at your LM Studio URL instead.
-
----
-
-## What is TLI?
-
-TLI turns one machine into a home console accessible from any browser on your network.
-It connects your AI model, smart home devices, encrypted vault, files, and LAN machines
-into one interface — entirely offline.
-
-Nine modules, all unlocked in beta:
-
-| Module | What it does |
-|---|---|
-| AI Chat | Chat with a local LLM — no API key, no internet |
-| Dashboard | Live system vitals + quick actions |
-| Vault | AES-256 encrypted files, notes, passwords, and logins |
-| Home Automation | Control Shelly, Hue, Kasa, Govee, Tasmota, and more — direct LAN |
-| Game Optimizer | Detect running games, get AI tuning advice (Windows/macOS/Linux) |
-| Storage Visualizer | Interactive disk map — find and clean what's taking space |
-| Mesh | Connect multiple machines on your LAN into one console |
-| Automations | Trigger device actions on schedule, power events, or node presence |
-| Files & Tools | Bulk rename, organise, AI-generated scripts, diagnostics |
-
----
-
-## Platform Feature Matrix
-
-| Feature | Windows | macOS | Linux |
-|---|:---:|:---:|:---:|
-| AI Chat (LM Studio) | ✓ | ✓ | ✓ |
-| AI Chat (Bundled model) | ✓ | ✓ auto-download | ✓ auto-download |
-| Dashboard + System Info | ✓ | ✓ | ✓ |
-| Vault | ✓ | ✓ | ✓ |
-| Home Automation | ✓ | ✓ | ✓ |
-| Game Detection | ✓ | ✓ | ✓ |
-| Storage Visualizer | ✓ | ✓ | ✓ |
-| Printers & Scan | ✓ WMI/WSD | ✓ CUPS | ✓ CUPS |
-| USB / Removable Drives | ✓ | ✓ | ✓ |
-| Mesh Networking | ✓ | ✓ | ✓ |
-| Open in Finder / Explorer | ✓ | ✓ | ✓ |
-| Bundled AI runtime | ✓ included | auto-downloaded | auto-downloaded |
-
----
-
-## Accessing TLI from Other Devices
-
-Once running, TLI is accessible from any device on your home network:
-
-```
-http://<this-machine-ip>:8000
-```
-
-Find your IP in **Settings → Node Identity**, or use your machine's hostname
-(e.g. `http://desktop.local:8000`).
-
----
-
-## Stopping TLI
-
-Close the terminal window, or press `Ctrl+C` inside it.
-
----
-
-## Uninstalling TLI
-
-TLI is self-contained — nothing is written outside its folder.
-
-| Platform | How to uninstall |
-|---|---|
-| Windows | Double-click `Uninstall_TLI.bat` |
-| macOS | Double-click `Uninstall_TLI.command` (in `~/TLI`) |
-| Linux | Run `bash Uninstall_TLI.sh` |
-
-Each script stops TLI if running, then deletes the entire TLI folder including all data, models,
-and settings. You are asked to confirm before anything is deleted.
-
-If you installed the browser extension, remove it separately:
-**Chrome/Edge → Extensions → TheLANIntelligence → Remove**.
-
----
-
-## Updating
-
-TLI checks for updates automatically a few seconds after startup. When a new version is available,
-a notification appears in **Settings → Updates**. Updates are never applied without your approval.
-
----
-
-## Help & Bug Reports
-
-- Full user manual: open **TLI → Settings → Manual**, or read `TLI_MANUAL.md` in this folder
-- macOS-specific guide: `docs/README_MAC.md`
-- Bug reports: thelanintelligence@gmail.com
+The Git tree retains the accepted application inputs; this README and publication
+documentation were prepared separately. The original README remains in
+[the historical reference](docs/README_PRE_ANNIVERSARY.md).
+See [version identity](docs/VERSION_PRESERVATION.md) for retained in-app/native
+labels and original release naming.

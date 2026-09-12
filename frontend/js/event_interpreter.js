@@ -70,7 +70,11 @@
       metaType === "narrator_update" ||
       metaType === "action_update"
     ) {
-      _dispatch(metaType, ev.payload || ev);
+      // Keep the server observation clock when unwrapping metric events. The
+      // browser clock may differ; freshness must use the host's timestamps.
+      const payload = metaType === 'state_update' && ev.payload && typeof ev.payload === 'object' && Number.isFinite(ev.ts)
+        ? { ...ev.payload, ts: ev.ts } : ev.payload || ev;
+      _dispatch(metaType, payload);
       return;
     }
 

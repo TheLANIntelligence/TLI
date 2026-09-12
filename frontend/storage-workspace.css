@@ -1,0 +1,50 @@
+/* Storage and private files share the existing TLI theme and action contracts. */
+#panel-files, #panel-vault { min-width: 0; }
+:is(#panel-files, #panel-vault) [hidden] { display: none !important; }
+:is(#panel-files, #panel-vault) .storage-disclosure {
+  min-width: 0; margin: 12px 0; border: 1px solid var(--border-subtle, var(--border));
+  border-radius: 14px; background: var(--bg-panel, var(--panel)); overflow-wrap: anywhere;
+}
+:is(#panel-files, #panel-vault) .storage-disclosure > summary {
+  padding: 14px 16px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-main, var(--text));
+}
+:is(#panel-files, #panel-vault) .storage-disclosure > summary::marker { color: var(--accent); }
+:is(#panel-files, #panel-vault) .storage-disclosure[open] > summary { border-bottom: 1px solid var(--border-subtle, var(--border)); }
+:is(#panel-files, #panel-vault) :is(button, input, select, textarea, summary):focus-visible {
+  outline: 2px solid var(--accent, #00ad8a); outline-offset: 3px;
+}
+:is(#panel-files, #panel-vault) button { box-shadow: none; }
+:is(#panel-files, #panel-vault) .storage-help { color: var(--text-muted); font-size: 13px; line-height: 1.6; margin: 6px 0 14px; }
+#panel-files .storage-stage { border: 1px solid var(--border-subtle, var(--border)); border-radius: 14px; padding: 18px; margin: 12px 0; background: var(--bg-panel, var(--panel)); }
+#panel-files :is(.storage-stage, .storage-operation-results) h3 { margin: 0 0 6px; font-size: 16px; }
+#panel-files .fo-grid { grid-template-columns: minmax(0, 1fr); }
+#panel-files .fo-main { min-width: 0; }
+#panel-files #files-more-tools > .fo-sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px; gap: 12px; }
+#panel-files #files-more-tools .section-heading { align-items: flex-start; flex-direction: column; gap: 6px; }
+#panel-files #files-more-tools .section-subhead { text-align: left; }
+#panel-files .section-subhead { color: var(--text-muted); }
+#panel-files button.pill-btn.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+#panel-files .fo-scan-row button { white-space: normal; overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
+#panel-printshop .ps-btn-row { flex-wrap: wrap; }
+#panel-printshop .ps-btn-row button { flex: 1 1 220px; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+#panel-printshop .ps-action-btn { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+#panel-printshop .ps-action-btn:hover:not(:disabled) { background: var(--accent); box-shadow: none; }
+#panel-files #files-type-breakdown .card-section { border: 0; margin: 0; }
+#panel-files #files-type-breakdown .vis4-table-wrap { max-height: none !important; overflow: visible; }
+#panel-files #files-type-breakdown table { table-layout: fixed; width: 100%; }
+#panel-files #files-type-breakdown td { overflow-wrap: anywhere; white-space: normal; }
+#panel-files #files-operation-review { margin: 12px 0 0; }
+#panel-files #filesStatus { font-style: normal; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+#panel-files .fo-folder-tiles { margin: 10px 0; }
+#panel-files .fo-scan-row { flex-wrap: wrap; }
+#panel-files .fo-scan-row input { min-width: 0; flex: 1 1 260px; }
+#panel-files .fo-buckets { max-height: none; }
+
+@media (max-width: 600px) {
+  :is(#panel-files, #panel-vault) :is(button, summary, input:not([type='checkbox']), select) { min-height: 44px; }
+  #panel-files #files-more-tools > .fo-sidebar { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+  #panel-files .storage-stage { padding: 12px; }
+  #panel-files #files-plan > .section-heading { align-items: flex-start; flex-direction: column; gap: 6px; }
+  #panel-files .fo-scan-row button { flex: 1 1 130px; }
+  #panel-files .fo-folder-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}

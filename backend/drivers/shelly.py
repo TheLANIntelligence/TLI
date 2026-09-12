@@ -87,9 +87,12 @@ class ShellyDriver:
         if not r.ok:
             raise RuntimeError(f"HTTP {r.status_code}")
         try:
-            return r.json()
-        except Exception:
-            return {"text": r.text}
+            result = r.json()
+        except Exception as exc:
+            raise RuntimeError("Device returned invalid JSON; outcome is unconfirmed.") from exc
+        if not isinstance(result, dict):
+            raise RuntimeError("Device returned an unexpected response; outcome is unconfirmed.")
+        return result
 
     # -----------------------------
     # public driver API
@@ -97,14 +100,18 @@ class ShellyDriver:
     def get_status(self, ip: str, relay: int = 0) -> Dict[str, Any]:
         target_ip = self._normalize_ip(ip)
         url = f"http://{target_ip}/rpc/Shelly.GetStatus"
+        from intelligence.power_history import binding, record
+        observation_target = binding(target_ip, relay)
 
         try:
             raw = self._get_json(url)
         except Exception as exc:
+            record(observation_target, None, failed=True)
             self._log("ERROR", "Gen2 status request failed", ip=target_ip, error=str(exc))
             raise
 
         summary = self._extract_summary_gen2(raw, relay_index=relay)
+        record(observation_target, raw)
         self._log("INFO", "Gen2 status OK", ip=target_ip, relay=relay, summary=summary)
         return {"raw": raw, "summary": summary, "ip": target_ip, "relay": relay}
 

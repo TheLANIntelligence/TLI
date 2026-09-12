@@ -5,6 +5,7 @@ import json
 import ipaddress
 import socket
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -15,10 +16,13 @@ from pydantic import BaseModel, Field
 
 import tli_state as S
 from license_gate import gate as _gate
+from routers.system_routes import require_session
+from device_commands import run as run_command, target_key
 
 router = APIRouter(tags=["shelly"])
 
 _shelly_info_cache: Dict[str, Dict[str, Any]] = {}
+_registry_lock = threading.RLock()
 
 
 def _get_lan_ip() -> str:
@@ -145,7 +149,25 @@ def _extract_shelly_summary_gen2(raw: Dict[str, Any], relay_index: int = 0) -> D
 class ShellyRelayRequest(BaseModel):
     ip: str
     action: str = Field(pattern="^(on|off|toggle)$")
-    relay: int = 0
+    relay: Optional[int] = Field(default=None, ge=0, le=255)
+    request_id: Optional[str] = Field(default=None, pattern=r"^[a-f0-9-]{32,36}$")
+
+
+def _target_relay(ip, relay):
+    if relay is not None:
+        return relay
+    from routers.home_power import get_runtime
+    try:
+        runtime = get_runtime()
+    except RuntimeError:
+        runtime = None
+    home = runtime.load_devices() if runtime and hasattr(runtime, "load_devices") else []
+    registered = [*S.load_shelly_registry(), *[d for d in home if d.get("vendor", "shelly") == "shelly"]]
+    matches = {int(d.get("relay") or 0) for d in registered
+               if target_key(d.get("ip", ""), 0)[0] == target_key(ip, 0)[0]}
+    if len(matches) > 1:
+        raise HTTPException(409, "This address has multiple registered relays. Choose the relay explicitly.")
+    return next(iter(matches), 0)
 
 
 # ============================================
@@ -158,18 +180,33 @@ def homeauto_devices():
 
 
 @router.post("/homeauto/devices")
-def homeauto_set_devices(payload: Dict[str, Any], _l=Depends(_gate("home_automation"))):
-    raw_devices = payload.get("devices") or []
-    devices = []
-    for item in raw_devices:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name", "")).strip()
-        ip = str(item.get("ip", "")).strip()
-        if ip:
-            devices.append({"name": name, "ip": ip})
-    S.save_shelly_registry(devices)
-    return {"ok": True, "count": len(devices)}
+def homeauto_set_devices(payload: Dict[str, Any], _l=Depends(_gate("home_automation")), _s=Depends(require_session)):
+    raw_devices = payload.get("devices")
+    if not isinstance(raw_devices, list) or len(raw_devices) > 512:
+        raise HTTPException(422, "Provide a device list of at most 512 entries.")
+    with _registry_lock:
+        previous = S.load_shelly_registry()
+        devices = list(previous) if payload.get("merge") is True else []
+        seen = set()
+        for item in raw_devices:
+            if not isinstance(item, dict) or not str(item.get("ip") or "").strip():
+                raise HTTPException(422, "Each device needs an address.")
+            ip = str(item["ip"]).strip()
+            relay = item.get("relay")
+            if relay is not None and (type(relay) is not int or not 0 <= relay <= 255):
+                raise HTTPException(422, "Relay must be an integer from 0 to 255.")
+            relay = _target_relay(ip, relay)
+            key = target_key(ip, relay)
+            if key in seen:
+                raise HTTPException(409, "The same address and relay appear more than once.")
+            seen.add(key)
+            old = next((d for d in previous if target_key(d.get("ip"), d.get("relay") or 0) == key), {})
+            # Keep IDs, aliases and vendor metadata from existing persisted rows.
+            device = {**old, "name": str(item.get("name", old.get("name", ""))).strip(), "ip": ip, "relay": relay}
+            devices = [d for d in devices if target_key(d.get("ip"), d.get("relay") or 0) != key]
+            devices.append(device)
+        S.save_shelly_registry(devices)
+    return {"ok": True, "count": len(devices), "devices": devices}
 
 
 @router.get("/shelly/discover")
@@ -229,24 +266,28 @@ def shelly_discover(
 
 
 @router.get("/shelly/status")
-def shelly_status(ip: str = Query(...), relay: int = 0, _l=Depends(_gate("home_automation"))):
+def shelly_status(ip: str = Query(...), relay: Optional[int] = Query(default=None, ge=0, le=255), _l=Depends(_gate("home_automation")), _s=Depends(require_session)):
+    relay = _target_relay(ip, relay)
     try:
         out = S.shelly_driver.get_status(ip=ip, relay=relay)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Shelly status request failed: {exc!r}")
-    device = shelly_device_info_cached(out.get("ip") or ip)
-    return {"ok": True, "raw": out["raw"], "summary": out["summary"], "device": device}
+        raise HTTPException(status_code=502, detail="Could not read this relay. Check device connectivity and access; its state is unknown.") from exc
+    raw = out.get("raw") if isinstance(out, dict) else None
+    switch = raw.get(f"switch:{relay}") if isinstance(raw, dict) else None
+    valid = isinstance(switch, dict) and isinstance(switch.get("output"), bool) and out.get("ok") is not False and not any(k in raw for k in ("error", "code", "text"))
+    device = shelly_device_info_cached(ip) if valid else None
+    return {"ok": valid, "raw": raw, "summary": out.get("summary", "") if valid else "The requested relay state is unavailable.",
+            "device": device, "ip": ip, "relay": relay, "on": switch["output"] if valid else None, "checked_at": time.time()}
 
 
 @router.post("/shelly/relay")
-def shelly_relay(body: ShellyRelayRequest, _l=Depends(_gate("home_automation"))):
-    try:
+def shelly_relay(body: ShellyRelayRequest, _l=Depends(_gate("home_automation")), user=Depends(require_session)):
+    relay = _target_relay(body.ip, body.relay)
+    def execute():
         if body.action == "on":
-            out = S.shelly_driver.turn_on(ip=body.ip, relay=body.relay)
+            return S.shelly_driver.turn_on(ip=body.ip, relay=relay)
         elif body.action == "off":
-            out = S.shelly_driver.turn_off(ip=body.ip, relay=body.relay)
-        else:
-            out = S.shelly_driver.toggle(ip=body.ip, relay=body.relay)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Shelly relay request failed: {exc!r}")
-    return {"raw": out["raw"], "summary": out["summary"]}
+            return S.shelly_driver.turn_off(ip=body.ip, relay=relay)
+        return S.shelly_driver.toggle(ip=body.ip, relay=relay)
+    result = run_command(user, ("shelly", *target_key(body.ip, relay)), body.action, body.request_id, execute)
+    return {"raw": None, **result, "ip": body.ip, "relay": relay}

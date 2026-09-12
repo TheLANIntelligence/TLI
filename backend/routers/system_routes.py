@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import requests
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 import tli_state as S
@@ -32,19 +32,14 @@ router = APIRouter(tags=["system"])
 
 
 # ── Shared session dependency (defined early so all endpoints can use it) ─────
-def require_session(tli_session: Optional[str] = Cookie(default=None)) -> str:
-    """FastAPI dependency: enforces PIN session on protected endpoints.
-    Returns the user_id associated with the session.
-    No-op (returns 'local') when PIN is not configured — allows open access."""
-    cfg = S.load_pin_config()
-    if not cfg["enabled"]:
-        return "local"
-    if not tli_session or not S.validate_session_token(tli_session):
-        raise HTTPException(
-            status_code=401,
-            detail="TLI session required. Unlock from the browser.",
-        )
-    return S.get_session_user_id(tli_session)
+def require_session(tli_session: Optional[str] = Cookie(default=None), request: Request = None) -> str:
+    """Resolve browser sessions and paired-device Bearer credentials to one owner.
+
+    Keep the cookie positional argument for legacy direct callers. A supplied
+    Authorization header is always validated, including while PIN is disabled.
+    """
+    from companion_auth import resolve_user
+    return resolve_user(request, tli_session)
 
 
 # ============================================
@@ -677,7 +672,7 @@ class DeviceNicknameRequest(BaseModel):
     nickname: str
 
 @router.post("/device/nickname")
-def set_device_nickname(req: DeviceNicknameRequest):
+def set_device_nickname(req: DeviceNicknameRequest, _session: str = Depends(require_session)):
     devices = S.load_devices()
     device_id = "default-device"
     devices[device_id] = {"ai_name": req.nickname.strip() or "Device", "created_at": datetime.utcnow().isoformat()}
@@ -750,9 +745,12 @@ def system_disk():
 
 
 @router.get("/api/diagnostics/version")
-def diagnostics_version():
-    return {"ok": True, "build_id": BUILD_ID, "build_utc": BACKEND_BUILD_UTC,
-            "python": sys.version.split()[0], "platform": platform.platform()}
+def diagnostics_version(request: Request):
+    from release_identity import public_status
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"ok": True, "build_id": BUILD_ID, "build_utc": BACKEND_BUILD_UTC,
+            "python": sys.version.split()[0], "platform": platform.platform(),
+            "release": public_status(request.app.routes)}, headers={"Cache-Control": "no-store"})
 
 @router.get("/api/diagnostics/whoami")
 def diagnostics_whoami():
@@ -895,18 +893,33 @@ def pin_remove(body: PinVerifyRequest, response: Response):
     return {"ok": True}
 
 
-@router.post("/system/pin/emergency-reset")
-def pin_emergency_reset(response: Response):
-    """Remove PIN without needing the current PIN.
+@router.post("/system/pin/lock")
+def pin_lock(request: Request, response: Response, _session: str = Depends(require_session)):
+    """Lock only this authenticated browser, leaving other clients connected."""
+    if request.headers.get("authorization") is not None:
+        raise HTTPException(403, "Lock the browser from its TLI page; Companion credentials are unchanged.")
+    token = request.cookies.get("tli_session")
+    if not token or not S.validate_session_token(token):
+        raise HTTPException(401, "A valid browser session is required. Unlock with the PIN.")
+    if not S.load_pin_config()["enabled"]:
+        raise HTTPException(409, "No PIN is enabled. Set a PIN in Settings before locking TLI.")
+    origin = request.headers.get("origin")
+    if request.headers.get("sec-fetch-site") == "cross-site" or (origin and origin != str(request.base_url).rstrip("/")):
+        raise HTTPException(403, "Lock the browser from its TLI page.")
+    S.revoke_session_token(token)
+    response.delete_cookie("tli_session", path="/", httponly=True, samesite="strict", secure=S.TLS_ENABLED)
+    response.headers["Cache-Control"] = "no-store"
+    return {"ok": True, "locked": True}
 
-    Recovery endpoint for local lockout scenarios — no auth required.
-    TLI is a LAN-only system; physical/network proximity is the assumed
-    trust boundary. Clears all sessions so the app reloads cleanly.
-    """
+
+@router.post("/system/pin/emergency-reset")
+def pin_emergency_reset(response: Response, _session: str = Depends(require_session)):
+    """Remove a readable PIN using an existing authenticated session."""
+    S.load_pin_config()  # Must also fail closed when a dependency is overridden.
     S.clear_pin_config()
     S.revoke_all_sessions()
     response.delete_cookie("tli_session", path="/")
-    S.log_debug("pin", "WARN", "Emergency PIN reset performed — PIN cleared without verification")
+    S.log_debug("pin", "WARN", "Authenticated PIN reset performed")
     return {"ok": True, "note": "PIN cleared. All sessions revoked."}
 
 
@@ -929,7 +942,7 @@ def onboarding_status():
 
 
 @router.post("/system/onboarding/complete")
-def onboarding_complete():
+def onboarding_complete(_session: str = Depends(require_session)):
     """Mark onboarding as finished. No auth required — called at wizard completion."""
     _ONBOARDING_COMPLETE_FILE.write_text(json.dumps({"completed_at": S.now_iso()}), encoding="utf-8")
     return {"ok": True}
@@ -940,7 +953,7 @@ class NodeNameRequest(BaseModel):
 
 
 @router.post("/system/node/name")
-def set_node_name(body: NodeNameRequest):
+def set_node_name(body: NodeNameRequest, _session: str = Depends(require_session)):
     """Update the node's display name (used in mesh and dashboard)."""
     name = (body.name or "").strip()[:48] or "TLI Node"
     cfg = S.load_node_config()
@@ -956,7 +969,7 @@ class LMStudioTestRequest(BaseModel):
 
 
 @router.post("/system/lm_studio/test")
-def lm_studio_test(body: LMStudioTestRequest):
+def lm_studio_test(body: LMStudioTestRequest, _session: str = Depends(require_session)):
     """Test if an LM Studio endpoint is reachable. Returns models list on success."""
     raw_url = (body.url or "").strip().rstrip("/")
     if not raw_url:
@@ -984,7 +997,7 @@ class LMStudioUrlRequest(BaseModel):
 
 
 @router.post("/system/lm_studio/url")
-def set_lm_studio_url(body: LMStudioUrlRequest):
+def set_lm_studio_url(body: LMStudioUrlRequest, _session: str = Depends(require_session)):
     """Persist a new LM Studio URL and update the live provider."""
     raw_url = (body.url or "").strip().rstrip("/")
     if not raw_url:

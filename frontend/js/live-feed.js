@@ -14,9 +14,6 @@
 
   // Track rendered event IDs so SSE reconnect replays don't double-render.
   const _seenIds = new Set();
-  // Track title → count to suppress excessive same-title repetition.
-  const _titleCount = new Map();
-  const MAX_SAME_TITLE = 2;      // show at most 2 of the same title
   const MAX_AGE_MS     = 2 * 60 * 60 * 1000; // suppress events older than 2 h
 
   // Category → accent color (CSS variable or hex)
@@ -36,6 +33,9 @@
     info:  "🔵",
     warn:  "🟡",
     alert: "🔴",
+    critical: "🔴",
+    error: "🔴",
+    warning: "🟡",
   };
 
   // ── Notification bell state ────────────────────────────────────────────
@@ -49,6 +49,7 @@
       // Only count while not on dashboard
       const dash = document.getElementById("panel-dashboard2");
       if (dash && !dash.hidden) return;
+      if (window.TLIShell?.isActivityVisible()) return;
       _unread++;
       const badge = _getBadge();
       if (badge) {
@@ -64,6 +65,19 @@
       const badge = _getBadge();
       if (badge) badge.style.display = "none";
     } catch {}
+  }
+
+  function _safeEventActionEndpoint(endpoint) {
+    try {
+      const u = new URL(String(endpoint || ""), window.location.origin);
+      if (u.origin !== window.location.origin) return false;
+      return (
+        u.pathname === "/status/alerts/dismiss-all" ||
+        /^\/status\/alerts\/[^/]+\/dismiss$/.test(u.pathname)
+      );
+    } catch {
+      return false;
+    }
   }
 
   // ── Feed renderer ──────────────────────────────────────────────────────
@@ -87,20 +101,13 @@
       const evTs = ev.ts ? ev.ts * 1000 : 0;
       if (evTs && (Date.now() - evTs) > MAX_AGE_MS) return;
 
-      // Suppress excessive same-title repetition (e.g. "Mesh node offline: X" spamming).
-      const evTitle = (ev.title || "").trim();
-      const titleKey = evTitle.toLowerCase();
-      if (evTitle) {
-        const cnt = _titleCount.get(titleKey) || 0;
-        if (cnt >= MAX_SAME_TITLE) return;
-        _titleCount.set(titleKey, cnt + 1);
-      }
-
-      const dot   = LEVEL_DOT[ev.level] || "🟢";
+      // Narrator suppression does not hide recorded activity or escalation.
+      const dot   = LEVEL_DOT[ev.level] || "🔵";
       const color = CAT_COLOR[ev.category] || "var(--text-muted)";
-      const ts    = ev.ts_fmt || new Date(ev.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      const title = String(ev.title || "").replace(/</g, "&lt;");
-      const body  = String(ev.body  || "").replace(/</g, "&lt;");
+      const escape = value => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const ts    = escape(ev.ts_fmt || new Date(ev.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+      const title = escape(ev.title) + (ev.node ? ' · ' + escape(ev.node) : '');
+      const body  = escape(ev.body);
 
       const item = document.createElement("div");
       item.className = "lf-event";
@@ -108,26 +115,30 @@
 
       item.innerHTML =
         `<div class="lf-event-top">` +
-          `<span class="lf-dot">${dot}</span>` +
-          `<span class="lf-title" style="color:${color}">${title}</span>` +
+          `<span class="lf-dot" style="color:${color};box-shadow:0 0 0 1px ${color};border-radius:50%">${dot}</span>` +
+          `<span class="lf-title" style="color:var(--text-main)">${title}</span>` +
           `<span class="lf-ts">${ts}</span>` +
         `</div>` +
         (body ? `<div class="lf-body">${body}</div>` : "");
 
       // Action buttons
-      if (ev.actions && ev.actions.length) {
+      const safeActions = (ev.actions || []).filter(a => _safeEventActionEndpoint(a.endpoint));
+      if (safeActions.length) {
         const actions = document.createElement("div");
         actions.className = "lf-actions";
-        ev.actions.forEach(a => {
+        safeActions.forEach(a => {
           const btn = document.createElement("button");
           btn.className = "chip-button lf-action-btn";
           btn.textContent = a.label || "Action";
           btn.addEventListener("click", async () => {
+            if (btn.disabled) return;
+            btn.disabled = true;
             try {
-              await fetch(a.endpoint, { method: "POST" });
+              const response = await fetch(a.endpoint, { method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(10000) });
+              const result = await response.json();
+              if (!response.ok || result.ok !== true) throw new Error('Action failed');
               btn.textContent = "Done";
-              btn.disabled = true;
-            } catch { btn.textContent = "Failed"; }
+            } catch { btn.textContent = "Failed — retry"; btn.disabled = false; }
           });
           actions.appendChild(btn);
         });
@@ -155,14 +166,7 @@
         try {
           const ev = JSON.parse(e.data);
           if (ev && ev.title) {
-            // A genuinely new live event — reset per-title suppression so fresh
-            // events of the same name always get through.
-            const age = ev.ts ? (Date.now() - ev.ts * 1000) : 0;
-            if (age < 10_000) {
-              // Event is < 10 s old → real-time; clear its title slot
-              const k = (ev.title || "").trim().toLowerCase();
-              if (k) _titleCount.set(k, 0);
-            }
+            document.dispatchEvent(new CustomEvent('tli-activity-event', {detail: ev}));
             _renderEvent(ev);
           }
         } catch {}
@@ -195,13 +199,6 @@
   document.addEventListener("DOMContentLoaded", () => {
     _connect();
     _watchDashboard();
-    // Clear badge when user clicks bell
-    try {
-      const bell = _getBell();
-      if (bell) bell.addEventListener("click", () => {
-        _clearUnread();
-        if (typeof switchPanel === "function") switchPanel("panel-dashboard2");
-      });
-    } catch {}
+    document.addEventListener("tli-activity-viewed", _clearUnread);
   });
 })();

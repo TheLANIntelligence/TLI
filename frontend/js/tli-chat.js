@@ -1,6 +1,9 @@
 // TLI Chat (LAN Mesh Messenger)
 (() => {
   const $ = (id) => document.getElementById(id);
+  let _lanLocked=false,_lanEpoch=0;
+  const _lanAlive=t=>!_lanLocked&&t===_lanEpoch;
+
 
   // -----------------------------
   // Config
@@ -113,10 +116,11 @@
   }
 
   async function safeFetchJson(url) {
+    if(_lanLocked)return null;const epoch=_lanEpoch;
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) return null;
-      return await res.json();
+      const data=await res.json();return _lanAlive(epoch)?data:null;
     } catch {
       return null;
     }
@@ -131,10 +135,12 @@
   }
 
   async function loadLocalNodeIdentity() {
+    if(_lanLocked)return;const epoch=_lanEpoch;
     try {
       const r = await fetch("/mesh/node", { cache: "no-store" });
       if (!r.ok) return;
       const d = await r.json();
+      if(!_lanAlive(epoch))return;
       state.localNodeId = d.node_id || "local";
       state.localNodeName = d.display_name || "Me";
     } catch {}
@@ -178,46 +184,14 @@
 
   // ── Typing indicator ────────────────────────────────────────────────
 
-  function startTypingPoll(nodeId) {
-    stopTypingPoll();
-    const remoteNode = (state.rawNodes || []).find(n => n.id === nodeId);
-    if (!remoteNode || !remoteNode.ip) return;
-    const threadId = makeThreadId(nodeId);
-    const baseUrl = `http://${remoteNode.ip}:${remoteNode.port || 8000}`;
-    _typingPollTimer = setInterval(async () => {
-      try {
-        const r = await fetch(`${baseUrl}/mesh/chat/typing?thread_id=${encodeURIComponent(threadId)}`,
-          { cache: "no-store", signal: AbortSignal.timeout(2000) });
-        if (!r.ok) return;
-        const d = await r.json();
-        if (_typingState !== d.typing) {
-          _typingState = d.typing;
-          renderTypingIndicator(d.typing, d.from_name || "");
-        }
-      } catch {}
-    }, 2000);
-  }
+  function startTypingPoll(nodeId) { stopTypingPoll(); }
 
   function stopTypingPoll() {
     if (_typingPollTimer) { clearInterval(_typingPollTimer); _typingPollTimer = null; }
     if (_typingState) { _typingState = false; renderTypingIndicator(false, ""); }
   }
 
-  function sendTypingSignal(nodeId) {
-    if (!nodeId || nodeId === "__local_loopback__") return;
-    if (_typingSendTimer) return; // already pending, debounce
-    _typingSendTimer = setTimeout(() => { _typingSendTimer = null; }, 3000);
-    const threadId = makeThreadId(nodeId);
-    fetch(`/mesh/chat/typing?thread_id=${encodeURIComponent(threadId)}&from_id=${encodeURIComponent(state.localNodeId)}&from_name=${encodeURIComponent(state.localNodeName)}`,
-      { method: "POST" }).catch(() => {});
-    // Also push directly to peer's backend for lower latency
-    const remoteNode = (state.rawNodes || []).find(n => n.id === nodeId);
-    if (remoteNode?.ip) {
-      const base = `http://${remoteNode.ip}:${remoteNode.port || 8000}`;
-      fetch(`${base}/mesh/chat/typing?thread_id=${encodeURIComponent(threadId)}&from_id=${encodeURIComponent(state.localNodeId)}&from_name=${encodeURIComponent(state.localNodeName)}`,
-        { method: "POST" }).catch(() => {});
-    }
-  }
+  function sendTypingSignal(nodeId) { /* Peer typing is not part of the reviewed text grant. */ }
 
   function renderTypingIndicator(isTyping, fromName) {
     const out = $("tli-chat-thread-output");
@@ -244,44 +218,12 @@
 
   // ── Read receipts ────────────────────────────────────────────────────
 
-  function sendReadReceipt(nodeId) {
-    if (!nodeId || nodeId === "__local_loopback__") return;
-    const threadId = makeThreadId(nodeId);
-    const thread = ensureThread(nodeId);
-    if (!thread.length) return;
-    const upToTs = Math.max(...thread.map(m => m.ts || 0));
-    if (!upToTs) return;
-    // Record on our own backend so the peer can poll it
-    fetch(`/mesh/chat/read?thread_id=${encodeURIComponent(threadId)}&reader_id=${encodeURIComponent(state.localNodeId)}&up_to_ts=${upToTs}`,
-      { method: "POST" }).catch(() => {});
-    // Also push to peer's backend directly for immediacy
-    const remoteNode = (state.rawNodes || []).find(n => n.id === nodeId);
-    if (remoteNode?.ip) {
-      const base = `http://${remoteNode.ip}:${remoteNode.port || 8000}`;
-      fetch(`${base}/mesh/chat/read?thread_id=${encodeURIComponent(threadId)}&reader_id=${encodeURIComponent(state.localNodeId)}&up_to_ts=${upToTs}`,
-        { method: "POST" }).catch(() => {});
-    }
-  }
+  function sendReadReceipt(nodeId) { /* Delivery acknowledgement is distinct from a remote read. */ }
 
-  async function fetchReadReceipts(nodeId) {
-    const threadId = makeThreadId(nodeId);
-    const remoteNode = (state.rawNodes || []).find(n => n.id === nodeId);
-    if (!remoteNode?.ip) return;
-    const base = `http://${remoteNode.ip}:${remoteNode.port || 8000}`;
-    try {
-      const r = await fetch(`${base}/mesh/chat/read_status?thread_id=${encodeURIComponent(threadId)}`,
-        { cache: "no-store", signal: AbortSignal.timeout(2000) });
-      if (!r.ok) return;
-      const d = await r.json();
-      if (d.receipts) {
-        _readReceipts[threadId] = d.receipts;
-        // Re-render if this is the active thread
-        if (state.selectedNodeId === nodeId) renderThread(nodeId);
-      }
-    } catch {}
-  }
+  async function fetchReadReceipts(nodeId) { return; }
 
   async function pollChatMessages(nodeId) {
+    if(_lanLocked)return;const epoch=_lanEpoch;
     if (!nodeId) return;
     const threadId = makeThreadId(nodeId);
     const since = _chatLastTs[threadId] || 0;
@@ -306,19 +248,9 @@
       if (r.ok) addMsgs((await r.json()).messages);
     } catch {}
 
-    // 2) Peer's store (poll their backend directly — bypasses firewall asymmetry)
-    const remoteNode = (state.rawNodes || []).find(n => n.id === nodeId);
-    if (remoteNode && remoteNode.ip) {
-      const baseUrl = `http://${remoteNode.ip}:${remoteNode.port || 8000}`;
-      try {
-        const r2 = await fetch(
-          `${baseUrl}/mesh/chat/messages?thread_id=${encodeURIComponent(threadId)}&since=${since}`,
-          { cache: "no-store", signal: AbortSignal.timeout(3000) }
-        );
-        if (r2.ok) addMsgs((await r2.json()).messages);
-      } catch {}
-    }
+    // Received messages are stored locally by the authenticated peer endpoint.
 
+    if(!_lanAlive(epoch))return;
     // Include ALL messages (own + peer) so history survives refresh.
     // Direction determined by from_id vs localNodeId.
     if (!allMsgs.length) return;
@@ -360,9 +292,11 @@
           try {
             const meta = JSON.parse(m.body.slice("__FILE_OFFER__:".length));
             const senderNode = (state.rawNodes || []).find(n => n.id === m.from_id);
-            const serveBase  = senderNode?.ip
-              ? `http://${senderNode.ip}:${senderNode.tli_port || 8000}`
-              : "";
+            // Historical downloads require the reviewed HTTPS computer and
+            // its normal browser authentication; never guess an HTTP address.
+            const reviewed = window.meshDirectoryCache?.devices?.find(n=>n.device_id===m.from_id);
+            let serveBase="";
+            try{const u=new URL(reviewed?.origin);if(reviewed.status==='allowed'&&reviewed.trust_state==='verified'&&u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/')serveBase=u.origin;}catch{}
             thread.push({
               kind:         "file",
               direction:    "incoming",
@@ -535,14 +469,17 @@
   // -----------------------------
   function startPresenceStream() {
     stopPresenceStream();
+    if(_lanLocked)return;const epoch=_lanEpoch;
     const es = new EventSource("/mesh/presence/stream");
     state.presenceEs = es;
 
     es.onmessage = (e) => {
+      if(!_lanAlive(epoch)||state.presenceEs!==es)return;
       try { handlePresenceEvent(JSON.parse(e.data)); } catch {}
     };
 
     es.onerror = () => {
+      if(!_lanAlive(epoch)||state.presenceEs!==es)return;
       // SSE failed — fall back to polling
       stopPresenceStream();
       if (!state.refreshTimer) {
@@ -564,6 +501,7 @@
 
   function handlePresenceEvent(evt) {
     const type = evt.type;
+    if(type==='directory_changed'){refreshNodes();return;}
 
     if (type === "node_online") {
       const nodeId = evt.node_id;
@@ -580,19 +518,10 @@
         status: "online",
       };
 
-      // Dedup by ID first, then by IP — mirrors /api/lan/peers server-side dedup.
-      // The mesh directory can have multiple dev_ids for the same physical machine
-      // (e.g. after an IP change), causing the SSE snapshot to emit both entries.
-      const existingById = state.rawNodes.find(n => n.id === nodeId);
-      const existingByIp = nodeData.ip
-        ? state.rawNodes.find(n => n.ip === nodeData.ip)
-        : null;
-      const existing = existingById || existingByIp;
-
+      // Discovery cannot replace a different reviewed identity at the same IP.
+      const existing = state.rawNodes.find(n => n.id === nodeId);
       if (existing) {
-        // Update in place — prefer the newer node_id if we matched by IP
         Object.assign(existing, nodeData);
-        if (existingByIp && !existingById) existing.id = nodeId;
       } else {
         // Replace loopback placeholder with first real node
         state.rawNodes = state.rawNodes.filter(n => n.id !== "__local_loopback__");
@@ -740,10 +669,10 @@
         a.href = downloadUrl;
         a.download = filename;
         a.click();
-        // Mark the queued message as saved
+        // A browser request does not prove that saving succeeded
         const t = ensureThread(threadKey);
         const msg = t.find(x => x.id === msgId);
-        if (msg) msg.status = "saved";
+        if (msg) msg.status = "download requested";
         if (state.selectedNodeId) renderThread(state.selectedNodeId);
       }
       toast.remove();
@@ -763,6 +692,7 @@
   // Refresh nodes
   // -----------------------------
   async function refreshNodes() {
+    if(_lanLocked)return;const epoch=_lanEpoch;
     // Use /api/lan/peers — works without mesh pairing, deduped by IP, no license gate.
     // Any TLI on the LAN auto-appears the moment it broadcasts a UDP beacon.
     let lanData = null;
@@ -772,6 +702,7 @@
       lanData = null;
     }
 
+    if(!_lanAlive(epoch))return;
     state.lastDirectoryOk = !!(lanData && Array.isArray(lanData.peers));
 
     const mapped = mapLanPeersToNodes(lanData || {});
@@ -950,7 +881,7 @@
     const isOnline = node ? !!node.online : false;
 
     // Header
-    title.innerHTML = `<span class="tchat-peer-name">${peerName}</span>`;
+    title.innerHTML = `<span class="tchat-peer-name">${escapeHtml(peerName)}</span>`;
     if (meta) {
       const dot = `<span class="tchat-status-dot ${isOnline ? "online" : "offline"}"></span>`;
       const statusText = isOnline ? "Online" : (node?.lastSeenMs ? "Last seen " + _fmtMsgTime(node.lastSeenMs) : "Offline");
@@ -965,8 +896,8 @@
       const init = _nameInitial(peerName);
       out.innerHTML = `
         <div class="tli-empty-state">
-          <div class="tchat-empty-avatar">${init}</div>
-          <div class="tli-empty-title">Start a conversation with ${peerName}</div>
+          <div class="tchat-empty-avatar">${escapeHtml(init)}</div>
+          <div class="tli-empty-title">Start a conversation with ${escapeHtml(peerName)}</div>
           <div class="tli-empty-sub">Messages stay on your LAN — no internet, no servers.</div>
         </div>
       `;
@@ -1002,7 +933,7 @@
       }
 
       if (m.kind === "ai") {
-        out.appendChild(renderAiCard(m));
+        const aiCard=renderAiCard(m);appendDelivery(aiCard,m,nodeId);out.appendChild(aiCard);
         lastFrom = null;
         lastTs = m.ts || lastTs;
         continue;
@@ -1019,7 +950,7 @@
 
       // Avatar (only on first message of a group for "them"; for "me" always on right)
       const avatarHtml = isNewGroup
-        ? `<div class="tchat-avatar" title="${senderName}">${_nameInitial(senderName)}</div>`
+        ? `<div class="tchat-avatar" title="${escapeHtml(senderName)}">${escapeHtml(_nameInitial(senderName))}</div>`
         : `<div class="tchat-avatar-spacer"></div>`;
 
       const bubble = document.createElement("div");
@@ -1037,6 +968,8 @@
       bodyEl.className = "tchat-body";
       bodyEl.textContent = m.body;
       bubble.appendChild(bodyEl);
+      appendDelivery(bubble,m,nodeId);
+
 
       // Timestamp (show on last message of a group or if next is different sender)
       const isLastInGroup = i === msgs.length - 1 ||
@@ -1049,11 +982,11 @@
         tsEl.textContent = _fmtMsgTime(m.ts);
 
         // Read receipt tick on outgoing messages
-        if (isMe) {
+        if (isMe && m.delivery === "acknowledged") {
           const threadId = makeThreadId(nodeId);
           const receipts = _readReceipts[threadId] || {};
           const peerReadTs = receipts[nodeId] || 0;
-          const isRead = peerReadTs >= m.ts;
+          const isRead = false; // Acknowledged delivery is not proof of a remote read.
           const isLastMsg = i === msgs.length - 1 || msgs.slice(i + 1).every(nm => nm.from !== "me");
           if (isLastMsg) {
             const tick = document.createElement("span");
@@ -1109,7 +1042,7 @@
 
     if (input) {
       input.disabled = !hasNode;
-      input.placeholder = hasNode ? "Message… or @ai ask something together" : "Select a node to chat or share files…";
+      input.placeholder = hasNode ? "Message… or @ai ask something together" : "Select a reviewed computer to message…";
     }
   }
 
@@ -1146,202 +1079,73 @@
   // Text messaging — real transport
   // -----------------------------
   async function sendCurrentMessage() {
-    const input = $("tli-chat-input");
-    if (!input) return;
-    const text = (input.value || "").trim();
-    if (!text) return;
-    if (!state.selectedNodeId) return;
+    const input=$('tli-chat-input'),nodeId=state.selectedNodeId;
+    if(_lanLocked||!input||!nodeId)return;
+    const text=(input.value||'').trim();if(!text)return;
+    if(nodeId==='__local_loopback__'){ensureThread(nodeId).push({kind:'text',from:'me',body:text,ts:nowTs(),delivery:'local'});input.value='';renderThread(nodeId);return;}
+    if(/^@ai\b/i.test(text)){await _invokeAiInThread(text,nodeId);return;}
+    const thread=ensureThread(nodeId);
+    if(thread.some(m=>m._sending&&m._payload?.body===text))return;
+    let msg=thread.find(m=>m.delivery==='failed'&&m.body===text&&m._payload);
+    if(!msg){msg=_newDelivery(text,nodeId);thread.push(msg);}
+    await _deliverMessage(msg,nodeId);
+  }
 
-    // @ai trigger — invoke shared AI in this thread
-    if (/^@ai\b/i.test(text)) {
-      input.value = "";
-      await _invokeAiInThread(text, state.selectedNodeId);
-      return;
-    }
-
-    const ts = nowTs();
-    const thread = ensureThread(state.selectedNodeId);
-    thread.push({ kind: "text", from: "me", body: text, ts, _msgId: ts + "|" + state.localNodeId });
-    input.value = "";
-    renderThread(state.selectedNodeId);
-
-    // Find remote node IP for forwarding
-    const remoteNode = state.rawNodes.find(n => n.id === state.selectedNodeId);
-    const toIp = remoteNode && remoteNode.ip && state.selectedNodeId !== "__local_loopback__"
-      ? remoteNode.ip : null;
-
-    const threadId = makeThreadId(state.selectedNodeId);
-    // Track last ts for outgoing so we don't echo back our own messages on poll
-    if (ts > (_chatLastTs[threadId] || 0)) _chatLastTs[threadId] = ts;
-
+  function _newDelivery(text,nodeId,kind='text') {
+    const ts=nowTs(),remote=state.rawNodes.find(n=>n.id===nodeId),id=genId();
+    return {kind,from:kind==='ai'?'ai':'me',body:text,ts,_msgId:ts+'|'+state.localNodeId,delivery:'pending',
+      _payload:{message_id:id,thread_id:makeThreadId(nodeId),from_id:state.localNodeId,from_name:state.localNodeName,
+        to_id:nodeId,to_ip:remote?.ip||null,body:text,ts}};
+  }
+  async function _deliverMessage(msg,nodeId) {
+    if(_lanLocked||msg._sending)return false;
+    const epoch=_lanEpoch;msg._sending=true;msg.delivery='pending';msg.deliveryError='';renderThread(nodeId);
     try {
-      await fetch("/mesh/chat/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          thread_id: threadId,
-          from_id: state.localNodeId,
-          from_name: state.localNodeName,
-          to_id: state.selectedNodeId,
-          to_ip: toIp,
-          body: text,
-          ts,
-        }),
-      });
-    } catch (e) {
-      console.warn("[TLI Chat] send failed:", e);
-    }
+      const r=await fetch('/mesh/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg._payload)});
+      if(!_lanAlive(epoch))return false;
+      if(r.status===401){window.dispatchEvent(new CustomEvent('tli-session-locked'));return false;}
+      const data=await r.json();if(!_lanAlive(epoch))return false;
+      if(!r.ok||data.delivery!=='acknowledged')throw Error(typeof data.detail==='string'?data.detail:data.detail?.message||'Delivery was not acknowledged.');
+      msg.delivery='acknowledged';const input=$('tli-chat-input');if(state.selectedNodeId===nodeId&&input?.value.trim()===msg._payload.body)input.value='';
+      _chatLastTs[msg._payload.thread_id]=Math.max(_chatLastTs[msg._payload.thread_id]||0,msg.ts);return true;
+    } catch(e){if(_lanAlive(epoch)){msg.delivery='failed';msg.deliveryError=e.message||'Connection interrupted. No automatic retry.';}return false;}
+    finally{msg._sending=false;if(_lanAlive(epoch)&&state.selectedNodeId===nodeId)renderThread(nodeId);}
   }
 
   // -----------------------------
   // @ai — shared AI in thread
   // -----------------------------
-  async function _invokeAiInThread(rawText, toNodeId) {
-    // Strip @ai prefix to get the actual question
-    const question = rawText.replace(/^@ai\s*/i, "").trim() || rawText;
-    const threadId  = makeThreadId(toNodeId);
-    const remoteNode = (state.rawNodes || []).find(n => n.id === toNodeId);
-    const toIp = remoteNode?.ip && toNodeId !== "__local_loopback__" ? remoteNode.ip : null;
-
-    const qTs = nowTs();
-
-    // 1. Post the question into the local thread immediately (so sender sees it)
-    const thread = ensureThread(toNodeId);
-    thread.push({ kind: "text", from: "me", body: rawText, ts: qTs, _msgId: qTs + "|" + state.localNodeId });
-    if (qTs > (_chatLastTs[threadId] || 0)) _chatLastTs[threadId] = qTs;
-    renderThread(toNodeId);
-
-    // 2. Send the question message to the peer so they see it too
-    try {
-      await fetch("/mesh/chat/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          thread_id: threadId,
-          from_id:   state.localNodeId,
-          from_name: state.localNodeName,
-          to_id:     toNodeId,
-          to_ip:     toIp,
-          body:      rawText,
-          ts:        qTs,
-        }),
-      });
-    } catch {}
-
-    // 3. Show "thinking" placeholder in local thread
-    const thinkTs = nowTs();
-    thread.push({ kind: "ai", from: "ai", body: "Thinking…", ts: thinkTs, _thinking: true });
-    renderThread(toNodeId);
-
-    // 4. Call the AI
-    let reply = "";
-    try {
-      const r = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, max_tokens: 400, temperature: 0.3 }),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        reply = d.reply || d.message?.content || "(no response)";
-      } else {
-        reply = "AI unavailable right now. (HTTP " + r.status + ")";
-      }
-    } catch (e) {
-      reply = "AI unavailable — " + (e?.message || "check that a model is loaded.");
-    }
-
-    // 5. Replace thinking placeholder with real reply
-    const idx = thread.findIndex(m => m._thinking);
-    const aiTs = nowTs();
-    const aiMsg = { kind: "ai", from: "ai", body: reply, ts: aiTs, _msgId: aiTs + "|__tli_ai__" };
-    if (idx >= 0) thread.splice(idx, 1, aiMsg);
-    else thread.push(aiMsg);
-    if (aiTs > (_chatLastTs[threadId] || 0)) _chatLastTs[threadId] = aiTs;
-    renderThread(toNodeId);
-
-    // 6. Broadcast the AI reply into the shared thread so the peer sees it
-    const broadcastBody = "__AI_REPLY__:" + JSON.stringify({ question, reply });
-    try {
-      await fetch("/mesh/chat/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          thread_id: threadId,
-          from_id:   "__tli_ai__",
-          from_name: "TLI AI",
-          to_id:     toNodeId,
-          to_ip:     toIp,
-          body:      broadcastBody,
-          ts:        aiTs,
-        }),
-      });
-    } catch {}
+  async function _invokeAiInThread(rawText,toNodeId) {
+    if(_lanLocked)return;
+    const thread=ensureThread(toNodeId);if(thread.some(m=>m._sending&&m._payload?.body===rawText))return;const questionMsg=_newDelivery(rawText,toNodeId);thread.push(questionMsg);
+    if(!await _deliverMessage(questionMsg,toNodeId))return;
+    const epoch=_lanEpoch,question=rawText.replace(/^@ai\s*/i,'').trim()||rawText;
+    const aiMsg={kind:'ai',from:'ai',body:'Thinking…',ts:nowTs(),_thinking:true};thread.push(aiMsg);renderThread(toNodeId);
+    let reply;
+    try {const r=await fetch('/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:question,max_tokens:400,temperature:0.3})});
+      if(!_lanAlive(epoch))return;const data=await r.json();if(!_lanAlive(epoch))return;
+      reply=r.ok?(data.reply||data.message?.content||'(no response)'):'AI unavailable (HTTP '+r.status+').';
+    }catch(e){if(!_lanAlive(epoch))return;reply='AI unavailable — '+e.message;}
+    const outgoing=_newDelivery('__AI_REPLY__:'+JSON.stringify({question,reply}),toNodeId,'ai');
+    Object.assign(aiMsg,outgoing,{body:reply,_thinking:false});await _deliverMessage(aiMsg,toNodeId);
   }
 
   // -----------------------------
   // File sharing (UI-first)
   // -----------------------------
   async function createOutgoingFileOffer(file, toNodeId) {
-    const id    = genId();
-    const ts    = nowTs();
-    const threadId = makeThreadId(toNodeId);
+    const peer = (state.rawNodes || []).find(node => node.id === toNodeId);
+    if (!peer || !window.TLIPeerTransfers) {
+      showToast("Secure file transfer is unavailable. Refresh this installation first.", "error");
+      return;
+    }
+    await window.TLIPeerTransfers.open(peer);
+  }
 
-    // Show outgoing card immediately
-    const msg = {
-      kind: "file", direction: "outgoing",
-      id, name: file.name, size: file.size,
-      toNodeId, status: "uploading", ts,
-    };
-    ensureThread(toNodeId).push(msg);
-    renderThread(toNodeId);
-    upsertTransfer({ id, name: file.name, size: file.size, toNodeId, status: "uploading", progress: 0, ts });
-
-    // Upload to LOCAL backend via XHR — same origin, no CORS, no firewall issues.
-    // The backend stores the file and signals the receiver via the pull-based chat store.
-    const form = new FormData();
-    form.append("file", file, file.name);
-
-    const _toNode = (state.rawNodes || []).find(n => n.id === toNodeId);
-    const params = new URLSearchParams({
-      thread_id: threadId,
-      from_id:   state.localNodeId || "",
-      from_name: state.localNodeName || "Me",
-      to_id:     toNodeId,
-      to_ip:     _toNode?.ip || "",
-      ts:        String(ts),
-    });
-
-    const xhr = new XMLHttpRequest();
-
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 100);
-        setTransferProgress(id, pct);
-        updateTransferStatus(id, "uploading");
-      }
-    });
-
-    xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        setTransferProgress(id, 100);
-        updateTransferStatus(id, "ready · awaiting peer");
-        updateMessageStatus(toNodeId, id, "offered");
-      } else {
-        updateTransferStatus(id, "failed");
-        updateMessageStatus(toNodeId, id, "failed");
-        showToast(`File upload failed (${xhr.status}).`, "error");
-      }
-    });
-
-    xhr.addEventListener("error", () => {
-      updateTransferStatus(id, "failed");
-      updateMessageStatus(toNodeId, id, "failed");
-      showToast("File upload failed.", "error");
-    });
-
-    xhr.open("POST", `/mesh/transfer/store?${params}`);
-    xhr.send(form);
+  function appendDelivery(bubble,m,nodeId){
+    if(!m.delivery)return;const status=document.createElement('div');status.className='tchat-ts';
+    status.textContent=m.delivery==='pending'?'Sending…':m.delivery==='failed'?'Not acknowledged: '+(m.deliveryError||'Connection interrupted.'):m.delivery==='local'?'Local note':'Delivered to reviewed computer';bubble.appendChild(status);
+    if(m.delivery==='failed'&&m._payload){const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Retry this message';retry.addEventListener('click',()=>_deliverMessage(m,nodeId));bubble.appendChild(retry);}
   }
 
   function renderAiCard(m) {
@@ -1429,12 +1233,10 @@
     a.download = m.name || "file";
     a.click();
 
-    // Mark complete (browser handles the actual download)
-    setTimeout(() => {
-      setTransferProgress(m.id, 100);
-      updateTransferStatus(m.id, "saved ✓");
-      updateMessageStatus(state.selectedNodeId, m.id, "saved");
-    }, 800);
+    // A browser download request is not evidence that a file was saved.
+    updateTransferStatus(m.id, "download requested");
+    updateMessageStatus(state.selectedNodeId, m.id, "download requested");
+
   }
 
   async function declineFileOffer(m) {
@@ -1484,8 +1286,8 @@
     if (!state.transfers.length) {
       box.innerHTML = `
         <div class="tli-empty-mini">
-          <div class="tli-empty-title">No transfers yet</div>
-          <div class="tli-empty-sub">Share a file to create a transfer card.</div>
+          <div class="tli-empty-title">No historical downloads</div>
+          <div class="tli-empty-sub">Use Encrypted file Inbox for new reviewed transfers.</div>
         </div>
       `;
       return;
@@ -1508,30 +1310,6 @@
     }
   }
 
-  function simulateProgress(id) {
-    const t0 = state.transfers.find(x => x.id === id);
-    if (!t0) return;
-    if (["canceled", "declined", "failed"].includes(String(t0.status))) return;
-
-    updateTransferStatus(id, "transferring");
-
-    let p = Number(t0.progress || 0);
-    const timer = setInterval(() => {
-      const tr = state.transfers.find(x => x.id === id);
-      if (!tr) { clearInterval(timer); return; }
-      if (["canceled", "declined", "failed"].includes(String(tr.status))) { clearInterval(timer); return; }
-
-      p += 6 + Math.random() * 12;
-      if (p >= 100) {
-        p = 100;
-        setTransferProgress(id, p);
-        updateTransferStatus(id, "verified ✓");
-        clearInterval(timer);
-        return;
-      }
-      setTransferProgress(id, p);
-    }, 280);
-  }
 
   // -----------------------------
   // Bind UI once
@@ -1558,23 +1336,13 @@
     // Share
     const shareBtn = $("tli-chat-share-btn");
     const fileInput = $("tli-chat-file-input");
-    if (shareBtn && fileInput) {
-      shareBtn.addEventListener("click", () => {
-        if (!state.selectedNodeId) {
-          alert("Select a node first (use Local Loopback if no Mesh).");
-          return;
-        }
-        fileInput.value = "";
-        fileInput.click();
-      });
-
-      fileInput.addEventListener("change", async () => {
-        const file = fileInput.files?.[0];
-        if (!file) return;
-        if (!state.selectedNodeId) return;
-        await createOutgoingFileOffer(file, state.selectedNodeId);
-      });
+    if (shareBtn) {
+      shareBtn.title = 'Offer one file with explicit receiver review';
+      shareBtn.addEventListener("click", () => createOutgoingFileOffer(null, state.selectedNodeId));
     }
+    // Historical upload input stays inert; the new review owns its file picker.
+    if (fileInput) fileInput.disabled = true;
+    window.TLIPeerTransfers?.mount();
 
     // Search (filters rawNodes, doesn't wipe loopback)
     const search = $("tli-chat-node-search");
@@ -1606,13 +1374,16 @@
   // -----------------------------
   window.TLIChat = {
     async onOpen() {
+      if(_lanLocked)return;const epoch=_lanEpoch;
       bindUIOnce();
       // Mobile: initialise view state
       if (_isMobile()) {
         _setChatMobileView(state.selectedNodeId ? "thread" : "buddies");
       }
       await loadLocalNodeIdentity();
+      if(!_lanAlive(epoch))return;
       await refreshNodes();    // initial snapshot
+      if(!_lanAlive(epoch))return;
       startPresenceStream();   // live updates via SSE (clears any polling timer)
       startBgPoll();           // background poll for toast notifications on non-selected threads
 
@@ -1626,9 +1397,18 @@
     },
 
     onClose() {
+      window.TLIPeerTransfers?.onClose();
       stopChatPolling();
       stopTypingPoll();
       // bgPoll and presenceStream intentionally kept alive for off-panel notifications
     },
   };
+  window.addEventListener('tli-session-locked',()=>{
+    _lanLocked=true;_lanEpoch++;stopChatPolling();stopBgPoll();stopTypingPoll();stopPresenceStream();
+    if(state.refreshTimer)clearInterval(state.refreshTimer);state.refreshTimer=null;
+    state.threads.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;
+    for(const key of Object.keys(_chatLastTs))delete _chatLastTs[key];
+    const out=$('tli-chat-thread-output');if(out)out.replaceChildren();const input=$('tli-chat-input');if(input)input.value='';
+  });
+  window.addEventListener('tli-session-unlocked',()=>{_lanLocked=false;_lanEpoch++;});
 })();

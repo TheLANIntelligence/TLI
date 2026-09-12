@@ -1,0 +1,31 @@
+.tli-intelligence { margin: 16px 0; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel); color: var(--text-main); min-width: 0; }
+.tli-intelligence summary { padding: 14px 16px; cursor: pointer; font-weight: 600; }
+.tli-int-body { padding: 0 16px 16px; overflow-wrap: anywhere; }
+.tli-int-body p { font-size: 13px; line-height: 1.55; }
+.tli-int-field { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; min-width: 0; font-size: 12px; }
+.tli-int-field input, .tli-int-field textarea, .tli-int-field select { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; padding: 9px; color: inherit; background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: 6px; font: inherit; }
+.tli-int-field input[type=checkbox] { width: 20px; height: 20px; }
+.tli-int-field textarea { min-height: 70px; resize: vertical; }
+.tli-int-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 12px; }
+.tli-int-body button { margin: 5px 8px 5px 0; white-space: normal; max-width: 100%; }
+.tli-int-body button:disabled { opacity: .5; cursor: wait; }
+.tli-int-status { color: var(--text-muted); }
+.tli-int-status.error { color: var(--danger); }
+.tli-int-report:empty, .tli-int-status:empty { display: none; }
+.tli-int-report { border-top: 1px solid var(--border-subtle); margin-top: 15px; padding-top: 8px; }
+.tli-int-report li { margin: 8px 0; font-size: 13px; line-height: 1.6; }
+.tli-int-memory { border-top: 1px solid var(--border-subtle); padding: 10px 0; }
+.tli-int-history { display: flex; flex-wrap: wrap; }
+.tli-int-chat { margin: 8px 0; }
+
+.screenshot-help[hidden], .screenshot-help [hidden] { display: none !important; }
+.screenshot-help .tli-int-body { padding-top: 12px; }
+.screenshot-help h4 { margin: 0; }
+#screenshot-help button, #screenshot-help select, #screenshot-help input,
+#screenshot-start, #chat-image-remove, #chat-attach-btn { min-height: 44px; }
+#chat-image-remove, #chat-attach-btn { min-width: 44px; }
+.screenshot-help button:disabled { opacity: .6; }
+.screenshot-receipt { font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border-subtle); padding-top: 8px; overflow-wrap: anywhere; }
+.screenshot-preview-dialog { box-sizing: border-box; width: min(1100px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); overflow: auto; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-panel); color: var(--text-main); }
+.screenshot-preview-dialog::backdrop { background: #0009; }
+.screenshot-preview-dialog img { display: block; width: 100%; height: auto; margin-top: 12px; }

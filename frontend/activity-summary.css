@@ -1,0 +1,49 @@
+.activity-catchup { margin: 0; padding: 20px; border: 1px solid var(--border-subtle); border-radius: 16px; background: var(--bg-panel); min-width: 0; }
+.activity-catchup [hidden] { display: none !important; }
+.activity-catchup-head, .activity-summary-row-head, .activity-catchup-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.activity-catchup-head { justify-content: space-between; }
+.activity-catchup h2 { font-size: 17px; font-weight: 650; letter-spacing: -.02em; margin: 0; }
+.activity-catchup p { margin: 8px 0; line-height: 1.55; }
+.activity-catchup small, .activity-coverage, .activity-history-note { color: var(--text-muted); font-size: 12px; }
+.activity-catchup button { min-height: 40px; }
+.activity-catchup ol { list-style: none; padding: 0; margin: 14px 0; }
+.activity-summary-row { padding: 16px 0; border-bottom: 1px solid var(--border-subtle); overflow-wrap: anywhere; font-size: 13px; }
+.activity-summary-row:last-child { border-bottom: 0; }
+.activity-summary-row > small { display: block; margin-top: 4px; }
+.activity-summary-row-head { gap: 8px 12px; align-items: baseline; }
+.activity-summary-row-head strong { flex: 1 1 240px; color: var(--text-main); font-weight: 600; font-size: 14px; line-height: 1.45; }
+.activity-level, .activity-repeat { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.activity-level { display: inline-flex; align-items: center; gap: 6px; }
+.activity-level::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--text-muted); }
+.activity-warning { color: var(--warning); font-weight: 600; }
+.activity-warning::before { background: currentColor; }
+.activity-summary-row[data-level=critical] .activity-warning { color: var(--danger); }
+.activity-repeat { border: 1px solid var(--border-subtle); border-radius: 20px; padding: 1px 6px; }
+.activity-catchup details { margin-top: 8px; }
+.activity-catchup summary { cursor: pointer; padding: 10px 0; font-size: 13px; color: var(--text-muted); }
+.activity-catchup summary:hover { color: var(--text-main); }
+.activity-catchup summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
+.activity-catchup .activity-event-details { margin: 4px 0; }
+.activity-catchup .activity-event-details summary { padding: 3px 0; font-size: 12px; }
+.activity-catchup .activity-event-details p { padding-left: 12px; border-left: 2px solid var(--border-subtle); color: var(--text-muted); }
+.activity-catchup .activity-event-meta { margin-top: 7px; }
+#activity-coverage-details { border-top: 1px solid var(--border-subtle); padding-top: 2px; }
+#activity-checked-at { color: var(--text-muted); font-size: 12px; }
+#activity-count { color: var(--text-muted); font-size: 13px; }
+#activity-error:empty, #activity-more:empty, #activity-reviewed-at:empty { display: none; }
+.activity-catchup[data-state=stale] #activity-error, .activity-catchup[data-state=unavailable] #activity-error { background: var(--danger-soft); padding: 10px 12px; border-radius: 8px; }
+#activity-history { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; }
+#activity-error { color: var(--danger, #b42318); font-size: 13px; }
+#activity-new { color: var(--text, #334155); font-size: 12px; }
+.activity-history-note { line-height: 1.5; }
+.narrator-preferences { margin-top: 12px; width: 100%; color: var(--text, #243535); font-size: 13px; }
+.narrator-preferences summary { cursor: pointer; padding: 8px 0; }
+.narrator-preferences p { line-height: 1.5; overflow-wrap: anywhere; }
+.narrator-preferences select { max-width: 100%; min-height: 38px; padding: 6px; border: 1px solid var(--border, #d6dfdf); border-radius: 6px; background: var(--panel, #fff); color: var(--text, #243535); }
+.narrator-preferences button { margin: 6px; min-height: 38px; }
+.narrator-explanations { border-top: 1px solid var(--border, #d6dfdf); margin-top: 10px; padding-top: 10px; }
+@media (max-width: 600px) {
+  .activity-catchup { padding: 16px; }
+  .activity-catchup-actions { width: 100%; }
+  .activity-catchup-actions button { flex: 1 1 130px; min-height: 44px; }
+}

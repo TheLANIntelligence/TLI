@@ -83,7 +83,7 @@ def _bundled_call(mgr: Any, messages: list[dict[str, str]], temperature: float, 
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with mgr.generation(), urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as exc:
         detail = ""

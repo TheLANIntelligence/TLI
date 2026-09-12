@@ -24,6 +24,8 @@ import time
 
 from routers.system_routes import require_session
 from license_gate import gate as _gate
+from device_commands import run as run_command, target_key
+from action_results import driver_succeeded
 
 # Optional dependency: used for "game_started" trigger
 try:
@@ -308,7 +310,7 @@ class HomePowerRuntime:
                     results.append({"device_id": device_id, "capability": cap, "ok": False, "error": f"unsupported_vendor:{vendor}"})
                     continue
 
-                results.append({"device_id": device_id, "capability": cap, "ok": bool(out.get("ok")), "summary": out.get("summary")})
+                results.append({"device_id": device_id, "capability": cap, "ok": driver_succeeded(out), "summary": out.get("summary")})
             except Exception as e:
                 results.append({"device_id": a.get("device_id"), "capability": a.get("capability"), "ok": False, "error": str(e)})
 
@@ -616,7 +618,8 @@ def set_automation_enabled(payload: SetAutomationEnabledRequest, _s=Depends(requ
     return {"ok": True, "changed": changed}
 
 class ExecuteDeviceRequest(BaseModel):
-    capability: str
+    capability: str = Field(min_length=1, max_length=128)
+    request_id: Optional[str] = Field(default=None, pattern=r"^[a-f0-9-]{32,36}$")
 
 
 @home_power_router.post("/devices/{device_id}/execute")
@@ -626,30 +629,31 @@ def execute_device(device_id: str, req: ExecuteDeviceRequest, _s=Depends(require
     if not d:
         raise HTTPException(status_code=404, detail="Device not found")
     vendor = str(d.get("vendor") or "shelly").lower()
+    target = ("shelly", *target_key(d.get("ip"), d.get("relay") or 0)) if vendor == "shelly" else (vendor, device_id)
+    action = req.capability.removeprefix("switch.") if vendor == "shelly" else req.capability
+    return run_command(_s, target, action, req.request_id, lambda: _execute_direct_device(rt, d, req.capability))
+
+
+def _execute_direct_device(rt, d, capability):
+    vendor = str(d.get("vendor") or "shelly").lower()
     driver = rt._driver_registry.get(vendor)
     if driver is not None:
-        try:
-            return driver.execute(d, req.capability)
-        except Exception as e:
-            return {"ok": False, "summary": str(e)}
+        return driver.execute(d, capability)
     if vendor == "shelly":
-        try:
-            ip = str(d.get("ip") or "")
-            relay = int(d.get("relay") or 0)
-            if req.capability == "switch.on":
-                return rt.shelly_driver.turn_on(ip=ip, relay=relay)
-            elif req.capability == "switch.off":
-                return rt.shelly_driver.turn_off(ip=ip, relay=relay)
-            elif req.capability == "switch.toggle":
-                return rt.shelly_driver.toggle(ip=ip, relay=relay)
-            return {"ok": False, "summary": "Unsupported capability for shelly"}
-        except Exception as e:
-            return {"ok": False, "summary": str(e)}
+        ip = str(d.get("ip") or "")
+        relay = int(d.get("relay") or 0)
+        if capability == "switch.on":
+            return rt.shelly_driver.turn_on(ip=ip, relay=relay)
+        elif capability == "switch.off":
+            return rt.shelly_driver.turn_off(ip=ip, relay=relay)
+        elif capability == "switch.toggle":
+            return rt.shelly_driver.toggle(ip=ip, relay=relay)
+        return {"ok": False, "summary": "Unsupported capability for shelly"}
     return {"ok": False, "summary": f"No driver for vendor: {vendor}"}
 
 
 @home_power_router.get("/devices/{device_id}/status")
-def get_device_status(device_id: str):
+def get_device_status(device_id: str, _s=Depends(require_session)):
     rt = get_runtime()
     d = rt._find_device(device_id)
     if not d:
@@ -658,7 +662,12 @@ def get_device_status(device_id: str):
     driver = rt._driver_registry.get(vendor)
     if driver is not None:
         try:
-            return driver.get_status(d)
+            out = driver.get_status(d)
+            if not isinstance(out, dict):
+                return {"ok": False, "on": None, "summary": "Device status is unavailable."}
+            valid = driver_succeeded(out)
+            return {**out, "ok": valid, "on": out.get("on") if valid and isinstance(out.get("on"), bool) else None,
+                    "checked_at": time.time()}
         except Exception as e:
             return {"ok": False, "summary": str(e)}
     if vendor == "shelly":
@@ -666,7 +675,13 @@ def get_device_status(device_id: str):
         try:
             ip = str(d.get("ip") or "")
             relay = int(d.get("relay") or 0)
-            return rt.shelly_driver.get_status(ip=ip, relay=relay)
+            out = rt.shelly_driver.get_status(ip=ip, relay=relay)
+            raw = out.get("raw") if isinstance(out, dict) else None
+            switch = raw.get(f"switch:{relay}") if isinstance(raw, dict) else None
+            valid = driver_succeeded(out) and isinstance(switch, dict) and isinstance(switch.get("output"), bool)
+            return {**out, "ok": valid, "on": switch["output"] if valid else None,
+                    "relay": relay, "checked_at": time.time(),
+                    "summary": out.get("summary", "") if valid else "The requested relay state is unavailable."}
         except Exception as e:
             return {"ok": False, "summary": str(e)}
     return {"ok": False, "summary": f"No driver for vendor: {vendor}"}

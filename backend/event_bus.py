@@ -35,9 +35,14 @@ MAX_EVENTS = 200   # bounded in-memory ring buffer
 
 # ── State ──────────────────────────────────────────────────────────────────
 _events: deque = deque(maxlen=MAX_EVENTS)
+_events_lock = threading.Lock()
+_stream_id = uuid.uuid4().hex
+_sequence = 0
+_started_at = time.time()
 _subscribers: List[asyncio.Queue] = []
 _subs_lock = threading.Lock()
 _loop: Optional[asyncio.AbstractEventLoop] = None
+_journal = None
 
 # Post-emit hooks: callables invoked after every emit_event() with the full event dict.
 # Used by dashboard_presence to classify events and update narrator/action queue.
@@ -46,13 +51,46 @@ _post_emit_hooks: List[Any] = []
 
 def register_post_emit_hook(fn) -> None:
     """Register a callable to be called after each emit_event(). Thread-safe."""
-    _post_emit_hooks.append(fn)
+    with _subs_lock:
+        if fn not in _post_emit_hooks:
+            _post_emit_hooks.append(fn)
+
+
+def unregister_post_emit_hook(fn) -> None:
+    with _subs_lock:
+        if fn in _post_emit_hooks:
+            _post_emit_hooks.remove(fn)
 
 
 # ── Loop registration (called from main.py on_startup) ─────────────────────
-def set_event_loop(loop: asyncio.AbstractEventLoop) -> None:
+def set_event_loop(loop: Optional[asyncio.AbstractEventLoop]) -> None:
     global _loop
     _loop = loop
+
+
+def start_activity_history(directory) -> None:
+    """Explicit startup only, after security preflight and before event producers."""
+    global _journal
+    if _journal is not None:
+        return
+    from activity_history import Journal
+    _journal = Journal(directory).start()
+    if not _journal.was_clean:
+        emit_event("system", "warn", "No clean shutdown was recorded", history_code="unclean")
+    emit_event("system", "info", "TLI activity recording started", history_code="started")
+
+
+def stop_activity_history() -> bool:
+    """Call after producers stop. Drain only the owned journal worker, at most 5s."""
+    global _journal
+    if _journal is None:
+        return True
+    emit_event("system", "info", "TLI shutdown recorded", history_code="stopped")
+    result = _journal.stop()
+    # Keep failed/pending workers owned; never start a competing writer.
+    if not _journal.thread or not _journal.thread.is_alive():
+        _journal = None
+    return result
 
 
 # ── Public emit API ────────────────────────────────────────────────────────
@@ -63,11 +101,13 @@ def emit_event(
     body: str = "",
     node: str = "",
     actions: Optional[List[Dict]] = None,
+    *, history_code: Optional[str] = None,
 ) -> None:
     """
     Publish an event to the live feed.
     Completely safe — swallows all exceptions, never blocks.
     """
+    global _sequence
     try:
         event: Dict[str, Any] = {
             "id": str(uuid.uuid4())[:8],
@@ -80,7 +120,12 @@ def emit_event(
             "node": node,
             "actions": actions or [],
         }
-        _events.append(event)
+        with _events_lock:
+            _sequence += 1
+            event.update(stream_id=_stream_id, sequence=_sequence)
+            _events.append(event)
+            if _journal is not None:
+                _journal.record(event, history_code)
         _broadcast(event)
         # Fire post-emit hooks (e.g., dashboard_presence classification)
         for _hook in list(_post_emit_hooks):
@@ -95,9 +140,21 @@ def emit_event(
 def get_recent(n: int = 50) -> List[Dict]:
     """Return the last n events, newest first."""
     try:
-        return list(reversed(list(_events)))[:n]
+        with _events_lock:
+            return [dict(e) for e in reversed(_events)][:max(0, min(n, MAX_EVENTS))]
     except Exception:
         return []
+
+
+def activity_snapshot() -> dict:
+    """One consistent cursor and retained history; no disk or network probes."""
+    with _events_lock:
+        snapshot = {"cursor": {"stream_id": _stream_id, "sequence": _sequence},
+                "started_at": _started_at, "checked_at": time.time(),
+                "events": [dict(e) for e in _events], "capacity": MAX_EVENTS}
+        if _journal is not None:
+            snapshot["history"] = _journal.snapshot()
+        return snapshot
 
 
 def emit_meta(meta_type: str, payload: Dict) -> None:

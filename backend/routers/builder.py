@@ -8,10 +8,11 @@ try:
 except ImportError:
     from typing_extensions import Literal
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 import tli_state as S
+from routers.system_routes import require_session
 from builder.attachments import save_uploads
 from builder.chat import add_chat_message, load_chat_messages
 from builder.command_runner import run_approved_command
@@ -34,10 +35,17 @@ from builder.receipts import (
 from builder.retrieval import answer_from_project_map, retrieve_relevant_files
 from builder.safety import classify_command, resolve_project_root
 from builder.snapshots import list_snapshots, rollback_snapshot
-from builder.tasks import advance_task, create_task, load_tasks, update_task_status
+from builder.tasks import (
+    advance_task,
+    create_task,
+    find_task,
+    load_tasks,
+    mark_task_patch_applied,
+    update_task_status,
+)
 
 
-router = APIRouter(prefix="/api/builder", tags=["builder"])
+router = APIRouter(prefix="/api/builder", tags=["builder"], dependencies=[Depends(require_session)])
 
 
 class SelectProjectRequest(BaseModel):
@@ -82,6 +90,7 @@ class GenerateDiffRequest(BaseModel):
 
 class ApplyPatchRequest(BaseModel):
     patch_id: Optional[str] = Field(default=None, max_length=128)
+    task_id: Optional[str] = Field(default=None, max_length=128)
     approved: bool = False
 
 
@@ -100,6 +109,7 @@ class RunCommandRequest(BaseModel):
 
 class CreateTaskRequest(BaseModel):
     task: str = Field(..., min_length=1, max_length=2000)
+    intent: Literal["build", "plan", "inspect"] = "build"
     file_path: str = Field(default="", max_length=1000)
     find_text: str = Field(default="", max_length=20000)
     replace_text: str = Field(default="", max_length=20000)
@@ -525,6 +535,7 @@ def create_builder_task(req: CreateTaskRequest):
             project_root=root,
             permission_level=state.get("permission_level", "ask"),
             golden_build_guard=bool(state.get("golden_build_guard", True)),
+            intent=req.intent,
             file_path=req.file_path,
             find_text=req.find_text,
             replace_text=req.replace_text,
@@ -694,9 +705,16 @@ def apply_patch(req: ApplyPatchRequest):
     proposal = find_patch_proposal(patch_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Patch proposal not found.")
+    task_before_apply = find_task(req.task_id) if req.task_id else None
+    if req.task_id and not task_before_apply:
+        raise HTTPException(status_code=404, detail="Builder task not found.")
 
     try:
         root = resolve_project_root(selected)
+        if task_before_apply:
+            task_root = resolve_project_root(task_before_apply.get("project") or "")
+            if task_root != root:
+                raise ValueError("Builder task must belong to the selected project.")
         result = apply_find_replace_proposal(root, proposal)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -713,6 +731,13 @@ def apply_patch(req: ApplyPatchRequest):
     state["last_snapshot_id"] = result["snapshot"]["id"]
     save_state(state)
 
+    task = None
+    if req.task_id:
+        try:
+            task = mark_task_patch_applied(req.task_id, patch_id, result["snapshot"]["id"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
     receipt = add_receipt(
         "apply_patch",
         f"Applied approved Builder patch to {result['file_path']}.",
@@ -726,7 +751,7 @@ def apply_patch(req: ApplyPatchRequest):
         backup_location=result["snapshot"].get("snapshot_dir"),
         rollback_available=True,
     )
-    return {"result": result, "receipt": receipt}
+    return {"result": result, "receipt": receipt, "task": task}
 
 
 @router.post("/rollback")

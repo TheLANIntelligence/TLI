@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import json as _json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from routers.system_routes import require_session
 from fastapi.responses import StreamingResponse
 from typing import Any, Dict, List, Optional, Tuple
 import os
@@ -42,7 +43,7 @@ try:
 except Exception:  # pragma: no cover
     psutil = None  # type: ignore
 
-games_router = APIRouter(tags=["games"])
+games_router = APIRouter(tags=["games"], dependencies=[Depends(require_session)])
 
 # Track last detected game to emit only on change (not every poll)
 _last_game_name: Optional[str] = None
@@ -783,7 +784,7 @@ def games_recommend(payload: Dict[str, Any]) -> Dict[str, Any]:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with _ur.urlopen(req, timeout=60) as resp:
+        with mgr.generation(), _ur.urlopen(req, timeout=60) as resp:
             body = _json.loads(resp.read().decode())
         text = (body.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
         if text:
@@ -818,44 +819,16 @@ def _build_hw_block(system: dict) -> str:
 
 
 def _static_fallback(preset: str, hw_block: str, game_name: str) -> str:
-    """Return a reasonable static recommendation when AI is unavailable."""
-    lines = [
-        f"[AI offline — static recommendations for {preset.replace('_', ' ').title()}]",
-        "",
-        f"Hardware detected:\n{hw_block}",
-        "",
-    ]
-    if preset == "high_fps":
-        lines += [
-            "1. Disable VSync and set in-game frame-rate cap to your monitor's refresh rate.",
-            "2. Set texture quality to Medium — GPU memory freed = more headroom for FPS.",
-            "3. Disable ray tracing and ambient occlusion entirely.",
-            "4. Enable NVIDIA Reflex (or AMD Anti-Lag) if available in-game.",
-            "5. Lower shadow distance and shadow quality first — big FPS gain, small visual loss.",
-            "6. Ensure XMP/EXPO is enabled in BIOS for full RAM speed.",
-            "7. Set Windows power plan to High Performance or Ultimate Performance.",
-        ]
-    elif preset == "max_visual":
-        lines += [
-            "1. Set resolution to your native display resolution — no upscaling needed.",
-            "2. Enable DLSS Quality or FSR Quality if available for free AA.",
-            "3. Max out texture quality and anisotropic filtering (16x) — low VRAM cost.",
-            "4. Enable ray-traced shadows or ambient occlusion if GPU can sustain 60+ FPS.",
-            "5. Use TAA or DLAA for anti-aliasing over MSAA (better quality, lower cost).",
-            "6. Set shadow quality to High, not Ultra — diminishing returns beyond High.",
-            "7. Keep frame-rate uncapped; monitor refresh rate governs smoothness.",
-        ]
-    else:
-        lines += [
-            "1. Cap frame rate to 60 FPS using RTSS or in-game limiter.",
-            "2. Enable VSync only as a secondary cap — prefer frame-rate limiter.",
-            "3. Set preset to Medium-High; fine-tune shadows and ambient occlusion down.",
-            "4. Disable motion blur and depth of field — reduces GPU variance.",
-            "5. Enable DLSS Balanced or FSR Balanced to reduce GPU load.",
-            "6. Ensure no background apps (streaming, recording) are running.",
-            "7. Monitor 1% lows with MSI Afterburner to identify stutter sources.",
-        ]
-    return "\n".join(lines)
+    """Clearly separate generic reading guidance from unavailable AI analysis."""
+    return "\n".join([
+        "[General guidance — an AI reply was unavailable]",
+        "This is a fixed checklist, not a diagnosis or a recommendation tailored to your hardware.",
+        "1. Record the game, resolution, goal and the symptom you can reproduce.",
+        "2. Use the same scene or workload when comparing settings. Change one setting at a time and keep a record.",
+        "3. Review the game's own performance display if available. This TLI observation does not measure FPS, GPU use or temperature.",
+        "4. Keep your previous settings so you can return to them if a manual change makes things worse.",
+        "No game or computer settings were changed."
+    ])
 
 
 # ============================================================
@@ -919,7 +892,8 @@ def games_ask(payload: Dict[str, Any]):
     question         = (payload.get("question") or "").strip()
     preset           = (payload.get("preset") or "stable_60").strip()
     system           = payload.get("system") or {}
-    current_settings = payload.get("current_settings") or []   # list of {key, label, value, category}
+    config_game_name = payload.get("config_game_name")
+    current_settings = (payload.get("current_settings") or []) if isinstance(config_game_name, str) and config_game_name.strip().casefold() == game_name.casefold() else []   # list of {key, label, value, category}
 
     hw_block = _build_hw_block(system)
 
@@ -941,7 +915,7 @@ def games_ask(payload: Dict[str, Any]):
             f"Answer specifically for this hardware and game. Be concise and directly actionable. "
             f"Reference the actual hardware in your answer. "
             + (f"Where relevant, reference the current settings listed above and explain what to change and why. " if settings_block else "")
-            + "No disclaimers or preamble."
+            + "Separate observations from hypotheses. Missing hardware and measurements remain unknown. Do not claim measured FPS, a confirmed cause, or applied changes."
         )
     else:
         preset_label, preset_goal = _PRESET_DESCRIPTIONS.get(preset, _PRESET_DESCRIPTIONS["stable_60"])
@@ -956,10 +930,12 @@ def games_ask(payload: Dict[str, Any]):
             f"Format as a numbered list. 1-2 lines per item. "
             + (f"For each recommendation, reference the current setting value shown above and what to change it to. " if settings_block else "")
             + "Reference the actual GPU, CPU, and resolution in your advice. "
-            "No preamble — go straight to the recommendations."
+            "Missing hardware and measurements remain unknown. Label hypotheses and do not claim measured FPS, a confirmed cause, or applied changes."
         )
 
     def _generate():
+        received = False
+        completed = False
         try:
             from ai.ai_manager import BundledAIManager
             import urllib.request as _ur
@@ -983,28 +959,37 @@ def games_ask(payload: Dict[str, Any]):
                 method="POST",
             )
 
-            with _ur.urlopen(req, timeout=90) as resp:
+            with mgr.generation(), _ur.urlopen(req, timeout=90) as resp:
                 for raw_line in resp:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data: "):
                         continue
                     chunk = line[6:]
                     if chunk == "[DONE]":
+                        completed = True
                         break
                     try:
                         data = _json.loads(chunk)
                         token = data["choices"][0]["delta"].get("content", "")
                         if token:
+                            received = True
                             yield f"data: {_json.dumps({'t': token})}\n\n"
                     except Exception:
                         continue
 
+            if not completed or not received:
+                raise RuntimeError("AI stream ended without a complete reply")
+
         except Exception as _err:
             import tli_state as _S
             _S.log_debug("games", "WARN", f"games/ask stream failed: {_err}")
-            fallback = _static_fallback(preset, hw_block, game_name)
-            for line in fallback.split("\n"):
-                yield f"data: {_json.dumps({'t': line + chr(10)})}\n\n"
+            if received:
+                yield f"data: {_json.dumps({'error': 'AI reply interrupted; the partial text is incomplete.', 'meta': {'incomplete': True, 'source': 'ai-advice'}})}\n\n"
+            else:
+                yield f"data: {_json.dumps({'meta': {'source': 'static-guidance'}})}\n\n"
+                fallback = _static_fallback(preset, hw_block, game_name)
+                for line in fallback.split("\n"):
+                    yield f"data: {_json.dumps({'t': line + chr(10)})}\n\n"
 
         yield "data: [DONE]\n\n"
 

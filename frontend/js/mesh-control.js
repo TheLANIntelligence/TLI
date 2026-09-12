@@ -2,6 +2,17 @@
 (function () {
   const REFRESH_INTERVAL = 30000; // auto-refresh every 30s
   let _timer = null;
+  let _pending = false, _lastSuccess = null, _epoch = 0;
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  function uniqueNodes(nodes) {
+    const seen = new Set();
+    return nodes.filter(n => {
+      const key = n.peer_id || n.node_id || n.id || (n.ip ? n.ip + ':' + (n.port || n.tli_port || '') : null);
+      if (!key) return true;
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
+  }
 
   function fmt(id) { return document.getElementById(id); }
 
@@ -41,8 +52,9 @@
 
   function buildNodeCard(n) {
     const isSelf = !!n.is_self;
-    const online = n.online !== false;
-    const name = n.node_name || n.hostname || n.ip || "Unknown";
+    const online = n.online === true && !n.error;
+    const knownOffline = n.online === false;
+    const name = escape(n.node_name || n.hostname || n.ip || "Unknown computer");
 
     const card = document.createElement("div");
     card.className = "mcd-node" + (isSelf ? " self" : "") + (!online ? " offline" : "");
@@ -50,9 +62,9 @@
     // ── Top row ──
     const avClass = isSelf ? "self-av" : (online ? "peer-av" : "offline-av");
     const dotClass = online ? "online" : "offline";
-    const selfTag = isSelf ? `<span class="mcd-self-tag">This device</span>` : "";
-    const osLabel = n.os ? n.os : "";
-    const ipLabel = n.ip ? ` · ${n.ip}` : "";
+    const selfTag = isSelf ? `<span class="mcd-self-tag">TLI host</span>` : "";
+    const osLabel = escape(n.os || '');
+    const ipLabel = n.ip ? ` · ${escape(n.ip)}` : "";
 
     card.innerHTML = `
       <div class="mcd-node-top">
@@ -61,16 +73,24 @@
           <div class="mcd-node-name">${name}${selfTag}</div>
           <div class="mcd-node-sub">${osLabel}${ipLabel}</div>
         </div>
-        <div class="mcd-status-dot ${dotClass}" title="${online ? "Online" : "Offline"}"></div>
+        <div class="mcd-status-dot ${dotClass}" title="${online ? "Reported online" : knownOffline ? "Not reachable" : "Status unavailable"}"></div>
       </div>
     `;
+
+    // Registry identity only. A duplicated display name or an IP is never a key.
+    const registryId = n.peer_id || n.node_id || n.id;
+    if (typeof registryId === 'string' && registryId.length && registryId.length <= 240) {
+      const details = document.createElement('button'); details.type = 'button'; details.className = 'btn-outline';
+      details.textContent = 'Device details'; details.dataset.deviceDetailsId = 'node-' + registryId;
+      details.addEventListener('click', () => window.TLIDeviceDetails?.open('node-' + registryId)); card.appendChild(details);
+    }
 
     if (!online) {
       const err = document.createElement("div");
       err.className = "mcd-offline-msg";
       // Show a clean reason — never expose raw Python exceptions to the user
       const reason = n.error ? cleanOfflineError(n.error) : "Not reachable";
-      err.textContent = `Offline — ${reason}`;
+      err.textContent = n.connection_state === 'review_required' ? 'Computer access needs review; no connection check was sent.' : knownOffline ? `Not reachable — ${reason}` : 'Current health is unavailable. Refresh to check again.';
       card.appendChild(err);
       return card;
     }
@@ -104,21 +124,23 @@
     // ── AI row ──
     const aiRow = document.createElement("div");
     aiRow.className = "mcd-ai-row";
-    if (n.ai_healthy) {
+    if (n.ai_healthy === true) {
       aiRow.innerHTML = `
         <div class="mcd-ai-dot running"></div>
         <div class="mcd-ai-label">AI Running</div>
-        <div class="mcd-ai-sublabel">${n.active_model || n.active_preset || ""}</div>`;
-    } else if (n.has_ai) {
+          <div class="mcd-ai-sublabel">${escape(n.active_model || n.active_preset || "")}</div>`;
+    } else if (n.has_ai === true) {
       aiRow.innerHTML = `
         <div class="mcd-ai-dot has"></div>
-        <div class="mcd-ai-label">AI Downloaded</div>
-        <div class="mcd-ai-sublabel">Not running</div>`;
-    } else {
+        <div class="mcd-ai-label">Model files reported</div>
+        <div class="mcd-ai-sublabel">Installation completeness and running status not confirmed</div>`;
+    } else if (n.has_ai === false) {
       aiRow.innerHTML = `
         <div class="mcd-ai-dot none"></div>
-        <div class="mcd-ai-label">No AI</div>
-        <div class="mcd-ai-sublabel">No model</div>`;
+        <div class="mcd-ai-label">No bundled model reported</div>
+        <div class="mcd-ai-sublabel">Other provider availability not confirmed</div>`;
+    } else {
+      aiRow.textContent = 'AI availability unknown';
     }
     card.appendChild(aiRow);
 
@@ -138,6 +160,9 @@
     const btn  = fmt("mcd-refresh-btn");
     const updated = fmt("mcd-last-updated");
     if (!grid) return;
+    if (_pending) return;
+    _pending = true;
+    const epoch = _epoch;
 
     if (btn) btn.classList.add("spinning");
 
@@ -145,11 +170,13 @@
       const r = await fetch("/api/mesh/health", { cache: "no-store" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
+      if (epoch !== _epoch) return;
+      if (!Array.isArray(data.nodes)) throw new Error('Incomplete computer health response');
 
       grid.innerHTML = "";
       const nodes = data.nodes || [];
       if (!nodes.length) {
-        grid.innerHTML = '<div class="mcd-loading">No nodes found yet — discovery is running in the background.</div>';
+        grid.innerHTML = '<div class="mcd-loading">No TLI computers were returned by the latest check.</div>';
       } else {
         // Self first, then online peers, then offline
         const sorted = [
@@ -158,31 +185,28 @@
           ...nodes.filter(n => !n.is_self && n.online === false),
         ];
         // Frontend dedup safety net — same machine can appear under multiple IPs/IDs
-        const seenIps   = new Set();
-        const seenNames = new Set();
-        const deduped   = sorted.filter(n => {
-          const ip   = n.ip || "";
-          const name = (n.node_name || n.hostname || "").trim().toLowerCase();
-          if (ip && seenIps.has(ip))     return false;
-          if (name && seenNames.has(name)) return false;
-          if (ip)   seenIps.add(ip);
-          if (name) seenNames.add(name);
-          return true;
-        });
+        const deduped = uniqueNodes(sorted);
         for (const n of deduped) grid.appendChild(buildNodeCard(n));
       }
 
-      if (updated) updated.textContent = "Updated " + new Date().toLocaleTimeString();
+      _lastSuccess = new Date();
+      grid.classList.remove('mcd-stale');
+      if (updated) updated.textContent = "Last successful check: " + _lastSuccess.toLocaleTimeString();
     } catch (e) {
-      grid.innerHTML = `<div class="mcd-loading">Could not load mesh health: ${e.message}</div>`;
+      if (epoch !== _epoch) return;
+      if (_lastSuccess) {
+        grid.classList.add('mcd-stale');
+        if (updated) updated.textContent = 'Check unavailable. Previous results from ' + _lastSuccess.toLocaleTimeString() + ' may be out of date.';
+      } else grid.textContent = 'Computer health is unavailable. Check the TLI connection, then choose Refresh.';
     } finally {
+      _pending = false;
       if (btn) btn.classList.remove("spinning");
     }
   }
 
   function start() {
     refresh();
-    _timer = setInterval(refresh, REFRESH_INTERVAL);
+    if (!_timer) _timer = setInterval(refresh, REFRESH_INTERVAL);
   }
 
   function stop() {
@@ -204,6 +228,11 @@
       } else {
         stop();
       }
+    });
+    window.addEventListener('tli-session-locked', () => {
+      stop(); _epoch++; _lastSuccess = null;
+      const grid = fmt('mcd-grid'); if (grid) grid.textContent = 'Unlock TLI to check connected computers.';
+      const updated = fmt('mcd-last-updated'); if (updated) updated.textContent = '';
     });
   }
 

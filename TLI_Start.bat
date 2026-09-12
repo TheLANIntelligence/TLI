@@ -10,7 +10,6 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "BACKEND=%ROOT%\backend"
 set "VENV=%BACKEND%\.venv"
-set "PORT=8000"
 set "REQS=%BACKEND%\requirements.txt"
 
 echo.
@@ -140,25 +139,34 @@ echo  Checking dependencies...
 if exist "%REQS%" (
     "%PYTHON%" -m pip install --quiet -r "%REQS%"
 ) else (
-    "%PYTHON%" -m pip install --quiet fastapi uvicorn requests cryptography python-multipart psutil
+    echo ERROR: Missing backend requirements.txt. Extract a complete TLI package.
+    pause
+    exit /b 1
+)
+if errorlevel 1 (
+    echo ERROR: Dependency installation failed. TLI has not been started.
+    pause
+    exit /b 1
 )
 
-:: ── Free port 8000 if busy ────────────────────────────────────
-for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":8000 "') do (
-    taskkill /PID %%P /F >nul 2>&1
+:: Check the address without stopping an existing server.
+set "TLI_ROOT=%ROOT%"
+"%PYTHON%" "%BACKEND%\launch_checks.py"
+if errorlevel 1 (
+    pause
+    exit /b 1
 )
 
-:: ── Open browser after delay ──────────────────────────────────
-start "" /b cmd /c "timeout /t 4 >nul && start http://localhost:%PORT%"
+:: Backend opens the browser only after listening, using the resolved settings.
+set "TLI_OPEN_BROWSER=1"
 
 :: ── Launch TLI ────────────────────────────────────────────────
-echo  Starting TLI at http://localhost:%PORT%
+echo  Starting TLI with saved settings and explicit environment overrides.
 echo  Close this window to stop TLI.
 echo.
 
 cd /d "%BACKEND%"
 set "TLI_ROOT=%ROOT%"
-set "TLI_PORT=%PORT%"
 "%PYTHON%" main.py
 
 echo.

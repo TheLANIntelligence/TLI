@@ -21,7 +21,6 @@
 
   let _polling = false;
   let _pollTimer = null;
-  let _activeTierLabel = "";
 
 
   // ==================================================================
@@ -30,20 +29,38 @@
   // ==================================================================
 
   function initSectionToggles() {
-    document.querySelectorAll(".settings-section-header").forEach(function (hdr) {
+    document.querySelectorAll("#panel-settings .settings-section-header").forEach(function (hdr, index) {
+      const section = hdr.closest(".settings-section");
+      const body = section?.querySelector(".settings-section-body");
+      if (!section || !body) return;
+      if (!hdr.id) hdr.id = `${section.id || "settings-section-" + index}-heading`;
+      if (!body.id) body.id = `${section.id || "settings-section-" + index}-body`;
+      hdr.setAttribute("role", "button");
+      if (hdr.tagName !== "BUTTON") hdr.setAttribute("tabindex", "0");
+      hdr.setAttribute("aria-controls", body.id);
+      body.setAttribute("aria-labelledby", hdr.id);
+      function syncExpanded() {
+        const expanded = !section.classList.contains("collapsed");
+        hdr.setAttribute("aria-expanded", String(expanded));
+        body.setAttribute("aria-hidden", String(!expanded));
+        body.hidden = !expanded;
+      }
+      syncExpanded();
       if (hdr.dataset.bound) return;
       hdr.dataset.bound = "1";
-      const section = hdr.closest(".settings-section");
-      if (!section) return;
-      hdr.addEventListener("click", function () {
+      function toggle() {
         section.classList.toggle("collapsed");
-      });
+        syncExpanded();
+      }
+      hdr.addEventListener("click", toggle);
       hdr.addEventListener("keydown", function (e) {
-        if (e.key === "Enter" || e.key === " ") {
+        if (hdr.tagName !== "BUTTON" && e.target === hdr && (e.key === "Enter" || e.key === " ")) {
           e.preventDefault();
-          section.classList.toggle("collapsed");
+          if (!e.repeat) toggle();
         }
       });
+      // Existing navigation can open a section by removing its collapsed class.
+      new MutationObserver(syncExpanded).observe(section, { attributes: true, attributeFilter: ["class"] });
     });
   }
 
@@ -55,18 +72,11 @@
   async function loadPresets() {
     try {
       const r = await fetch("/api/ai/models/presets");
-      if (!r.ok) return;
+      if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
       renderPresets(data.presets || [], data.active || "");
-      updateBadge(data.active);
-    } catch (_) {}
-  }
-
-  function updateBadge(activePreset) {
-    const meta = TIER_META[activePreset];
-    if (meta) {
-      _activeTierLabel = meta.label;
-      _interceptBadge();
+    } catch (_) {
+      renderPresets([], "", true);
     }
   }
 
@@ -76,146 +86,17 @@
     return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
   }
 
-  function renderPresets(presets, active) {
+  function renderPresets(presets, active, unavailable = false) {
     const container = document.getElementById("tli-model-presets-list");
     if (!container) return;
-
-    if (!presets.length) {
-      container.innerHTML = '<div class="settings-loading-placeholder">No models configured.</div>';
-      return;
-    }
-
-    container.innerHTML = presets.map(function (p) {
-      const meta       = TIER_META[p.tier || p.id] || { color: "#888", icon: "○", label: p.id };
-      const isActive   = p.is_active;
-      const isDownloaded = p.downloaded;
-      const sizeOnDisk = p.size_on_disk ? _fmtSize(p.size_on_disk) : "";
-
-      let actionHTML;
-      if (isActive) {
-        actionHTML =
-          '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">' +
-            '<span class="tli-active-badge">Active</span>' +
-            '<button class="chip-button tli-preset-delete" data-preset="' + p.id + '"' +
-              ' style="font-size:10px;color:var(--text-soft);border-color:var(--border-subtle);"' +
-              ' title="Uninstall model">Uninstall</button>' +
-          '</div>';
-      } else if (isDownloaded) {
-        actionHTML =
-          '<button class="chip-button tli-preset-activate" data-preset="' + p.id + '"' +
-            ' style="border-color:var(--accent);color:var(--accent);">Activate</button>' +
-          '<button class="chip-button tli-preset-delete" data-preset="' + p.id + '"' +
-            ' style="border-color:#ef4444;color:#ef4444;font-size:10px;" title="Delete model">✕</button>';
-      } else {
-        actionHTML =
-          '<button class="chip-button tli-preset-download" data-preset="' + p.id + '"' +
-            ' style="border-color:' + meta.color + ';color:' + meta.color + ';">Download ' + (p.size_human || "") + '</button>';
-      }
-
-      const metaParts = [p.license, (p.min_ram_gb || "") + " GB+ RAM"].filter(Boolean);
-      if (isDownloaded && sizeOnDisk) metaParts.push('<span class="tli-size-pill">' + sizeOnDisk + ' on disk</span>');
-      if (isDownloaded && !isActive) metaParts.push("✓ Ready");
-
-      return (
-        '<div class="tli-model-card' + (isActive ? ' tli-model-active' : '') + '">' +
-          '<div class="tli-model-card-icon">' + meta.icon + '</div>' +
-          '<div class="tli-model-card-info">' +
-            '<div class="tli-model-card-name">' + p.name + '</div>' +
-            '<div class="tli-model-card-desc">' + (p.description || "") + '</div>' +
-            '<div class="tli-model-card-meta">' + metaParts.join(' · ') + '</div>' +
-          '</div>' +
-          '<div class="tli-model-card-actions">' + actionHTML + '</div>' +
-        '</div>'
-      );
-    }).join("");
-
-    // Wire download buttons
-    container.querySelectorAll(".tli-preset-download").forEach(function (btn) {
-      btn.addEventListener("click", async function () {
-        const pid = btn.dataset.preset;
-        btn.disabled = true;
-        btn.textContent = "Starting…";
-        try {
-          const r = await fetch("/api/ai/model/download", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ preset_id: pid }),
-          });
-          if (r.ok) { btn.textContent = "Downloading…"; startPolling(); }
-          else {
-            const j = await r.json().catch(function () { return {}; });
-            btn.textContent = j.detail || "Failed";
-            btn.disabled = false;
-          }
-        } catch (_) { btn.textContent = "Error"; btn.disabled = false; }
-      });
-    });
-
-    // Wire activate buttons
-    container.querySelectorAll(".tli-preset-activate").forEach(function (btn) {
-      btn.addEventListener("click", async function () {
-        const pid = btn.dataset.preset;
-        btn.disabled = true;
-        btn.textContent = "Switching…";
-        try {
-          const r = await fetch("/api/ai/models/select", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ preset_id: pid }),
-          });
-          if (r.ok) {
-            loadPresets();
-            try { showToast((TIER_META[pid] || {}).label + " model activated", "success"); } catch (_) {}
-            try {
-              const meshFirst = ["PREFER_LAN_ALLOW_LOCAL", "LAN_ONLY"];
-              if (meshFirst.includes(window.AI_POLICY)) {
-                window.AI_POLICY = "AUTO";
-                if (typeof saveAIPolicy === "function") saveAIPolicy("AUTO");
-                showToast("AI routing switched to Smart — using your local model", "info");
-              }
-            } catch (_) {}
-          } else {
-            const j = await r.json().catch(function () { return {}; });
-            btn.textContent = j.detail || "Error";
-          }
-        } catch (_) { btn.textContent = "Error"; }
-      });
-    });
-
-    // Wire delete buttons
-    container.querySelectorAll(".tli-preset-delete").forEach(function (btn) {
-      btn.addEventListener("click", async function () {
-        const pid  = btn.dataset.preset;
-        const name = (TIER_META[pid] || {}).label || pid;
-        const isCurrentlyActive = btn.closest(".tli-model-active") !== null;
-        const msg = isCurrentlyActive
-          ? "Uninstall " + name + "? This will disable your AI until you download another model."
-          : "Delete " + name + " model? You can re-download it later.";
-        if (!confirm(msg)) return;
-        btn.disabled = true;
-        btn.textContent = "Removing…";
-        try {
-          if (isCurrentlyActive) {
-            await fetch("/api/ai/clear-session", {
-              method: "POST", headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ session_id: "_noop" }),
-            }).catch(function () {});
-          }
-          const r = await fetch("/api/ai/model/" + pid, { method: "DELETE" });
-          if (r.ok) {
-            loadPresets();
-            try { showToast(name + " uninstalled", "success"); } catch (_) {}
-          } else {
-            const j = await r.json().catch(function () { return {}; });
-            if (j.detail && j.detail.includes("active")) {
-              btn.textContent = "Switch first";
-              try { showToast("Download another model first, then delete this one", "info"); } catch (_) {}
-            } else {
-              try { showToast(j.detail || "Failed", "error"); } catch (_) {}
-            }
-            btn.disabled = false;
-          }
-        } catch (_) { btn.textContent = "Error"; btn.disabled = false; }
-      });
-    });
+    container.innerHTML = "";
+    const summary = document.createElement("p");
+    const running = presets.find(p => p.running === true);
+    summary.textContent = unavailable ? "Model status is unavailable. Open the model library to recheck." : running ? `Running: ${running.name}` : "No bundled model is confirmed running. Installed models can be checked and selected in the model library.";
+    const manage = document.createElement("button");
+    manage.className = "chip-button"; manage.textContent = "Open model library";
+    manage.addEventListener("click", () => window.tliOpenModelManagerModal?.());
+    container.appendChild(summary); container.appendChild(manage);
   }
 
 
@@ -252,7 +133,7 @@
       const r = await fetch("/api/ai/model/progress");
       if (!r.ok) return;
       const dl = await r.json();
-      if (dl.status === "downloading") {
+      if (dl.in_progress) {
         showProgress(dl);
         _polling = true;
       } else if (dl.status === "done") {
@@ -263,7 +144,7 @@
         if (wrap)  wrap.style.display  = "block";
         if (bar)   bar.style.width     = "100%";
         if (pct)   { pct.textContent   = "✓"; pct.style.color = "var(--accent)"; }
-        if (label) label.textContent   = "Download complete! Restart to activate.";
+        if (label) label.textContent   = "Installed. Open the model library to check and select it.";
         _polling = false;
         stopPolling();
         loadPresets();
@@ -289,27 +170,7 @@
   //  Badge interceptor — overrides app.js "AI: Bundled" label
   // ==================================================================
 
-  function _interceptBadge() {
-    if (!_activeTierLabel) return;
-    const pill = document.getElementById("ai-source-text");
-    if (pill) {
-      const txt = pill.textContent || "";
-      if (txt.includes("Bundled") || txt.includes("Checking") || txt.includes("LM Studio")) {
-        pill.textContent = "AI: " + _activeTierLabel;
-      }
-    }
-  }
-
-  function _startBadgeWatch() {
-    const pill = document.getElementById("ai-source-text");
-    if (pill) {
-      new MutationObserver(_interceptBadge).observe(pill, {
-        childList: true, characterData: true, subtree: true,
-      });
-    }
-    _interceptBadge();
-  }
-
+  // Provider badge ownership stays with ai-source.js.
 
   // ==================================================================
   //  License
@@ -369,6 +230,7 @@
     activateBtn.dataset.bound = "1";
 
     activateBtn.addEventListener("click", async function () {
+      if (activateBtn.disabled || deactivateBtn.disabled) return;
       const key = keyInput.value.trim();
       if (!key) { _licMsg(msg, "Paste your license key above.", "warn"); return; }
       activateBtn.disabled = true;
@@ -380,7 +242,7 @@
           body: JSON.stringify({ key }),
         });
         const d = await r.json();
-        if (!r.ok) {
+        if (!r.ok || d.valid !== true) {
           _licMsg(msg, d.detail || "Activation failed.", "err");
         } else {
           keyInput.value = "";
@@ -396,13 +258,16 @@
     });
 
     deactivateBtn.addEventListener("click", async function () {
+      if (deactivateBtn.disabled || activateBtn.disabled) return;
       deactivateBtn.disabled = true;
       try {
-        await fetch("/license/deactivate", { method: "DELETE" });
-        _licMsg(msg, "License removed. Reverted to Free tier.", "ok");
+        const r = await fetch("/license/deactivate", { method: "DELETE" });
+        const data = await r.json();
+        if (!r.ok || data.valid !== false || data.message !== "License removed") throw new Error(typeof data.detail === "string" ? data.detail : "The host did not confirm removal.");
+        _licMsg(msg, "Saved license key removed. Current access is shown above.", "ok");
         await loadLicenseStatus();
-      } catch (_) {
-        _licMsg(msg, "Failed to remove license.", "err");
+      } catch (error) {
+        _licMsg(msg, "Failed to remove license. " + error.message, "err");
       } finally {
         deactivateBtn.disabled = false;
       }
@@ -424,8 +289,9 @@
   function init() {
     initSectionToggles();
     loadPresets();
+    loadLicenseStatus();
+    _bindLicenseButtons();
     pollProgress().then(function () { if (_polling) startPolling(); });
-    _startBadgeWatch();
 
     // Refresh when the Settings panel becomes visible
     const sp = document.getElementById("panel-settings");
@@ -442,6 +308,8 @@
       }).observe(sp, { attributes: true, attributeFilter: ["hidden"] });
     }
   }
+
+  window.TLISettingsSections = { refresh: initSectionToggles };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else setTimeout(init, 300);

@@ -50,7 +50,7 @@ def find_adapter(game_name: str) -> Optional[GameConfigAdapter]:
         return None
     for adapter in _ADAPTERS:
         for alias in adapter.aliases:
-            if alias in name_lower or name_lower in alias:
+            if " ".join(alias.casefold().split()) == " ".join(name_lower.casefold().split()):
                 return adapter
     return None
 

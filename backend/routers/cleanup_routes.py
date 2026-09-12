@@ -1,19 +1,7 @@
-"""
-routers/cleanup_routes.py — TLI v1.4 Safe Cleanup Analyzer
+"""Read-only compatibility for legacy cleanup metadata and quarantine receipts.
 
-Provides:
-  GET  /cleanup/scan           — return cached scan summary (triggers scan if stale)
-  GET  /cleanup/candidates     — reviewable file list, filterable by category
-  POST /cleanup/clean_safe     — reversible cleanup of auto-cleanable categories
-  GET  /cleanup/receipts       — list past cleanup sessions
-
-Design constraints (from spec):
-  - Deterministic only: no AI, no inference for file eligibility
-  - Never auto-delete: all cleanup is move-to-quarantine
-  - Never touch: Documents, Desktop, Pictures, Music, Videos, source code repos,
-    user-created folders, or anything requiring inferred intent
-  - Only auto-cleanable: user_temp, system_temp, tmp — review-only: installers
-  - Background scan: non-blocking, runs 15s after startup then every 2 hours
+Automatic scanning and direct cleanup are disabled. Current file-only Trash
+operations require the separate /visualizer/cleanup review protocol.
 """
 
 from __future__ import annotations
@@ -53,63 +41,32 @@ _timer_handle: Optional[threading.Timer] = None
 # ---------------------------------------------------------------------------
 
 def _do_scan() -> None:
-    """
-    Execute a blocking scan and cache the result.
-    Always runs in a dedicated background thread; never call from a request handler.
-    """
-    _scan_running.set()
-    try:
-        from cleanup.scanner import run_scan          # lazy — avoids import-time cost
-        result = run_scan()
-        with _scan_lock:
-            global _scan_result
-            _scan_result = result
-        log_debug("cleanup", "info",
-                  f"Scan complete — total={result['total_gb']:.2f} GB  "
-                  f"auto-cleanable={result['auto_cleanable_gb']:.2f} GB  "
-                  f"files={len(result.get('_file_index', []))}")
-        # Notify Dashboard Presence Layer so it can enqueue a cleanup action
-        _notify_dashboard_presence()
-    except Exception as exc:
-        log_debug("cleanup", "warn", f"Scan error: {exc}")
-    finally:
-        _scan_running.clear()
+    """Legacy entry point retained without filesystem scanning."""
 
 
 def _notify_dashboard_presence() -> None:
-    try:
-        from routers.dashboard_presence import score_cleanup_action
-        score_cleanup_action()
-    except Exception as exc:
-        log_debug("cleanup", "debug", f"dashboard_presence notify: {exc}")
+    """Old automatic cleanup proposals are no longer produced."""
 
 
 def _schedule_next() -> None:
-    global _timer_handle
-    _timer_handle = threading.Timer(_SCAN_INTERVAL_S, _tick)
-    _timer_handle.daemon = True
-    _timer_handle.start()
+    """Legacy automatic scheduling is disabled."""
 
 
 def _tick() -> None:
-    if not _scan_running.is_set():
-        t = threading.Thread(target=_do_scan, name="tli-cleanup-scan", daemon=True)
-        t.start()
-    _schedule_next()
+    """A previously queued callback cannot start another scan."""
 
 
 def start_cleanup_scanner() -> None:
-    """Called from main.py on_startup.  Schedules the first scan after a short delay."""
-    delay = threading.Timer(_SCAN_STARTUP_DELAY_S, _tick)
-    delay.daemon = True
-    delay.start()
-    log_debug("cleanup", "info", f"Cleanup scanner will start in {_SCAN_STARTUP_DELAY_S}s.")
+    """Compatibility startup hook. Free Space scans require an explicit request."""
+    stop_cleanup_scanner()
 
 
 def stop_cleanup_scanner() -> None:
     global _timer_handle
-    if _timer_handle:
-        _timer_handle.cancel()
+    with _scan_lock:
+        timer, _timer_handle = _timer_handle, None
+    if timer is not None:
+        timer.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -143,50 +100,16 @@ def invalidate_scan() -> None:
 
 
 def trigger_scan_async() -> None:
-    """Trigger an immediate background scan (non-blocking)."""
-    if not _scan_running.is_set():
-        t = threading.Thread(target=_do_scan, name="tli-cleanup-demand", daemon=True)
-        t.start()
+    """Legacy callers cannot initiate scans; use the reviewed Free Space flow."""
 
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 @router.get("/scan")
 def get_scan(_: Any = Depends(require_session)):
-    """
-    Return cached scan summary.
-
-    Automatically triggers a background scan when:
-    - no scan has been run yet, OR
-    - the last scan is older than 2 hours.
-
-    If a scan is already in progress, returns the last known result (or a
-    scanning=True stub) immediately — never blocks the request.
-    """
+    """Read legacy cached metadata only; never scan on GET or navigation."""
     summary = get_scan_summary()
-    age_s: Optional[float] = None
-    if summary:
-        age_s = time.time() - summary.get("generated_at", 0)
-
-    needs_scan = (summary is None) or (age_s is not None and age_s > _RESULT_STALE_AFTER_S)
-    if needs_scan and not _scan_running.is_set():
-        trigger_scan_async()
-
-    if summary is None:
-        return {
-            "ok":       False,
-            "scanning": True,
-            "message":  "Scan starting — check back in a few seconds.",
-        }
-
-    return {
-        "ok":      True,
-        "scanning": _scan_running.is_set(),
-        "age_s":   round(age_s, 0) if age_s is not None else None,
-        **summary,
-    }
+    return {**(summary or {}), "ok": summary is not None, "scanning": False,
+            "legacy": True, "verified": False, "review_required": True,
+            "message": "Legacy scan metadata is unverified. Open Free Space and explicitly start a new scan."}
 
 
 @router.get("/candidates")
@@ -204,7 +127,7 @@ def get_candidates(
     if not file_index:
         return {
             "ok":      False,
-            "message": "No scan available. Call GET /cleanup/scan to start one.",
+            "message": "No legacy scan is available. Open Free Space to explicitly start a scan.",
         }
 
     if category:
@@ -221,7 +144,9 @@ def get_candidates(
             "size_mb":        round(f.get("size_bytes", 0) / (1024 ** 2), 2),
             "modified_ts":    f.get("modified_ts"),
             "category_id":    f.get("category_id", ""),
-            "auto_cleanable": f.get("auto_cleanable", False),
+            "auto_cleanable": False,
+            "legacy_auto_cleanable": f.get("auto_cleanable", False),
+            "verified": False,
         })
 
     return {
@@ -236,50 +161,12 @@ def get_candidates(
 
 @router.post("/clean_safe")
 def post_clean_safe(_: Any = Depends(require_session)):
-    """
-    Execute reversible cleanup on all auto-cleanable category files.
-
-    Files are moved (not deleted) to a TLI-managed quarantine directory at:
-        {DATA_DIR}/cleanup_quarantine/{session}/
-
-    A JSON receipt is written alongside the quarantined files.
-    Returns the receipt so the caller can surface it in the narrator.
-    """
-    file_index = get_file_index()
-    if not file_index:
-        raise HTTPException(
-            status_code=409,
-            detail="No scan available. Call GET /cleanup/scan first.",
-        )
-
-    auto_files = [f for f in file_index if f.get("auto_cleanable")]
-    if not auto_files:
-        return {
-            "ok":              True,
-            "message":         "No auto-cleanable files found.",
-            "bytes_reclaimed": 0,
-            "receipt":         None,
-        }
-
-    from cleanup.executor import execute_clean_safe   # lazy import
-    data_dir = Path(S.DATA_DIR)
-    receipt  = execute_clean_safe(auto_files, data_dir, auto_cleanable_only=True)
-
-    # Invalidate stale scan and queue a fresh one
-    invalidate_scan()
-    t = threading.Timer(3.0, _do_scan)
-    t.daemon = True
-    t.start()
-
-    log_debug(
-        "cleanup", "info",
-        f"clean_safe complete — "
-        f"{receipt['gb_reclaimed']:.3f} GB reclaimed, "
-        f"{receipt['files_moved']} moved, "
-        f"{receipt['files_failed']} failed",
-    )
-
-    return {"ok": True, "receipt": receipt}
+    """Retained URL, with no quarantine, deletion, scan or timer side effects."""
+    raise HTTPException(409, detail={
+        "code": "review_required", "review_required": True,
+        "navigate_to": "panel-visualizer",
+        "message": "Open Free Space and review explicitly selected files. This legacy shortcut does not move or delete anything.",
+    })
 
 
 @router.get("/receipts")
@@ -306,6 +193,8 @@ def get_receipts(_: Any = Depends(require_session)):
                     "files_moved":   data.get("files_moved"),
                     "files_failed":  data.get("files_failed"),
                     "categories":    data.get("categories"),
+                    "legacy": True, "verified": False, "freed_bytes": None,
+                    "space_note": "Historical quarantine receipt; recorded reclaimed space was not verified. Original receipt and quarantined files are preserved.",
                 })
             except Exception:
                 pass

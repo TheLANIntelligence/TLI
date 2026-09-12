@@ -125,7 +125,7 @@
     bar.style.width = "100%";
     pct.textContent = "✓";
     pct.style.color = "var(--accent)";
-    label.textContent = `${presetName} downloaded! Restart backend to activate.`;
+    label.textContent = `${presetName} installed. Select it in the model library to activate.`;
     detail.textContent = "";
 
     // Auto-hide after 8s
@@ -143,7 +143,7 @@
       if (!r.ok) return;
       const dl = await r.json();
 
-      if (dl.status === "downloading") {
+      if (dl.in_progress) {
         _showProgress(dl);
         if (!_polling) {
           _polling = true;
@@ -292,11 +292,13 @@
         btn.disabled = true;
         btn.textContent = "Starting...";
         try {
-          await fetch("/api/ai/model/download", {
+          const response = await fetch("/api/ai/model/download", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ preset_id: pid }),
           });
+          const outcome = await response.json();
+          if (!response.ok || outcome.ok === false) throw new Error(outcome.detail || outcome.error || "Download failed");
           _startPolling();
         } catch (e) {
           btn.textContent = "Error";
@@ -315,12 +317,12 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ preset_id: pid }),
           });
-          if (r.ok) {
+          const outcome = await r.json().catch(() => ({}));
+          if (r.ok && outcome.ok === true) {
             await _loadPresets();
             try { showToast("Model switched to " + pid, "success"); } catch {}
           } else {
-            const j = await r.json().catch(() => ({}));
-            btn.textContent = j.detail || "Error";
+            btn.textContent = outcome.detail || outcome.error || "Switch failed";
           }
         } catch (e) {
           btn.textContent = "Error";

@@ -1,3 +1,5 @@
+> **Historical analysis.** Despite this filename, the document describes **v1.2.0-beta**. Its `v1.0-beta` release URL names a v1.2.0 ZIP and does not establish exact v1.0 source. Earlier capability/security claims remain a historical record; use [current capabilities](TLI_CAPABILITIES.md) and [version preservation](VERSION_PRESERVATION.md) for this preview.
+
 # TheLANIntelligence (TLI) — Technical Analysis
 ## v1.2.0-beta · April 2026
 

@@ -31,6 +31,8 @@
   min-width: 240px;
   max-width: 340px;
   pointer-events: auto;
+  opacity: 1;
+  transform: none;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
   animation: tliToastIn 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
@@ -39,7 +41,7 @@
   animation: tliToastOut 0.22s ease-in both;
 }
 
-.tli-toast--success { border-left-color: var(--accent, #35c98b); }
+.tli-toast--success { border-left-color: var(--success, var(--accent)); }
 .tli-toast--error   { border-left-color: var(--danger, #ff4c6a); }
 .tli-toast--warning { border-left-color: var(--warning, #ffb347); }
 .tli-toast--info    { border-left-color: var(--info, #38bdf8); }
@@ -68,10 +70,10 @@
   margin-top: 1px;
 }
 
-.tli-toast--success .tli-toast-icon { color: var(--accent, #35c98b);   background: rgba(53,201,139,0.12); }
-.tli-toast--error   .tli-toast-icon { color: var(--danger, #ff4c6a);   background: rgba(255,76,106,0.12); }
-.tli-toast--warning .tli-toast-icon { color: var(--warning, #ffb347);  background: rgba(255,179,71,0.12); }
-.tli-toast--info    .tli-toast-icon { color: var(--info, #38bdf8);     background: rgba(56,189,248,0.12); }
+.tli-toast--success .tli-toast-icon { color: var(--success, var(--accent)); background: var(--success-soft, var(--accent-soft)); }
+.tli-toast--error   .tli-toast-icon { color: var(--danger); background: var(--danger-soft, var(--bg-panel)); }
+.tli-toast--warning .tli-toast-icon { color: var(--warning); background: var(--warning-soft, var(--bg-panel)); }
+.tli-toast--info    .tli-toast-icon { color: var(--info); background: var(--info-soft, var(--bg-panel)); }
 
 /* ── Toast Body ──────────────────────────────────────────── */
 .tli-toast-body {

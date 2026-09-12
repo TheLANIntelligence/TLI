@@ -19,6 +19,7 @@ import socket
 import logging
 import threading
 import subprocess
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -40,7 +41,7 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     "lite": {
         "id": "lite",
         "name": "Qwen2.5 1.5B (Lite)",
-        "description": "Fast on any PC. Good for quick tasks and simple questions.",
+        "description": "Smallest bundled text model for quick tasks and simple questions.",
         "filename": "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf",
         "size_bytes": 1_050_000_000,   # ~1 GB
         "size_human": "~1 GB",
@@ -53,7 +54,7 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     "standard": {
         "id": "standard",
         "name": "Qwen2.5 3B (Standard)",
-        "description": "Recommended. Smart and fast — best balance for most users.",
+        "description": "Default bundled text model for general conversation and tasks.",
         "filename": "Qwen2.5-3B-Instruct-Q4_K_M.gguf",
         "size_bytes": 2_050_000_000,   # ~2 GB
         "size_human": "~2 GB",
@@ -66,7 +67,7 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
     "power": {
         "id": "power",
         "name": "Qwen2.5 7B (Power)",
-        "description": "Best quality. Complex tasks, code generation, deep reasoning. Needs 16 GB+ RAM.",
+        "description": "Larger bundled text preset with higher memory needs. Review its recorded answer-quality findings.",
         "filename": "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
         "size_bytes": 4_700_000_000,   # ~4.5 GB
         "size_human": "~4.5 GB",
@@ -97,6 +98,10 @@ MODEL_PRESETS: Dict[str, Dict[str, Any]] = {
 }
 
 DEFAULT_PRESET = "standard"
+
+from .model_catalog import QWEN3_PRESETS
+from .preset_launch import preset_runtime_args
+MODEL_PRESETS.update(QWEN3_PRESETS)
 
 # Legacy filename → still works if users have it from before
 LEGACY_MODEL_NAMES = {"phi-3.5-mini-instruct.Q4_K_M.gguf"}
@@ -203,6 +208,8 @@ def _load_active_preset_id() -> str:
         if ACTIVE_MODEL_PATH.exists():
             data = json.loads(ACTIVE_MODEL_PATH.read_text(encoding="utf-8"))
             pid = data.get("preset_id", "").strip()
+            if pid == "custom" and data.get("filename"):
+                return "custom"
             if pid in MODEL_PRESETS:
                 return pid
             # Check if there's a custom filename that matches a preset
@@ -219,9 +226,12 @@ def _save_active_preset_id(preset_id: str, filename: Optional[str] = None) -> No
     """Persist the active model choice."""
     try:
         data = {"preset_id": preset_id, "filename": filename or MODEL_PRESETS.get(preset_id, {}).get("filename", "")}
-        ACTIVE_MODEL_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp = ACTIVE_MODEL_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        tmp.replace(ACTIVE_MODEL_PATH)
     except Exception as e:
         LOGGER.error(f"[AI] Failed to save active model config: {e}")
+        raise
 
 
 def _resolve_model_path(preset_id: Optional[str] = None) -> Path:
@@ -245,8 +255,16 @@ def _resolve_model_path(preset_id: Optional[str] = None) -> Path:
     active = _load_active_preset_id()
     if active in MODEL_PRESETS:
         p = models_dir / MODEL_PRESETS[active]["filename"]
-        if p.exists():
+        if p.exists() or ACTIVE_MODEL_PATH.exists():
             return p
+
+    if active == "custom":
+        try:
+            from .model_library import contained_filename
+            data = json.loads(ACTIVE_MODEL_PATH.read_text(encoding="utf-8"))
+            return contained_filename(models_dir, data["filename"])
+        except (ValueError, KeyError, OSError):
+            pass
 
     # 3. Scan for ANY .gguf file (handles legacy phi-3.5 or user-uploaded models)
     try:
@@ -345,9 +363,14 @@ class BundledAIManager:
     def __init__(self, cfg: BundledAIConfig):
         self.cfg = cfg
         self._proc = None
+        self._text_capacity_launch = None
         self._proc_lock = threading.Lock()
         self._stop = threading.Event()
         self._watchdog = None
+        self.operation_lock = threading.RLock()
+        self._generations = 0
+        self._transition = False
+        self._manual_failure = False
         self._active_preset = _load_active_preset_id()
         atexit.register(self.stop)
         try:
@@ -376,6 +399,27 @@ class BundledAIManager:
     def active_preset_id(self) -> str:
         return self._active_preset
 
+    def text_capacity(self):
+        """Read owned launch configuration without probing or starting inference.
+
+        A live process and matching launch identity bind the configuration to
+        this runtime. They do not prove health or tokenizer/effective capacity.
+        """
+        unknown = {"status": "unknown", "context_tokens": None,
+                   "source": "unavailable", "model": self._active_preset}
+        with self._proc_lock:
+            launch = self._text_capacity_launch
+            if (not launch or self._transition or self._proc is not launch["process"] or
+                    launch["model"] != self._active_preset or launch["model_path"] != str(self.cfg.model_path)):
+                return unknown
+            try:
+                if self._proc.poll() is not None:
+                    return unknown
+            except Exception:
+                return unknown
+            return {"status": "configured", "context_tokens": launch["context_tokens"],
+                    "source": "owned_runtime_launch", "model": launch["model"]}
+
     def _sig(self, *_):
         self.stop()
 
@@ -385,15 +429,40 @@ class BundledAIManager:
         return isinstance(_http_get_json(self.base_url + self.cfg.health_path, self.cfg.health_timeout_s), dict)
 
     def ensure_running(self):
+        if self._transition or self._manual_failure:
+            return False
         if self.is_healthy():
             self._start_watchdog()
             return True
         return self.start()
 
+    @contextmanager
+    def generation(self):
+        from fastapi import HTTPException
+        if not self.operation_lock.acquire(blocking=False):
+            raise HTTPException(409, "Model operation in progress. Retry when it completes.")
+        try:
+            self._generations += 1
+        finally:
+            self.operation_lock.release()
+        try:
+            yield
+        finally:
+            with self.operation_lock:
+                self._generations -= 1
+
     def start(self):
+        if not self.operation_lock.acquire(blocking=False):
+            return False
+        try:
+            return self._start_runtime()
+        finally:
+            self.operation_lock.release()
+
+    def _start_runtime(self):
         with self._proc_lock:
             if self._proc and self._proc.poll() is None:
-                return True
+                return self.is_healthy()
             if not self.cfg.runtime_path.exists():
                 LOGGER.error(f"[AI] Runtime binary missing: {self.cfg.runtime_path}")
                 return False
@@ -402,7 +471,13 @@ class BundledAIManager:
                 return False
 
             # Read ctx_size from preset if available
-            preset = MODEL_PRESETS.get(self._active_preset, {})
+            preset = self.preset(self._active_preset) if self._active_preset in MODEL_PRESETS or self._active_preset.startswith("custom:") else {}
+            if preset.get("min_runtime_build"):
+                from .runtime_support import support
+                runtime = support(preset, self.cfg.runtime_path)
+                if runtime["state"] != "supported":
+                    LOGGER.error("Cannot start selected model: %s", runtime["reason"])
+                    return False
             ctx = preset.get("ctx_size", self.cfg.ctx_size)
 
             threads = self.cfg.threads or _optimal_threads()
@@ -420,6 +495,8 @@ class BundledAIManager:
                 "--threads", str(threads),
             ]
 
+            cmd += preset_runtime_args(preset)
+
             if gpu_layers > 0:
                 cmd += ["--n-gpu-layers", str(gpu_layers)]
                 LOGGER.info(f"[AI] Metal GPU enabled — offloading {gpu_layers} layers")
@@ -430,9 +507,13 @@ class BundledAIManager:
                 if mmproj_path.exists():
                     cmd += ["--mmproj", str(mmproj_path)]
                 else:
-                    LOGGER.warning(f"[AI] mmproj file missing for vision model: {mmproj_path}")
+                    LOGGER.error(f"[AI] mmproj file missing for vision model: {mmproj_path}")
+                    return False
 
             LOGGER.info(f"[AI] Starting llama server with {self.cfg.model_path.name}...")
+            if _is_port_open(self.cfg.host, self.cfg.port):
+                LOGGER.error("AI runtime port is occupied by an unowned process")
+                return False
             self._proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.cfg.runtime_path.parent),
@@ -440,17 +521,24 @@ class BundledAIManager:
                 stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
+            self._text_capacity_launch = {"process": self._proc, "context_tokens": ctx,
+                                          "model": self._active_preset, "model_path": str(self.cfg.model_path)}
             _assign_to_win32_job(self._proc.pid)
 
         deadline = time.time() + self.cfg.startup_timeout_s
         while time.time() < deadline:
+            if self._proc is None or self._proc.poll() is not None:
+                LOGGER.error("AI runtime exited before becoming ready")
+                return False
             if self.is_healthy():
                 LOGGER.info("[AI] Runtime healthy")
+                if self._transition:
+                    return True
                 self._start_watchdog()
                 try:
                     import event_bus as _eb
                     preset = MODEL_PRESETS.get(self._active_preset, {})
-                    label = preset.get("label") or self._active_preset or "AI model"
+                    label = preset.get("label") or "Imported AI model"
                     _eb.emit_event("ai", "ok", f"{label} ready", "Local AI is running")
                 except Exception:
                     pass
@@ -460,7 +548,7 @@ class BundledAIManager:
         LOGGER.error("[AI] Runtime failed to start")
         try:
             import event_bus as _eb
-            _eb.emit_event("ai", "warn", "AI model startup timed out", "Check system resources — will retry automatically")
+            _eb.emit_event("ai", "warn", "AI model startup timed out", "Local AI did not become ready.")
         except Exception:
             pass
         return False
@@ -486,52 +574,114 @@ class BundledAIManager:
                 except Exception:
                     pass
                 self._proc = None
+            self._text_capacity_launch = None
 
-    def switch_model(self, preset_id: str) -> Dict[str, Any]:
-        """
-        Switch to a different model preset.
-        Stops current server, updates config, restarts with new model.
-        Returns status dict.
-        """
-        if preset_id not in MODEL_PRESETS:
-            return {"ok": False, "error": f"Unknown preset: {preset_id}"}
+    def preset(self, preset_id):
+        if preset_id in MODEL_PRESETS:
+            return MODEL_PRESETS[preset_id]
+        from .model_library import contained_filename
+        if preset_id.startswith("custom:"):
+            path = contained_filename(get_models_dir(), preset_id[7:])
+            return {"id": preset_id, "name": path.name, "filename": path.name,
+                    "ctx_size": self.cfg.ctx_size, "size_bytes": path.stat().st_size}
+        raise ValueError("Unknown model preset")
 
-        preset = MODEL_PRESETS[preset_id]
-        model_path = get_models_dir() / preset["filename"]
+    def compatibility(self, preset_id):
+        from .model_library import assess
+        return assess(self.preset(preset_id), get_models_dir(), self.cfg.runtime_path,
+                      "Metal (shared memory)" if _gpu_layers_for_platform() else "CPU")
 
-        if not model_path.exists():
-            return {"ok": False, "error": f"Model file not found: {preset['filename']}. Download it first."}
+    def inference_check(self):
+        import requests
+        try:
+            response = requests.post(self.base_url + "/v1/chat/completions",
+                json={"model": "tli-bundled", "messages": [{"role": "user", "content": "Say OK."}],
+                      "max_tokens": 4, "temperature": 0, "stream": False}, timeout=(3, 20))
+            response.raise_for_status()
+            return bool(response.json()["choices"][0]["message"]["content"].strip())
+        except Exception:
+            return False
 
-        if not self.cfg.runtime_path.exists():
-            return {"ok": False, "error": "Bundled AI runtime not installed on this machine. Use LM Studio (Advanced) to run a local AI model."}
-
-        LOGGER.info(f"[AI] Switching model to {preset_id} ({preset['filename']})...")
-
-        # Stop current
-        self._stop.set()
-        self.stop()
-        time.sleep(0.5)
-
-        # Update config
-        self.cfg.model_path = model_path
-        self._active_preset = preset_id
-        _save_active_preset_id(preset_id)
-        self._stop.clear()
-
-        # Restart
-        ok = self.start()
-
-        return {
-            "ok": ok,
-            "preset_id": preset_id,
-            "model": preset["filename"],
-            "healthy": self.is_healthy(),
-            "error": None if ok else "AI runtime started but did not become healthy in time. Check system resources.",
-        }
+    def switch_model(self, preset_id: str, check_unknown=False) -> Dict[str, Any]:
+        if not self.operation_lock.acquire(blocking=False):
+            return {"ok": False, "busy": True, "error": "Model operation in progress. Retry when it completes."}
+        previous_path, previous_id = self.cfg.model_path, self._active_preset
+        was_running = False
+        touched = False
+        try:
+            if self._generations:
+                return {"ok": False, "busy": True, "error": "Bundled generation is active. Retry after it finishes."}
+            preset = self.preset(preset_id)
+            compatibility = self.compatibility(preset_id)
+            if preset.get("min_runtime_build") and compatibility["runtime"]["state"] != "supported":
+                return {"ok": False, "error": compatibility["runtime"]["reason"], "compatibility": compatibility}
+            if not compatibility["installation"]["complete"]:
+                return {"ok": False, "error": "Required model files are missing or invalid.", "compatibility": compatibility}
+            if compatibility["state"] in ("unsupported", "insufficient_resources") or (compatibility["state"] == "unknown" and not check_unknown):
+                return {"ok": False, "error": " ".join(compatibility["reasons"]), "compatibility": compatibility}
+            model_path = get_models_dir() / preset["filename"]
+            if preset.get("sha256"):
+                from .model_library import verify_checksum
+                if not verify_checksum(model_path, preset["sha256"]):
+                    return {"ok": False, "error": "Model checksum could not be verified against the publisher artifact. Current model was not stopped."}
+            if self.cfg.model_path == model_path and self.is_healthy():
+                return {"ok": True, "preset_id": preset_id, "model": preset["filename"], "healthy": True, "error": None}
+            was_running = self.is_healthy()
+            self._transition = True
+            self._manual_failure = False
+            touched = True
+            from event_bus import emit_event
+            emit_event("ai", "info", "AI model switch started", "Checking the candidate runtime before saving the selection.")
+            self.stop()
+            self.cfg.model_path, self._active_preset = model_path, preset_id
+            self._stop.clear()
+            if not self.start() or not self.inference_check():
+                raise RuntimeError("Candidate model failed its startup or inference check.")
+            _save_active_preset_id("custom" if preset_id.startswith("custom:") else preset_id, preset["filename"])
+            self._transition = False
+            try:
+                self._start_watchdog()
+            except Exception as watchdog_error:
+                LOGGER.warning("Runtime ready, but watchdog could not start: %s", watchdog_error)
+            emit_event("ai", "ok", "AI model switch completed", "The selected model passed startup and a short inference check. Local AI is running.")
+            return {"ok": True, "preset_id": preset_id, "model": preset["filename"],
+                    "healthy": True, "error": None, "compatibility": compatibility}
+        except Exception as exc:
+            recovered = False
+            if touched:
+                self.stop()
+                self.cfg.model_path, self._active_preset = previous_path, previous_id
+                if was_running:
+                    try:
+                        self._stop.clear()
+                        recovered = bool(self.start() and self.inference_check())
+                    except Exception:
+                        recovered = False
+                if not recovered:
+                    self.stop()
+                    self._manual_failure = True
+                self._transition = False
+                if recovered:
+                    try:
+                        self._start_watchdog()
+                    except Exception as watchdog_error:
+                        LOGGER.warning("Recovery ready, but watchdog could not start: %s", watchdog_error)
+                from event_bus import emit_event
+                emit_event("ai", "warn", "AI model switch failed", "The candidate was rejected. The previous selection was preserved.")
+                if recovered:
+                    emit_event("ai", "ok", "Previous AI model restored", "Recovery passed startup and a short inference check. Local AI is running again.")
+                else:
+                    emit_event("ai", "warn", "Local AI is unavailable", "Recovery failed." if was_running else "There was no previously running model to restore.")
+            return {"ok": False, "preset_id": preset_id, "error": str(exc),
+                    "healthy": recovered, "recovery": {"attempted": touched and was_running,
+                    "restored": recovered, "previous_preset": previous_id}}
+        finally:
+            self._transition = False
+            self.operation_lock.release()
 
     def status(self) -> Dict[str, Any]:
         """Full status report for the UI."""
-        healthy = self.is_healthy()
+        healthy = not self._transition and self.is_healthy()
         preset = MODEL_PRESETS.get(self._active_preset, {})
         model_exists = self.cfg.model_path.exists()
 
@@ -549,8 +699,8 @@ class BundledAIManager:
             "healthy": healthy,
             "model_exists": model_exists,
             "active_preset": self._active_preset,
-            "active_model": preset.get("name", "Unknown"),
-            "active_filename": preset.get("filename", ""),
+            "active_model": preset.get("name", self.cfg.model_path.name),
+            "active_filename": preset.get("filename", self.cfg.model_path.name),
             "model_path": str(self.cfg.model_path),
             "base_url": self.base_url,
             "presets_available": available,
@@ -565,7 +715,7 @@ class BundledAIManager:
 
     def _watchdog_loop(self):
         while not self._stop.is_set():
-            if not self.is_healthy():
+            if not self._transition and not self._manual_failure and not self.is_healthy():
                 LOGGER.warning("[AI] Restarting runtime...")
                 self.start()
             time.sleep(2)

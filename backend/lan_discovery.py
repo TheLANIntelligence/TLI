@@ -8,8 +8,8 @@
 #
 #   2. TCP subnet scan (active, firewall-proof)
 #      Probes every IP on the /24 subnet on port 8000 via TCP connect.
-#      Port 8000 is already open on every TLI instance (the web server),
-#      so no firewall rules are needed.  Runs on startup + every 2 minutes.
+#      This fallback finds peers using the legacy web port. Custom listener
+#      ports are announced by UDP beacons. Runs on startup + every 2 minutes.
 #
 # Both mechanisms write to the same mesh directory and emit SSE presence events.
 
@@ -62,7 +62,7 @@ def _get_lan_ip() -> str:
 
 def _make_beacon() -> bytes:
     cfg = S.load_node_config()
-    port = int(os.environ.get("TLI_PORT", "8000"))
+    port = S.server_port()
     payload = {
         "tli":  1,
         "v":    BEACON_VERSION,
@@ -90,51 +90,23 @@ def _broadcast_loop() -> None:
 
 def _handle_beacon(data: bytes, sender_ip: str) -> None:
     try:
+        if len(data) > 4096:
+            return
         payload = json.loads(data.decode())
-    except Exception:
+        if not isinstance(payload, dict) or payload.get("tli") != 1:
+            return
+        peer_id, peer_name, peer_port = payload.get("id"), payload.get("name", "Unknown TLI Node"), payload.get("port", 8000)
+        is_new = _upsert_peer(peer_id, peer_name, sender_ip, peer_port)
+        if peer_id == S.load_node_config().node_id:
+            return
+    except (ValueError, TypeError, AttributeError):
         return
-
-    if payload.get("tli") != 1:
-        return
-
-    peer_id   = payload.get("id", "").strip()
-    peer_name = payload.get("name", "Unknown TLI Node").strip()
-    peer_port = int(payload.get("port", 8000))
-
-    if not peer_id:
-        return
-
-    # Ignore our own beacon
-    cfg = S.load_node_config()
-    if peer_id == cfg.node_id:
-        return
-
-    directory = S.load_mesh_directory()
-
-    existing = directory.get(peer_id, {})
-    already_known = bool(existing)
-
-    existing.update({
-        "device_id":    peer_id,
-        "display_name": existing.get("display_name") or peer_name,
-        "ip":           sender_ip,
-        "tli_port":     peer_port,
-        "last_seen":    S.now_iso(),
-    })
-    # Auto-allow peers discovered on the LAN — user can block manually in Mesh settings
-    if not existing.get("status"):
-        existing["status"] = "allowed"
-    existing.setdefault("is_host", False)
-    existing.setdefault("labels", [])
-
-    directory[peer_id] = existing
-    S.save_mesh_directory(directory)
-
-    if not already_known:
-        S.log_debug("mesh", "INFO", "LAN discovery: new peer found (UDP)",
-                    peer_id=peer_id, name=peer_name, ip=sender_ip, port=peer_port)
-    _push_node_online(peer_id, existing.get("display_name") or peer_name,
-                      sender_ip, peer_port)
+    if is_new:
+        S.log_debug("mesh", "INFO", "Unreviewed LAN computer discovered", peer_id=peer_id, name=peer_name, ip=sender_ip, port=peer_port)
+    # Discovery is a hint to refresh the local registry, never authenticated
+    # online status for a reviewed identity.
+    if _presence_broadcast_fn:
+        _presence_broadcast_fn({"type": "directory_changed"})
 
 
 def _push_node_online(peer_id: str, peer_name: str, ip: str, port: int) -> None:
@@ -153,30 +125,36 @@ def _push_node_online(peer_id: str, peer_name: str, ip: str, port: int) -> None:
             pass
 
 
-def _upsert_peer(peer_id: str, peer_name: str, ip: str, port: int) -> bool:
-    """Write peer into mesh directory. Returns True if this is a new (unseen) peer."""
-    cfg = S.load_node_config()
-    if peer_id == cfg.node_id:
-        return False
-
-    directory = S.load_mesh_directory()
-    existing  = directory.get(peer_id, {})
-    is_new    = not bool(existing)
-
-    existing.update({
-        "device_id":    peer_id,
-        "display_name": existing.get("display_name") or peer_name,
-        "ip":           ip,
-        "tli_port":     port,
-        "last_seen":    S.now_iso(),
-    })
-    existing.setdefault("status", "allowed")
-    existing.setdefault("is_host", False)
-    existing.setdefault("labels", [])
-
-    directory[peer_id] = existing
-    S.save_mesh_directory(directory)
-    return is_new
+def _upsert_peer(peer_id: str, peer_name: str, ip: str, port: int, ai_advertisement: dict | None = None) -> bool:
+    """Record unsigned discovery separately; never replace reviewed authority."""
+    import ipaddress
+    if (not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
+            or not isinstance(peer_name, str) or not 1 <= len(peer_name) <= 128
+            or type(port) is not int or not 1 <= port <= 65535):
+        raise ValueError("Invalid discovery identity or port")
+    ip = str(ipaddress.IPv4Address(ip))
+    with S.MESH_DIRECTORY_LOCK:
+        if peer_id == S.load_node_config().node_id:
+            return False
+        directory = S.load_mesh_directory()
+        existing = directory.get(peer_id, {})
+        is_new = not bool(existing)
+        observed = {"name": peer_name, "ip": ip, "port": port, "observed_at": S.now_iso(), "verified": False}
+        if ai_advertisement is not None:
+            observed.update({"ai_healthy": ai_advertisement.get("ai_healthy") is True,
+                             "has_ai": ai_advertisement.get("has_ai") is True})
+        existing["discovery"] = observed
+        # Preserve every prior trust/status/label and reviewed address, even
+        # when a beacon claims the same node ID at another IP or listener.
+        if not existing.get("peer_trust"):
+            existing.update({"device_id": peer_id, "display_name": existing.get("display_name") or peer_name,
+                             "ip": ip, "tli_port": port, "last_seen": S.now_iso()})
+            existing.setdefault("status", "pending")
+            existing.setdefault("is_host", False)
+            existing.setdefault("labels", [])
+        directory[peer_id] = existing
+        S.save_mesh_directory(directory)
+        return is_new
 
 
 # ── TCP subnet scanner ─────────────────────────────────────────────────────────
@@ -208,12 +186,12 @@ def _probe_ip(ip_str: str, my_ip: str, port: int = TLI_HTTP_PORT) -> None:
         if not peer_id:
             return
 
-        is_new = _upsert_peer(peer_id, peer_name, ip_str, port)
+        is_new = _upsert_peer(peer_id, peer_name, ip_str, port, ai_advertisement=data)
         if is_new:
             S.log_debug("mesh", "INFO", "LAN scan: found TLI peer",
                         ip=ip_str, peer_id=peer_id, name=peer_name)
         # Always push SSE so frontend reflects current online status
-        _push_node_online(peer_id, peer_name, ip_str, port)
+        _presence_broadcast_fn({"type": "directory_changed"}) if _presence_broadcast_fn else None
 
     except Exception:
         pass
@@ -269,7 +247,7 @@ def _try_open_firewall() -> None:
     if platform.system() != "Windows":
         return
     rules = [
-        ("TLI-Web",       "TCP", "8000"),
+        ("TLI-Web",       "TCP", str(S.server_port())),
         ("TLI-Discovery", "UDP", str(BEACON_PORT)),
     ]
     for name, proto, port in rules:

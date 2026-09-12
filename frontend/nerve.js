@@ -30,9 +30,13 @@
     return c;
   }
 
-  function _removeToast(toast) {
+  function _removeToast(toast, immediate = false) {
     if (!toast || !toast.parentNode) return;
     clearTimeout(toast._tliTid);
+    if (immediate) {
+      toast.parentNode.removeChild(toast);
+      return;
+    }
     toast.classList.add("tli-toast--out");
     setTimeout(() => {
       if (toast.parentNode) toast.parentNode.removeChild(toast);
@@ -43,9 +47,9 @@
     type = (type && _ICONS[type]) ? type : "info";
     const container = _ensureContainer();
 
-    // Trim oldest toasts when at capacity
+    // Capacity must shrink synchronously; dismissal and expiry still animate.
     while (container.children.length >= MAX_TOASTS) {
-      _removeToast(container.firstChild);
+      _removeToast(container.firstChild, true);
     }
 
     const toast = document.createElement("div");
@@ -84,6 +88,7 @@
       let _isDevice   = false;
       let _isFast     = false;
       let _accumulated = "";
+      let _actionOk = null;
 
       const _origOnMeta  = opts.onMeta;
       const _origOnDelta = opts.onDelta;
@@ -93,6 +98,7 @@
         const h = meta && meta.handled_by;
         if (h === "intent_engine")  _isDevice = true;
         if (h === "tool_fastpath")  _isFast   = true;
+        if (h === "intent_engine" && typeof meta.ok === "boolean") _actionOk = meta.ok;
       };
 
       opts.onDelta = function (text) {
@@ -110,8 +116,9 @@
           .replace(/^Done\.\s*/i, "")
           .trim();
         if (firstLine) {
-          const isFailure = /didn't respond|failed|error|unreachable/i.test(firstLine);
-          window.tliToast(firstLine, isFailure ? "error" : "success");
+          // A completed stream can contain clarification or a rejected target.
+          // Only an explicit handler result can establish action success.
+          window.tliToast(firstLine, _actionOk === false ? "error" : _actionOk === true ? "success" : "info");
         }
       } else if (_isFast) {
         window.tliToast("Local index answered", "info");

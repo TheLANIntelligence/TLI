@@ -18,6 +18,7 @@ from .safety import classify_command, is_protected_path, is_within_root
 
 TASKS_PATH = BUILDER_DIR / "tasks.json"
 AGENT_ORDER = ["explorer", "planner", "patch", "test", "reviewer", "receipt"]
+INTENT_TARGET_INDEX = {"inspect": 1, "plan": 2, "build": 3}
 
 
 def load_tasks(limit: int = 100) -> list[dict[str, Any]]:
@@ -39,6 +40,7 @@ def create_task(
     project_root: Path,
     permission_level: str,
     golden_build_guard: bool,
+    intent: str = "build",
     file_path: str = "",
     find_text: str = "",
     replace_text: str = "",
@@ -48,6 +50,7 @@ def create_task(
     parent_id: str | None = None,
     thread_id: str | None = None,
 ) -> dict[str, Any]:
+    normalized_intent = normalize_intent(intent)
     resolved_thread_id, parent = _resolve_thread(parent_id, thread_id)
     # Inherit parent's attachments when the caller didn't supply any.
     if not attachments and parent:
@@ -62,6 +65,8 @@ def create_task(
         "active_agent": "explorer",
         "next_agent_index": 0,
         "task": task_text,
+        "intent": normalized_intent,
+        "target_agent_index": INTENT_TARGET_INDEX[normalized_intent],
         "project": str(project_root),
         "permission_level": permission_level,
         "golden_build_guard": golden_build_guard,
@@ -83,6 +88,63 @@ def create_task(
     tasks.append(task)
     _save_all(tasks)
     return task
+
+
+def normalize_intent(intent: str | None) -> str:
+    value = str(intent or "build").strip().lower()
+    if value in INTENT_TARGET_INDEX:
+        return value
+    return "build"
+
+
+def mark_task_patch_applied(task_id: str, patch_id: str, snapshot_id: str) -> dict[str, Any]:
+    tasks = _load_all()
+    for task in tasks:
+        if task.get("id") != task_id:
+            continue
+
+        artifacts = task.setdefault("artifacts", {})
+        applied_at = S.now_iso()
+        matched = False
+
+        proposal = artifacts.get("patch_proposal")
+        if isinstance(proposal, dict) and proposal.get("id") == patch_id:
+            proposal.update({
+                "applied": True,
+                "applied_at": applied_at,
+                "snapshot_id": snapshot_id,
+            })
+            matched = True
+
+        proposals = artifacts.get("patch_proposals")
+        if isinstance(proposals, list):
+            for item in proposals:
+                if isinstance(item, dict) and item.get("id") == patch_id:
+                    item.update({
+                        "applied": True,
+                        "applied_at": applied_at,
+                        "snapshot_id": snapshot_id,
+                    })
+                    matched = True
+
+        artifacts["last_applied_patch_id"] = patch_id
+        artifacts["last_snapshot_id"] = snapshot_id
+        if not matched:
+            artifacts["applied_patch_missing_from_task"] = patch_id
+        task["updated_at"] = applied_at
+
+        next_idx = int(task.get("next_agent_index", 0) or 0)
+        if next_idx < INTENT_TARGET_INDEX["build"]:
+            task["next_agent_index"] = INTENT_TARGET_INDEX["build"]
+            next_idx = task["next_agent_index"]
+        if task.get("status") not in {"cancelled", "completed"}:
+            task["status"] = "paused"
+            task["active_agent"] = AGENT_ORDER[next_idx] if next_idx < len(AGENT_ORDER) else None
+
+        _save_all(tasks)
+        return task
+
+    raise ValueError("Builder task not found.")
 
 
 def _resolve_thread(parent_id: str | None, thread_id: str | None) -> tuple[str, dict[str, Any] | None]:

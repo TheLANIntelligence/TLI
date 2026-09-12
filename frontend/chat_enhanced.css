@@ -57,7 +57,7 @@
 .chat-bubble-user {
   align-self: flex-end;
   background: linear-gradient(135deg, var(--accent), var(--accent-blue));
-  color: #021013;
+  color: var(--on-accent, var(--bg-main));
   font-weight: 500;
   border-bottom-right-radius: 4px;
   white-space: pre-line;

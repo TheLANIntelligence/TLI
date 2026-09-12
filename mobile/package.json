@@ -1,0 +1,57 @@
+{
+  "name": "tli-companion",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "preview": "expo start --web --localhost",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "doctor": "npx expo-doctor"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "expo": "~57.0.20",
+    "expo-application": "~57.0.2",
+    "expo-camera": "~57.0.4",
+    "expo-constants": "~57.0.17",
+    "expo-dev-client": "~57.0.18",
+    "expo-file-system": "~57.0.6",
+    "expo-font": "~57.0.3",
+    "expo-image-manipulator": "~57.0.16",
+    "expo-image-picker": "~57.0.16",
+    "expo-linking": "~57.0.9",
+    "expo-modules-core": "~57.0.16",
+    "expo-router": "~57.0.19",
+    "expo-secure-store": "~57.0.3",
+    "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.3",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-web": "^0.21.2",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "~19.2.0",
+    "tsx": "^4.20.0",
+    "typescript": "~6.0.3"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "expo": {
+    "autolinking": {
+      "nativeModulesDir": "./modules"
+    }
+  }
+}
