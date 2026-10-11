@@ -16,8 +16,8 @@
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/assets/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/css/site.css?v=emerald-motion-1">
-  <link rel="stylesheet" href="/css/download.css?v=emerald-light-1">
-  <script type="module" src="/js/download.js?v=1.4.0-beta-1"></script>
+  <link rel="stylesheet" href="/css/download.css?v=email-registration-1">
+  <script type="module" src="/js/download.js?v=email-registration-1"></script>
 </head>
 <body class="download-page">
   <a class="skip-link" href="#main">Skip to content</a>
@@ -46,17 +46,38 @@
           <div class="platform-topline"><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="currentColor"><path d="M3 6.2 14.3 4.7v10.5H3zm12.8-1.7L29 2.7v12.5H15.8zM3 16.8h11.3v10.5L3 25.8zm12.8 0H29v12.5l-13.2-1.8z"/></svg></span><span class="platform-type">ZIP PACKAGE</span></div>
           <h2>Windows</h2>
           <p>Download, extract, and launch. <br>Your browser becomes your TLI workspace.</p>
-          <a class="button button-primary platform-download" data-windows-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip">Download for Windows <span aria-hidden="true">↓</span></a>
+          <a class="button button-primary platform-download" data-windows-download href="#access">Download for Windows <span aria-hidden="true">↓</span></a>
+          <p class="platform-email-note">Email required.</p>
           <div class="platform-foot"><span>64-bit Python 3.10–3.14</span><a href="#windows">Setup guide <span aria-hidden="true">↘</span></a></div>
         </article>
         <article class="platform-card platform-mac">
           <div class="platform-topline"><span class="platform-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3" y="4" width="26" height="19" rx="2"/><path d="M3 18h26M16 23v5m-6 0h12M10 9l3 3-3 3m6 0h6"/></svg></span><span class="platform-type">ZIP PACKAGE</span></div>
           <h2>macOS</h2>
           <p>Apple Silicon and Intel in one ZIP. <br>Unzip, launch, and make it your own.</p>
-          <a class="button button-secondary platform-download" data-macos-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip">Download for macOS <span aria-hidden="true">↓</span></a>
+          <a class="button button-secondary platform-download" data-macos-download href="#access">Download for macOS <span aria-hidden="true">↓</span></a>
+          <p class="platform-email-note">Email required.</p>
           <div class="platform-foot"><span>1.4.0-beta · Python 3.10+</span><a href="#macos">Setup guide <span aria-hidden="true">↘</span></a></div>
         </article>
       </div>
+
+      <section class="email-section" id="access" aria-labelledby="email-title">
+        <div class="email-intro"><p class="eyebrow">YOUR NEXT STEP</p><h2 id="email-title">Register your<br>download.</h2><p>Enter your email and choose your platform. After registration, your download button will appear here.</p><p class="email-release">TLI 1.4.0-beta · Windows &amp; macOS</p></div>
+        <form id="download-email-form" action="https://formspree.io/f/xlgarvnq" method="post">
+          <div class="email-form-fields">
+            <div class="email-field"><label for="download-email">Email address</label><input id="download-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required aria-describedby="email-privacy email-status"></div>
+            <div class="email-field"><label for="download-platform">Your platform</label><select id="download-platform" name="platform" required aria-describedby="email-status"><option value="">Choose your platform</option><option value="windows">Windows</option><option value="macos">macOS</option></select></div>
+          </div>
+          <input type="hidden" name="_subject" value="TLI desktop download registration">
+          <button id="download-submit" class="button button-primary" type="submit" disabled>Continue to download <span aria-hidden="true">→</span></button>
+          <p id="email-privacy" class="email-privacy">TLI records your email address, selected platform, and release through Formspree as a download record. This does not automatically subscribe you to marketing emails.</p>
+          <p id="email-status" class="form-status" role="status" aria-live="polite"></p>
+          <noscript><p class="form-noscript">Enable JavaScript to register and download TLI, or <a href="mailto:thelanintelligence@gmail.com">contact us for help</a>.</p></noscript>
+        </form>
+        <div class="download-ready" id="download-ready" hidden tabindex="-1" aria-labelledby="download-ready-title">
+          <div class="download-ready-heading"><div><p class="eyebrow">REGISTRATION COMPLETE</p><h3 id="download-ready-title">Your download is ready.</h3><p>Save the ZIP, then follow the setup guide below for your platform.</p></div><a class="button button-primary" id="download-file">Download your ZIP <span aria-hidden="true">↓</span></a></div>
+          <details class="download-disclosure" id="mac-installer" hidden><summary>Prefer an optional Terminal installer? <span aria-hidden="true">+</span></summary><div class="disclosure-content"><p>This command downloads the same Mac release, verifies its checksum, and creates <code>~/Applications/TLI-1.4.0-beta</code>. It refuses to replace an existing folder and does not move your old data. Python 3.10+ is required.</p><div class="terminal-block"><div class="terminal-title"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Terminal · install TLI</span><button class="copy-button" type="button" data-copy="mac-command" data-copy-name="Install command" hidden>Copy command</button></div><div class="terminal-command"><span aria-hidden="true">$</span><code id="mac-command" tabindex="0">curl -fsSL https://thelanintelligence.com/install_mac.sh | bash</code></div></div><p class="terminal-caption">The command downloads and runs the installer. <a href="/install_mac.sh">Read the script first <span aria-hidden="true">↗</span></a></p></div></details>
+        </div>
+      </section>
 
       <aside class="release-notice" aria-label="Fresh installation and existing TLI folders">
         <span class="release-notice-label">A FRESH START</span>
@@ -68,7 +89,7 @@
       <div class="install-heading"><div><p class="eyebrow">01 / WINDOWS</p><h2 id="windows-title">From ZIP<br>to workspace.</h2></div><p>Set aside a few minutes for the first launch. An internet connection is needed to install dependencies.</p></div>
       <div class="setup-layout">
         <ol class="setup-steps">
-          <li><span class="step-index" aria-hidden="true">01</span><div><h3>Download the public beta</h3><p>Save <a data-windows-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip">TLI_1.4.0-beta_Windows.zip</a> to your PC. The download is available immediately; an email address is optional.</p></div></li>
+          <li><span class="step-index" aria-hidden="true">01</span><div><h3>Register and download</h3><p><a data-windows-download href="#access">Register your Windows download</a> with your email, then save <code>TLI_1.4.0-beta_Windows.zip</code> to your PC.</p></div></li>
           <li><span class="step-index" aria-hidden="true">02</span><div><h3>Extract All</h3><p>Right-click the ZIP and choose <strong>Extract All</strong>. Use a new, writable folder such as <code>Documents\TLI-1.4.0-beta</code>. Keep old TLI folders intact and stop the old host through its own launcher or Terminal before starting this copy.</p></div></li>
           <li><span class="step-index" aria-hidden="true">03</span><div><h3>Open TLI.exe</h3><p>Double-click <code>TLI.exe</code> in the fully extracted folder and complete first-time setup. The launcher is unsigned, so Windows may show a publisher warning. Check the release source and checksum before deciding to open it.</p></div></li>
           <li><span class="step-index" aria-hidden="true">04</span><div><h3>Complete setup in your browser</h3><p>Open <a href="http://localhost:8000" target="_blank" rel="noopener">localhost:8000 <span class="visually-hidden">(opens in a new tab)</span></a> if the browser does not open automatically. The inference runtime is included. Select and download a model that fits your computer, or configure a compatible local provider, before asking for AI-generated responses. Closing the browser leaves the Windows host running; use Local Setup to stop it.</p></div></li>
@@ -85,11 +106,10 @@
         <div class="install-heading"><div><p class="eyebrow">02 / MACOS</p><h2 id="mac-title">Unzip. Launch.<br>Make it yours.</h2></div><p>One ZIP for Apple Silicon and Intel. This is a Python-based installation with a Terminal launcher; it is not a notarized Mac app or a DMG.</p></div>
         <div class="mac-info-grid">
           <div><span class="aside-label">01 / BEFORE YOU START</span><h3>Check your Mac.</h3><p>The bundled runtime requires <strong>macOS 14+ on Apple Silicon</strong> or <strong>macOS 13.3+ on Intel</strong>. Install <a href="https://www.python.org/downloads/macos/">Python 3.10 or newer</a>. First setup needs internet access to install dependencies.</p></div>
-          <div><span class="aside-label">02 / A NEW FOLDER</span><h3>Download and extract.</h3><p>Save <a data-macos-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip">TLI_1.4.0-beta_macOS.zip</a> and extract it into a new, writable folder such as <code>~/Applications/TLI-1.4.0-beta</code>. Keep old folders and saved data intact. Stop your old TLI before launching the new copy.</p></div>
+          <div><span class="aside-label">02 / A NEW FOLDER</span><h3>Register, download, and extract.</h3><p><a data-macos-download href="#access">Register your macOS download</a> with your email, then save <code>TLI_1.4.0-beta_macOS.zip</code> and extract it into a new, writable folder such as <code>~/Applications/TLI-1.4.0-beta</code>. Keep old folders and saved data intact. Stop your old TLI before launching the new copy.</p></div>
           <div><span class="aside-label">03 / YOUR WORKSPACE</span><h3>Open TLI_Start.command.</h3><p>Open <code>TLI_Start.command</code> in the extracted folder, or run <code>bash TLI_Start.command</code> from Terminal there. Follow setup and keep Terminal open while using TLI. Press <strong>Control+C</strong> to stop it. Model weights are a separate download.</p></div>
         </div>
         <details class="download-disclosure checksum-panel"><summary>Verify the macOS download <span aria-hidden="true">+</span></summary><div class="disclosure-content"><p>This SHA-256 checksum identifies the published Mac ZIP.</p><div class="copyable"><code id="macos-sha256" tabindex="0">3fc0f206e7fa04da2099e4460c4de74cc8252b0aacfc9d7b6d7fc8b8f333a636</code><button class="copy-button" type="button" data-copy="macos-sha256" data-copy-name="Mac checksum" hidden>Copy checksum</button></div><p>In Terminal, run this from the folder containing the ZIP:</p><code class="standalone-code">shasum -a 256 TLI_1.4.0-beta_macOS.zip</code><p>Compare the entire returned hash with the value above.</p></div></details>
-        <details class="download-disclosure"><summary>Prefer an optional Terminal installer? <span aria-hidden="true">+</span></summary><div class="disclosure-content"><p>This command downloads the same Mac release, verifies its checksum, and creates <code>~/Applications/TLI-1.4.0-beta</code>. It refuses to replace an existing folder and does not move your old data. Python 3.10+ is required.</p><div class="terminal-block"><div class="terminal-title"><span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Terminal · install TLI</span><button class="copy-button" type="button" data-copy="mac-command" data-copy-name="Install command" hidden>Copy command</button></div><div class="terminal-command"><span aria-hidden="true">$</span><code id="mac-command" tabindex="0">curl -fsSL https://thelanintelligence.com/install_mac.sh | bash</code></div></div><p class="terminal-caption">The command downloads and runs the installer. <a href="/install_mac.sh">Read the script first <span aria-hidden="true">↗</span></a></p></div></details>
       </div>
     </section>
 
@@ -105,16 +125,6 @@
       </div>
     </section>
 
-    <section class="email-section container" id="access" aria-labelledby="email-title">
-      <div><p class="eyebrow">TAKE IT WITH YOU</p><h2 id="email-title">A link for later.</h2><p>Prefer a download link in your inbox?<br>Leave your email. Installing now needs no sign-up.</p></div>
-      <form id="download-email-form" action="https://formspree.io/f/xlgarvnq" method="post">
-        <label for="download-email">Email address</label>
-        <div class="email-input-row"><input id="download-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required aria-describedby="email-privacy email-status"><button class="button button-primary" type="submit">Email me a link <span aria-hidden="true">↗</span></button></div>
-        <input type="hidden" name="_subject" value="TLI public beta download link request">
-        <p id="email-privacy" class="email-privacy">Optional. Submitting sends your email to our Formspree request service.</p>
-        <p id="email-status" class="form-status" role="status" aria-live="polite"></p>
-      </form>
-    </section>
   </main>
 
   <footer class="site-footer"><div class="container download-footer-inner"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true">TLI</span><span>TheLANIntelligence</span></a><p>Built with intent. Built for your world.</p><div><a href="/">Explore TLI</a><a href="mailto:thelanintelligence@gmail.com">Contact</a><span>© 2026</span></div></div></footer>
