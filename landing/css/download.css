@@ -3,7 +3,7 @@
 .download-page main { overflow: clip; }
 .download-page a { text-underline-offset: .24em; }
 .download-page p a,.download-page li a { text-decoration: underline; overflow-wrap: anywhere; }
-.download-page :is(a,button,input,summary,code[tabindex]):focus-visible { outline: 2px solid var(--download-accent); outline-offset: 5px; }
+.download-page :is(a,button,input,select,summary,code[tabindex],[tabindex="-1"]):focus-visible { outline: 2px solid var(--download-accent); outline-offset: 5px; }
 .download-page code { font-family: Consolas, 'Courier New', monospace; font-size: .9em; overflow-wrap: anywhere; }
 .download-page .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 .download-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; min-height: 84px; }
@@ -27,6 +27,7 @@
 .platform-card h2 { font-size: 36px; letter-spacing: -.045em; font-weight: 600; line-height: 1.15; margin: 0 0 14px; }
 .platform-card > p { line-height: 1.65; color: var(--download-muted); font-size: 15px; margin: 0 0 30px; }
 .platform-download { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 54px; gap: 16px; }
+.platform-card > .platform-email-note { font-size: 11px; line-height: 1.5; margin: 10px 0 0; text-align: center; }
 .platform-foot { display: flex; justify-content: space-between; gap: 16px; font-size: 11px; line-height: 1.5; color: var(--download-muted); padding-top: 21px; }
 .platform-foot a { color: var(--download-text); white-space: nowrap; }
 .release-notice { display: grid; grid-template-columns: 180px 1fr; gap: 30px; margin-top: 24px; padding: 23px 0; border-bottom: 1px solid var(--download-border); }
@@ -88,26 +89,40 @@
 .help-intro .text-link { color: var(--download-accent); font-size: 13px; }
 .download-faq { border-top: 1px solid var(--download-border); }
 .download-faq summary { padding: 23px 0; }
-.email-section { display: grid; grid-template-columns: 1fr 1.2fr; gap: 70px; align-items: center; border-top: 1px solid var(--download-border); padding-top: 65px; padding-bottom: 75px; }
+.email-section { display: grid; grid-template-columns: .85fr 1.15fr; gap: 36px 55px; align-items: start; margin-top: 24px; padding: 38px; border: 1px solid rgba(39,108,65,.25); border-radius: 20px; background: linear-gradient(125deg,#edf5e9,#f9fcf7); }
 .email-section > * { min-width: 0; overflow-wrap: anywhere; }
-.email-section h2 { font-size: clamp(35px,3.5vw,45px); font-weight: 550; line-height: 1.1; letter-spacing: -.05em; margin: 17px 0; }
+.email-section h2 { font-size: clamp(32px,3.5vw,43px); font-weight: 550; line-height: 1.1; letter-spacing: -.05em; margin: 17px 0; }
 .email-section p:not(.eyebrow) { color: var(--download-muted); font-size: 13px; line-height: 1.8; }
-.email-section label { display: block; font-size: 12px; margin-bottom: 10px; color: var(--download-muted); }
-.email-input-row { display: flex; flex-wrap: wrap; min-width: 0; gap: 10px; }
-.email-input-row input { width: 100%; max-width: 100%; min-width: 0; flex: 1; padding: 14px; border: 1px solid var(--download-border); border-radius: 7px; color: var(--download-text); background: var(--download-surface); font: inherit; font-size: 13px; }
-.email-input-row input::placeholder { color: #62786a; opacity: 1; }
-.email-input-row .button { flex: 0 0 auto; min-width: 0; max-width: 100%; padding: 14px 19px; font-size: 12px; cursor: pointer; }
-.email-section .email-privacy { font-size: 10px !important; margin-top: 12px; }
-.email-section .form-status { color: var(--download-accent) !important; margin-top: 12px; }
+.email-section .email-release { font-size: 11px; margin: 20px 0 0; color: var(--download-accent); }
+.email-section label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 9px; color: var(--download-text); }
+.email-form-fields { display: grid; grid-template-columns: 1.1fr 1fr; gap: 14px; }
+.email-field { min-width: 0; }
+.email-field :is(input,select) { display: block; box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 50px; padding: 13px; border: 1px solid rgba(32,74,48,.28); border-radius: 8px; color: var(--download-text); background: var(--download-surface); font: inherit; font-size: 14px; }
+.email-field input::placeholder { color: #62786a; opacity: 1; }
+.email-field select { cursor: pointer; padding-right: 28px; }
+#download-submit { display: flex; justify-content: space-between; gap: 16px; width: 100%; min-height: 51px; margin-top: 16px; padding: 14px 19px; font: inherit; font-size: 13px; cursor: pointer; }
+.email-section .email-privacy { font-size: 11px; margin: 13px 0 0; }
+.email-section .form-status { color: var(--download-accent); margin: 14px 0 0; font-weight: 500; }
 .email-section .form-status:empty { display: none; }
-.email-section button:disabled { opacity: .65; cursor: wait; }
+.email-section button:disabled { opacity: .65; cursor: default; }
+.email-section form[aria-busy="true"] button { cursor: wait; }
+.email-section .form-noscript { padding: 12px 14px; margin-bottom: 0; background: var(--download-surface); border: 1px solid var(--download-border); border-radius: 8px; }
+.email-section .form-noscript a { color: var(--download-accent); }
+.download-ready { grid-column: 1 / -1; padding: 27px; background: var(--download-surface); border: 1px solid rgba(39,108,65,.3); border-radius: 13px; }
+.download-ready-heading { display: flex; align-items: center; justify-content: space-between; gap: 26px; }
+.download-ready-heading > * { min-width: 0; }
+.download-ready h3 { font-size: clamp(23px,2.5vw,29px); font-weight: 550; letter-spacing: -.04em; line-height: 1.2; margin: 13px 0 8px; }
+.download-ready-heading p:last-child { margin: 0; }
+#download-file { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; max-width: 100%; gap: 20px; min-height: 51px; font-size: 13px; }
+#mac-installer { margin-top: 25px; border-top: 1px solid var(--download-border); border-bottom: 0; }
+#mac-installer .disclosure-content { padding-bottom: 0; }
 .download-footer-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 25px; padding-top: 35px; padding-bottom: 35px; }
 .download-footer-inner > p { font-size: 11px; color: var(--download-muted); }
 .download-footer-inner > div { display: flex; flex-wrap: wrap; gap: 22px; font-size: 11px; color: var(--download-muted); }
 .download-footer-inner > div a { color: var(--download-muted); }
 .download-page :is(#download,#windows,#macos,#access) { scroll-margin-top: 105px; }
 @media (min-width: 1440px) { .download-hero { padding-top: 110px; } }
-@media (max-width: 1000px) { .install-heading,.setup-layout { gap: 40px; } .help-section { gap: 45px; } .email-section { gap: 40px; } .platform-card { padding: 28px; } .platform-foot { flex-direction: column; gap: 9px; } }
-@media (max-width: 760px) { .download-nav { min-height: 72px; gap: 14px; } .download-nav .brand { font-size: 12px; } .download-nav .nav-links { gap: 16px; } .download-nav .nav-links > a:not(.nav-action) { display: none; } .download-hero { padding-top: 62px; padding-bottom: 70px; } .download-hero h1 { font-size: clamp(62px,13vw,92px); } .download-intro-row { flex-direction: column; align-items: flex-start; gap: 24px; margin-bottom: 35px; } .download-release-caption { text-align: left; } .platform-grid { gap: 14px; } .platform-card { padding: 24px; } .platform-type { font-size: 8px; letter-spacing: .06em; } .platform-card h2 { font-size: 30px; } .platform-card > p { font-size: 12px; } .platform-card > p br { display: none; } .platform-download { padding-inline: 16px; font-size: 12px; } .release-notice { grid-template-columns: 1fr; gap: 9px; } .install-heading { gap: 25px; margin-bottom: 38px; } .install-heading > p { font-size: 13px; } .setup-layout { grid-template-columns: 1fr; gap: 35px; } .install-section { padding-bottom: 70px; } .setup-aside { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; align-items: start; } .requirements-box { padding: 23px; } .checksum-panel { margin-top: 0; border-top: 1px solid var(--download-border); } .mac-section { padding: 65px 0; } .mac-info-grid { gap: 24px; grid-template-columns: 1fr; margin-top: 36px; } .mac-info-grid > div { border-top: 1px solid var(--download-border); padding-top: 23px; } .mac-info-grid h3 { margin: 10px 0; } .terminal-command { padding: 25px; } .help-section { grid-template-columns: 1fr; gap: 32px; padding-block: 70px; } .email-section { grid-template-columns: 1fr; gap: 30px; padding-block: 50px; } .download-footer-inner > p { width: 100%; order: 3; } }
-@media (max-width: 500px) { .platform-grid,.install-heading,.setup-aside { grid-template-columns: 1fr; } .platform-card { padding: 28px; } .platform-topline { margin-bottom: 23px; } .platform-card > p { font-size: 14px; } .platform-type { font-size: 10px; } .platform-download { font-size: 13px; } .platform-foot { flex-direction: row; font-size: 10px; } .install-heading > p { justify-self: start; max-width: 100%; margin-top: 0; } .setup-steps li { gap: 14px; grid-template-columns: 27px 1fr; } .setup-steps h3 { font-size: 18px; } .terminal-title { gap: 10px; padding: 12px; } .terminal-dots { display: none; } .terminal-title > .copy-button { padding-inline: 9px; font-size: 10px; } .terminal-command { padding: 24px 17px; gap: 10px; } .email-input-row { flex-direction: column; } .email-input-row .button { justify-content: center; min-height: 48px; } .download-footer-inner { align-items: flex-start; flex-direction: column; } .download-footer-inner > p { order: initial; } }
+@media (max-width: 1000px) { .install-heading,.setup-layout { gap: 40px; } .help-section { gap: 45px; } .email-section { gap: 30px; padding: 30px; } .email-form-fields { grid-template-columns: 1fr; } .platform-card { padding: 28px; } .platform-foot { flex-direction: column; gap: 9px; } }
+@media (max-width: 760px) { .download-nav { min-height: 72px; gap: 14px; } .download-nav .brand { font-size: 12px; } .download-nav .nav-links { gap: 16px; } .download-nav .nav-links > a:not(.nav-action) { display: none; } .download-hero { padding-top: 62px; padding-bottom: 70px; } .download-hero h1 { font-size: clamp(62px,13vw,92px); } .download-intro-row { flex-direction: column; align-items: flex-start; gap: 24px; margin-bottom: 35px; } .download-release-caption { text-align: left; } .platform-grid { gap: 14px; } .platform-card { padding: 24px; } .platform-type { font-size: 8px; letter-spacing: .06em; } .platform-card h2 { font-size: 30px; } .platform-card > p { font-size: 12px; } .platform-card > p br { display: none; } .platform-download { padding-inline: 16px; font-size: 12px; } .release-notice { grid-template-columns: 1fr; gap: 9px; } .install-heading { gap: 25px; margin-bottom: 38px; } .install-heading > p { font-size: 13px; } .setup-layout { grid-template-columns: 1fr; gap: 35px; } .install-section { padding-bottom: 70px; } .setup-aside { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; align-items: start; } .requirements-box { padding: 23px; } .checksum-panel { margin-top: 0; border-top: 1px solid var(--download-border); } .mac-section { padding: 65px 0; } .mac-info-grid { gap: 24px; grid-template-columns: 1fr; margin-top: 36px; } .mac-info-grid > div { border-top: 1px solid var(--download-border); padding-top: 23px; } .mac-info-grid h3 { margin: 10px 0; } .terminal-command { padding: 25px; } .help-section { grid-template-columns: 1fr; gap: 32px; padding-block: 70px; } .email-section { grid-template-columns: 1fr; gap: 26px; } .email-form-fields { grid-template-columns: 1.1fr 1fr; } .email-field :is(input,select) { font-size: 16px; } .download-ready-heading { flex-direction: column; align-items: stretch; gap: 20px; } .download-ready { padding: 23px; } .download-footer-inner > p { width: 100%; order: 3; } }
+@media (max-width: 500px) { .platform-grid,.install-heading,.setup-aside { grid-template-columns: 1fr; } .platform-card { padding: 28px; } .platform-topline { margin-bottom: 23px; } .platform-card > p { font-size: 14px; } .platform-type { font-size: 10px; } .platform-download { font-size: 13px; } .platform-foot { flex-direction: row; font-size: 10px; } .install-heading > p { justify-self: start; max-width: 100%; margin-top: 0; } .setup-steps li { gap: 14px; grid-template-columns: 27px 1fr; } .setup-steps h3 { font-size: 18px; } .terminal-title { gap: 10px; padding: 12px; } .terminal-dots { display: none; } .terminal-title > .copy-button { padding-inline: 9px; font-size: 10px; } .terminal-command { padding: 24px 17px; gap: 10px; } .email-section { padding: 25px; } .email-form-fields { grid-template-columns: 1fr; } .download-ready { padding: 20px; } .download-footer-inner { align-items: flex-start; flex-direction: column; } .download-footer-inner > p { order: initial; } }
 @media (prefers-reduced-motion: reduce) { .download-page *, .download-page *::before,.download-page *::after { scroll-behavior: auto !important; transition: none !important; } }
