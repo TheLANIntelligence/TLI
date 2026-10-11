@@ -77,20 +77,29 @@ Version is defined in `backend/tli_state.py` as `TLI_VERSION` and read by `build
 ### Build & Distribution
 
 ```bash
-# Zip-based distribution (all platforms)
+# Reviewed ZIP packager (all platforms; does not compile a native backend)
 python build_dist.py            # produces TLI_dist_<version>.zip
 
-# PyInstaller standalone binary
-bash build_mac.sh               # macOS → TLI_Installer/dist/
-bash build_linux.sh             # Linux
-pwsh build.ps1                  # Windows
+# Windows desktop launcher only; still uses the prepared Python backend
+powershell -File build_launcher.ps1
 
 # Lightweight inference Node (separate state; no host UI)
 python backend/tli_node.py --help
 python build_node.py            # allowlisted Node source archive, no models/state
 ```
 
-The build excludes `data/`, `__pycache__`, model `.gguf` files, and test suites. Frontend is served as FastAPI static files — no separate build step.
+`build_dist.py` excludes private runtime state, model weights and test suites.
+It can include a separately prepared launcher and compatible inference runtime;
+a fresh source checkout does not contain those binaries. Review its `--dry-run`
+file list before distributing a package. The frontend is served directly by
+FastAPI and has no separate build step. See [README.md](README.md) for source setup.
+
+The legacy native backend builders are **not validated release paths**.
+`build_mac.sh` and `build_linux.sh` exit with an explanatory error before any
+build, download, file removal or service action. Use `build_dist.py` for a source
+ZIP instead. The Windows `build.ps1` script is retained as legacy, unvalidated
+packaging tooling; it is not a release-ready alternative to the reviewed ZIP
+packager. Building the launcher alone does not validate a native backend package.
 
 ### SSE Streaming Protocol
 
