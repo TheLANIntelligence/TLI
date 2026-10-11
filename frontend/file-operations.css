@@ -1,0 +1,68 @@
+/* File reviews must fit their panel even with long, unbroken host paths. */
+#panel-files .fo-grid {
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+#panel-files .fo-main,
+#panel-files .fo-sidebar,
+#panel-files .card-section {
+  min-width: 0;
+  max-width: 100%;
+}
+#panel-files .fo-path-row input,
+#panel-files .fo-scan-row input {
+  min-width: 0;
+}
+#panel-files .files-bucket-main { flex-wrap: wrap; }
+#filesStatus,
+#files-operation-review {
+  overflow-wrap: anywhere;
+}
+#files-operation-review {
+  width: 100%;
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 1.5;
+}
+#files-operation-review h4 { margin: 18px 0 8px; font-size: 14px;  font-family:var(--theme-font-heading, inherit);}
+#files-operation-review p { margin: 8px 0 12px; }
+#files-operation-review select {
+  display: block;
+  width: 100%;
+  margin: 6px 0;
+  padding: 8px;
+  color: var(--text-main);
+  background: var(--bg-elevated-alt);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--theme-control-radius, 8px);
+ box-shadow:var(--theme-control-shadow, none);}
+#files-operation-review button { max-width: 100%; white-space: normal; }
+.files-selection-tools { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; margin-block: 14px; }
+.files-selection-tools label, .files-destination-list label { display: grid; gap: 6px; min-width: 0; color: var(--text-main); font-size: 13px; }
+.files-selection-tools :is(input, select), .files-destination-list input { width: 100%; min-width: 0; box-sizing: border-box; padding: 10px; border: 1px solid var(--border-subtle); border-radius: var(--theme-control-radius, 8px); background: var(--bg-elevated-alt); color: var(--text-main); font: inherit; }
+.files-selection-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block: 12px; }
+.files-selection-actions button { white-space: normal; max-width: 100%; }
+.files-destinations { margin-block: 14px; border: 1px solid var(--border-subtle); border-radius: var(--theme-card-radius, 12px); }
+.files-destinations > summary { padding: 12px; cursor: pointer; font-weight: 600; }
+.files-destination-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+.files-file-list { border-block: 1px solid var(--border-subtle); }
+.files-file-choice { display: grid; grid-template-columns: 20px minmax(0, 2fr) minmax(0, 1fr); align-items: center; gap: 12px; min-height: 48px; padding: 10px 6px; border-bottom: 1px solid var(--border-subtle); cursor: pointer; color: var(--text-main); }
+.files-file-choice:last-child { border-bottom: 0; }
+.files-file-choice input { width: 18px; height: 18px; accent-color: var(--accent); }
+.files-choice-name, .files-choice-destination { min-width: 0; overflow-wrap: anywhere; }
+.files-choice-destination { color: var(--text-muted); font-size: 12px; }
+.files-candidate-note:not(:empty) { padding: 12px; border: 1px solid var(--accent); border-radius: var(--theme-card-radius, 12px); margin-block: 12px; }
+.files-suggested-names { max-height: 220px; overflow-y: auto; overflow-wrap: anywhere; padding-inline-start: 22px; }
+.storage-folder-handoff, .storage-folder-context { padding: 14px; margin-block: 12px; border: 1px solid var(--border-subtle); border-radius: var(--theme-card-radius, 12px); background: var(--bg-panel); overflow-wrap: anywhere; }
+.storage-folder-handoff { border-color: var(--accent); }
+.storage-folder-handoff h3 { margin-top: 0; }
+.storage-folder-handoff button { margin: 4px 8px 4px 0; white-space: normal; }
+.storage-folder-context p { margin: 4px 0; color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+@media (max-width: 600px) {
+  .files-selection-tools, .files-destination-list { grid-template-columns: minmax(0, 1fr); }
+  .files-file-choice { grid-template-columns: 20px minmax(0, 1fr); gap: 6px 10px; }
+  .files-choice-destination { grid-column: 2; }
+}
+@media (max-width: 900px) {
+  #panel-files .fo-grid { grid-template-columns: minmax(0, 1fr); }
+  #panel-files .fo-path-row { flex-wrap: wrap; }
+}

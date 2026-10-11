@@ -1,0 +1,35 @@
+.places-dialog { width:min(920px,94vw); max-height:90dvh; overflow:auto; box-sizing:border-box; background:var(--bg-panel,#fff); color:var(--text-main,#152638); border:1px solid var(--border,#cbd5df); border-radius:var(--theme-dialog-radius, 18px); padding:24px; }
+.places-dialog::backdrop { background:rgba(4,16,26,.55); }
+.places-dialog h2,.places-dialog h3 { margin:0 0 10px; color:inherit; }
+.places-dialog p { line-height:1.5; }
+.places-dialog input,.places-dialog select { box-sizing:border-box; width:100%; min-width:0; min-height:44px; border:1px solid var(--border,#cbd5df); border-radius:var(--theme-control-radius, 8px); padding:9px; background:var(--bg-elevated,#fff); color:inherit;  box-shadow:var(--theme-control-shadow, none);}
+.places-actions,.places-shortcuts { display:flex; flex-wrap:wrap; gap:8px; }
+.places-dialog button,.places-home button,.places-shortcuts button { min-height:44px; white-space:normal; }
+.places-field { display:grid; gap:6px; margin:12px 0; }
+.places-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:18px; }
+.places-card,.places-editor { border:1px solid var(--border,#cbd5df); border-radius:var(--theme-card-radius, 12px); padding:16px; min-width:0; background:var(--bg-elevated,#fff); color:var(--text-main,#152638); }
+.places-target,.places-check { overflow-wrap:anywhere; font-size:.9rem; }
+.places-check { color:var(--text-muted,#536270); }
+.places-home { margin:0; min-width:0; border:1px solid var(--border-subtle); border-radius:var(--theme-card-radius, 16px); padding:20px; background:var(--bg-panel); color:var(--text-main);  box-shadow:var(--theme-card-shadow, none);}
+.places-home-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.places-home h2 { margin:0; color:inherit; font-size:17px; font-weight:var(--theme-heading-weight, 650); letter-spacing:var(--theme-heading-tracking, -.02em);  font-family:var(--theme-font-heading, inherit);}
+.places-home-count { color:var(--text-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.places-home-intro,.places-home-status,.places-home-empty { color:var(--text-muted); font-size:12px; line-height:1.55; margin:8px 0; overflow-wrap:anywhere; }
+.places-home-list { display:grid; gap:2px; margin:16px 0; }
+.places-home .places-home-entry { display:flex; align-items:center; gap:10px; width:100%; min-width:0; text-align:left; border:0; border-bottom:1px solid var(--border-subtle); border-radius:0; padding:12px 0; background:transparent; color:var(--text-main); box-shadow:none; }
+.places-home .places-home-entry:last-child { border-bottom:0; }
+.places-home .places-home-entry:hover { background:var(--accent-soft); }
+.places-home-entry-text { min-width:0; flex:1; display:grid; gap:4px; }
+.places-home-name { font-size:13px; line-height:1.4; font-weight:600; overflow-wrap:anywhere; }
+.places-home-target { color:var(--text-muted); font-size:11px; line-height:1.5; overflow-wrap:anywhere; }
+.places-home-kind { flex:0 0 44px; color:var(--accent); background:var(--accent-soft); text-align:center; border-radius:7px; padding:8px 3px; font-size:10px; font-weight:600; }
+.places-home-arrow { color:var(--text-muted); font-size:20px; }
+.places-home-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; padding-top:14px; border-top:1px solid var(--border-subtle); }
+.places-home-actions button { font-size:12px; flex:1 1 auto; }
+.places-home[data-state=unavailable] .places-home-status,.places-home[data-state=stale] .places-home-status { color:var(--danger); background:var(--danger-soft); padding:10px 12px; border-radius:8px; }
+.places-home[aria-busy=true] { cursor:progress; }
+.places-shortcuts { padding:10px 0; }
+.places-dialog [hidden] { display:none!important; }
+.places-dialog[aria-busy=true] { cursor:progress; }
+.places-dialog button:focus-visible,.places-home button:focus-visible,.places-shortcuts button:focus-visible { outline:2px solid var(--accent,#0d9479); outline-offset:3px; }
+@media(max-width:600px) { .places-dialog { padding:16px; width:96vw; } .places-list { grid-template-columns:1fr; } .places-actions>button { flex:1 1 130px; } }

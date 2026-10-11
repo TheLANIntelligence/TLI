@@ -1,0 +1,19 @@
+#!/bin/bash
+# TLI_Start.app — macOS launcher
+# Strips quarantine, fixes permissions, then starts TLI in a Terminal window.
+
+# The .app sits inside the TLI folder — go up three levels to reach the root
+DIR="$(cd "$(dirname "$0")/../../.." && pwd)"
+
+# Strip quarantine attribute from everything so scripts become runnable
+xattr -dr com.apple.quarantine "$DIR" 2>/dev/null || true
+
+# Ensure launcher scripts are executable
+chmod +x "$DIR/TLI_Start.command" 2>/dev/null || true
+chmod +x "$DIR/TLI_Start.sh"      2>/dev/null || true
+
+# Open a Terminal window and run the launcher inside it
+osascript -e "tell application \"Terminal\"
+    activate
+    do script \"bash '$DIR/TLI_Start.command'\"
+end tell"

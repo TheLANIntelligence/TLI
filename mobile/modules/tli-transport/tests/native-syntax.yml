@@ -1,0 +1,13 @@
+id: kotlin-parse-error
+language: Kotlin
+rule:
+  kind: ERROR
+message: Kotlin parser error; native compilation is still required when this check passes.
+severity: error
+---
+id: swift-parse-error
+language: Swift
+rule:
+  kind: ERROR
+message: Swift parser error; native compilation is still required when this check passes.
+severity: error

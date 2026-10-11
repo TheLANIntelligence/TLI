@@ -1,0 +1,135 @@
+/* Scoped refinement: preserve feature-panel styling and all existing themes. */
+:root {
+  --shell-space-1: 4px;
+  --shell-space-2: 8px;
+  --shell-space-3: 12px;
+  --shell-space-4: 16px;
+  --shell-space-6: 24px;
+  --shell-space-8: 32px;
+}
+.app-shell > .sidebar {
+  width: 192px;
+  flex: 0 0 192px;
+  padding: var(--shell-space-3) var(--shell-space-2);
+  height: 100dvh;
+  overflow: hidden;
+}
+.sidebar .sidebar-nav {
+  overflow-y: auto;
+  min-height: 0;
+  gap: var(--shell-space-4);
+  z-index: auto !important;
+}
+.tli-nav-group { display: grid; gap: var(--shell-space-1); }
+.sidebar .sidebar-section-title {
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 600;
+  padding: var(--shell-space-1) var(--shell-space-2);
+  letter-spacing: .08em;
+}
+.sidebar .side-nav-button {
+  flex-direction: row;
+  text-align: left;
+  width: 100%;
+  min-height: 36px;
+  padding: var(--shell-space-1) var(--shell-space-2);
+  gap: var(--shell-space-2);
+  border-radius: var(--theme-control-radius,var(--radius-sm));
+  font-size: 12px;
+  color: var(--text-muted);
+  box-shadow: none;
+  z-index: auto !important;
+}
+.sidebar .side-nav-button-icon {
+  flex: 0 0 24px;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+  font-size: 16px;
+}
+.sidebar .side-nav-button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text-main);
+}
+.sidebar .side-nav-button:hover { background: var(--bg-elevated-alt); }
+.tli-nav-settings { margin-top: auto; border-top: 1px solid var(--border-subtle); padding-top: var(--shell-space-2); }
+.sidebar .sidebar-footer { font-size: 10px; flex-shrink: 0; }
+.main-region > header { gap: var(--shell-space-3); padding: var(--shell-space-3) var(--shell-space-4); flex-wrap: wrap; }
+.main-region > header .header-left, .main-region > header .header-right { gap: var(--shell-space-2); min-width: 0; }
+.main-region > header .header-right { margin-left: auto; flex-wrap: wrap; }
+.main-region > header button { font: inherit; font-size: 12px; cursor: pointer; min-height: 36px; }
+.main-region > header .brand-pill { box-shadow: none; }
+.main-region > header .device-chip { margin: 0; padding: var(--shell-space-1) var(--shell-space-3); color: var(--text-main); background: var(--bg-elevated); border: 1px solid var(--border-subtle); text-align: left; }
+.device-chip-label, .device-chip-name { display: block; }
+.main-region > header .device-chip-label { color: var(--text-muted); }
+.device-chip-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tli-device-menu, .tli-activity-wrap { position: relative; }
+.tli-shell-button {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--shell-space-2);
+  border: 1px solid var(--border-subtle); border-radius: var(--theme-control-radius,var(--radius-sm));
+  padding: var(--shell-space-2) var(--shell-space-3); background: var(--bg-elevated); color: var(--text-muted);
+}
+.tli-shell-button:hover, .tli-shell-button[aria-expanded="true"] { color: var(--text-main); border-color: var(--border-strong); }
+.tli-shell-button kbd { color: var(--text-soft); font: inherit; font-size: 10px; }
+#ai-source-pill { max-width: 200px; white-space: normal; text-align: left; }
+#ai-source-text { overflow-wrap: anywhere; }
+.tli-shell-popover {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 400;
+  border: 1px solid var(--border-strong); border-radius: var(--theme-dialog-radius,var(--radius-md));
+  background: var(--bg-panel); color: var(--text-main); box-shadow: var(--shadow-soft);
+  padding: var(--shell-space-4);
+}
+.tli-shell-popover[hidden], .tli-shell-popover [hidden], .tli-count-badge[hidden] { display: none !important; }
+#tli-device-popover { left: 0; right: auto; min-width: 180px; }
+#tli-device-popover button { width: 100%; border: 0; border-radius: var(--theme-control-radius,var(--radius-sm)); background: var(--bg-elevated); color: var(--text-main); padding: var(--shell-space-2); }
+#tli-rename-form { width: 220px; font-size: 12px; }
+#tli-rename-input { display: block; width: 100%; margin: 8px 0; min-height: 36px; }
+.tli-rename-actions { display: flex; gap: 8px; }
+#tli-device-popover [type="submit"] { background: var(--accent-soft); color: var(--accent); }
+#tli-activity-panel { width: 400px; max-height: min(640px, 75dvh); overflow-y: auto; }
+.tli-activity-tabs { display: flex; gap: var(--shell-space-1); border-bottom: 1px solid var(--border-subtle); padding-bottom: var(--shell-space-2); }
+.tli-activity-tabs button { display: inline-flex; align-items: center; gap: var(--shell-space-2); border: 1px solid transparent; border-radius: var(--theme-control-radius,var(--radius-sm)); background: transparent; color: var(--text-muted); padding: var(--shell-space-2); }
+.tli-activity-tabs [aria-selected="true"] { color: var(--accent); background: var(--accent-soft); }
+#tli-activity-close { margin-left: auto; }
+.tli-count-badge { display: inline-flex; align-items: center; justify-content: center; border-radius: 20px; padding: 2px 6px; background: var(--accent-soft); color: var(--text-main); font-size: 10px; }
+#tli-alerts-content .tli-alert-panel-head { padding: var(--shell-space-3) 0; gap: var(--shell-space-2); }
+#tli-alert-dismiss-all { color: var(--text-muted); background: transparent; border: 0; }
+#tli-alert-dismiss-all:disabled { opacity: .45; cursor: default; }
+.tli-shell-empty { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: var(--shell-space-3) 0; }
+#tli-alert-error { color: var(--warning); }
+.tli-shell-popover .tli-alert-msg { min-width: 0; overflow-wrap: anywhere; }
+.tli-shell-popover .tli-alert-x { flex-shrink: 0; min-width: 36px; }
+#tli-events-content #nd-feed { max-height: none; padding-top: var(--shell-space-3); }
+.sidebar button:focus-visible, .main-region > header button:focus-visible, #panel-dashboard2 :is(button, summary, [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 3px;
+}
+@media (max-width: 1200px) {
+  .main-region > header .header-left { flex-basis: 100%; }
+  .main-region > header .header-right { margin-left: 0; width: 100%; }
+}
+@media (max-width: 768px) {
+  .main-region > header { padding: var(--shell-space-2) var(--shell-space-3); }
+  .main-region > header .brand-title { font-size: 14px; }
+  .main-region > header .header-left { justify-content: space-between; }
+  .main-region > header .device-chip { display: flex; }
+  .main-region > header .device-chip-label { display: none; }
+  .main-region > header .device-chip-name { max-width: 84px; font-size: 11px; }
+  .main-region > header :is(button, .tli-shell-button), #panel-dashboard2 :is(button, .nd-shortcuts summary) { min-height: 44px; }
+  #tli-search-launcher { min-width: 44px; padding: var(--shell-space-2); font-size: 20px; }
+  #tli-search-launcher :is(.tli-search-label, kbd) { display: none; }
+  #tli-activity-trigger { padding: var(--shell-space-2); }
+  #ai-source-pill { max-width: 140px; padding: var(--shell-space-2); }
+  #tli-activity-panel { position: fixed; top: 124px; left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 212px); }
+  #tli-device-popover { right: 0; left: auto; }
+  .tli-bottom-nav .tli-bn-label { font-size: 10px; }
+  #tli-state-bar .ssb-ts-wrap, #tli-state-bar .ssb-spacer { display: none; }
+}
+@media (pointer: coarse) {
+  .sidebar .side-nav-button, .main-region > header button, #panel-dashboard2 :is(button, summary) { min-height: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar *, .main-region > header *, #panel-dashboard2 *, #tli-state-bar * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

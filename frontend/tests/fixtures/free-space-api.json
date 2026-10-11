@@ -1,0 +1,834 @@
+{
+  "synthetic": true,
+  "authentication": "real isolated browser session cookie; no dependency override",
+  "worker": "synthetic response stub; no host filesystem scan",
+  "fixtures": {
+    "scan": {
+      "request": {
+        "operation": "scan",
+        "path": "C:/Synthetic API fixture",
+        "profile": "quick",
+        "include_excluded": false,
+        "request_id": "scan"
+      },
+      "start": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "668e4e26f5da4b9d5df1b5a873a59900",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "queued",
+          "started_at": "2026-09-09T05:16:05.240161Z",
+          "updated_at": "2026-09-09T05:16:05.240171Z",
+          "finished_at": null,
+          "expires_at": null,
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": false,
+          "error": null,
+          "worker_stopped": false
+        }
+      },
+      "status": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "668e4e26f5da4b9d5df1b5a873a59900",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "partial",
+          "started_at": "2026-09-09T05:16:05.240161Z",
+          "updated_at": "2026-09-09T05:16:05.240707Z",
+          "finished_at": "2026-09-09T05:16:05.240714Z",
+          "expires_at": "2026-09-09T05:46:05.240718Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        }
+      },
+      "results": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "668e4e26f5da4b9d5df1b5a873a59900",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "partial",
+          "started_at": "2026-09-09T05:16:05.240161Z",
+          "updated_at": "2026-09-09T05:16:05.240707Z",
+          "finished_at": "2026-09-09T05:16:05.240714Z",
+          "expires_at": "2026-09-09T05:46:05.240718Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        },
+        "result": {
+          "tree": {
+            "name": "Synthetic API fixture",
+            "path": "C:/Synthetic API fixture",
+            "size": 3,
+            "size_known": true,
+            "size_partial": true,
+            "size_reason": "incomplete_coverage",
+            "children": [
+              {
+                "name": "unreadable.bin",
+                "path": "C:/Synthetic API fixture/unreadable.bin",
+                "size": 0,
+                "size_known": false,
+                "size_partial": true,
+                "size_reason": "unreadable"
+              },
+              {
+                "name": "example.txt",
+                "path": "C:/Synthetic API fixture/example.txt",
+                "size": 3,
+                "size_known": true,
+                "size_partial": false,
+                "size_reason": null
+              }
+            ]
+          },
+          "largest": [],
+          "meta": {
+            "root": "C:/Synthetic API fixture",
+            "partial": true,
+            "denied": 1,
+            "entries_seen": 2,
+            "files": 2,
+            "seconds": 0.01,
+            "folder_summary": [],
+            "direct_file_bytes": 3,
+            "scan_filters": {
+              "max_seconds": 15,
+              "max_entries": 50000,
+              "max_depth": 18,
+              "excluded_names": [
+                "AppData",
+                "node_modules"
+              ],
+              "follow_links": false
+            },
+            "saved_scan": {
+              "protocol": "storage-history-v1",
+              "available": true,
+              "scan_id": "abd2e7ef36a440d29b41648ad7d886ed",
+              "version": 1,
+              "expires_at": 1788932765.2406247,
+              "summary": {
+                "id": "abd2e7ef36a440d29b41648ad7d886ed",
+                "version": 1,
+                "root": "C:\\Synthetic API fixture",
+                "scanned_at": "2026-09-09T05:16:05.240511Z",
+                "host": {
+                  "id": "synthetic-host",
+                  "name": "Synthetic API fixture"
+                },
+                "drive": {
+                  "status": "unknown",
+                  "fingerprint": null,
+                  "detail": "Synthetic identity"
+                },
+                "coverage": {
+                  "complete": false,
+                  "reasons": [
+                    "Unreadable entries"
+                  ]
+                },
+                "filters": {
+                  "max_seconds": 15,
+                  "max_entries": 50000,
+                  "max_depth": 18,
+                  "excluded_names": [
+                    "AppData",
+                    "node_modules"
+                  ],
+                  "follow_links": false
+                },
+                "total_bytes": 3,
+                "direct_file_bytes": 3
+              }
+            }
+          }
+        }
+      }
+    },
+    "large_files": {
+      "request": {
+        "operation": "large_files",
+        "path": "C:/Synthetic API fixture",
+        "profile": "quick",
+        "include_excluded": false,
+        "request_id": "large_files"
+      },
+      "start": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "7a304e5535e69743914502ac224f0f42",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "large_files",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "queued",
+          "started_at": "2026-09-09T05:16:05.254239Z",
+          "updated_at": "2026-09-09T05:16:05.254252Z",
+          "finished_at": null,
+          "expires_at": null,
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": false,
+          "error": null,
+          "worker_stopped": false
+        }
+      },
+      "status": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "7a304e5535e69743914502ac224f0f42",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "large_files",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "completed",
+          "started_at": "2026-09-09T05:16:05.254239Z",
+          "updated_at": "2026-09-09T05:16:05.254497Z",
+          "finished_at": "2026-09-09T05:16:05.254501Z",
+          "expires_at": "2026-09-09T05:46:05.254504Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        }
+      },
+      "results": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "7a304e5535e69743914502ac224f0f42",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "large_files",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "completed",
+          "started_at": "2026-09-09T05:16:05.254239Z",
+          "updated_at": "2026-09-09T05:16:05.254497Z",
+          "finished_at": "2026-09-09T05:16:05.254501Z",
+          "expires_at": "2026-09-09T05:46:05.254504Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        },
+        "result": {
+          "files": [
+            {
+              "name": "large.bin",
+              "path": "C:/Synthetic API fixture/large.bin",
+              "size": 1048576
+            }
+          ],
+          "meta": {
+            "root": "C:/Synthetic API fixture",
+            "partial": false,
+            "denied": 0,
+            "entries_seen": 2,
+            "files": 2,
+            "seconds": 0.01,
+            "folder_summary": [],
+            "direct_file_bytes": 3,
+            "scan_filters": {
+              "max_seconds": 15,
+              "max_entries": 50000,
+              "max_depth": 18,
+              "excluded_names": [
+                "AppData",
+                "node_modules"
+              ],
+              "follow_links": false
+            },
+            "found": 1,
+            "returned": 1,
+            "total_bytes": 1048576
+          }
+        }
+      }
+    },
+    "duplicates": {
+      "request": {
+        "operation": "duplicates",
+        "path": "C:/Synthetic API fixture",
+        "profile": "quick",
+        "include_excluded": false,
+        "request_id": "duplicates"
+      },
+      "start": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "36ff6da84cfa25b9017e8e5e111104c1",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "duplicates",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "queued",
+          "started_at": "2026-09-09T05:16:05.266701Z",
+          "updated_at": "2026-09-09T05:16:05.266714Z",
+          "finished_at": null,
+          "expires_at": null,
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": false,
+          "error": null,
+          "worker_stopped": false
+        }
+      },
+      "status": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "36ff6da84cfa25b9017e8e5e111104c1",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "duplicates",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "completed",
+          "started_at": "2026-09-09T05:16:05.266701Z",
+          "updated_at": "2026-09-09T05:16:05.267032Z",
+          "finished_at": "2026-09-09T05:16:05.267038Z",
+          "expires_at": "2026-09-09T05:46:05.267041Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        }
+      },
+      "results": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "36ff6da84cfa25b9017e8e5e111104c1",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "duplicates",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "completed",
+          "started_at": "2026-09-09T05:16:05.266701Z",
+          "updated_at": "2026-09-09T05:16:05.267032Z",
+          "finished_at": "2026-09-09T05:16:05.267038Z",
+          "expires_at": "2026-09-09T05:46:05.267041Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        },
+        "result": {
+          "groups": [
+            {
+              "size": 8192,
+              "count": 2,
+              "wasted_bytes": 8192,
+              "verified": true,
+              "paths": [
+                "C:/Synthetic API fixture/copy-a.bin",
+                "C:/Synthetic API fixture/copy-b.bin"
+              ]
+            }
+          ],
+          "meta": {
+            "root": "C:/Synthetic API fixture",
+            "partial": false,
+            "denied": 0,
+            "entries_seen": 2,
+            "files": 2,
+            "seconds": 0.01,
+            "folder_summary": [],
+            "direct_file_bytes": 3,
+            "scan_filters": {
+              "max_seconds": 15,
+              "max_entries": 50000,
+              "max_depth": 18,
+              "excluded_names": [
+                "AppData",
+                "node_modules"
+              ],
+              "follow_links": false
+            },
+            "verification": "full_sha256",
+            "files_hashed": 2
+          }
+        }
+      }
+    },
+    "common_folders": {
+      "request": {
+        "operation": "common_folders",
+        "path": "C:/Synthetic API fixture",
+        "profile": "quick",
+        "include_excluded": false,
+        "request_id": "common_folders"
+      },
+      "start": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "e70fa92f16a7cd3dfecc061874751291",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "common_folders",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "queued",
+          "started_at": "2026-09-09T05:16:05.278909Z",
+          "updated_at": "2026-09-09T05:16:05.278919Z",
+          "finished_at": null,
+          "expires_at": null,
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": false,
+          "error": null,
+          "worker_stopped": false
+        }
+      },
+      "status": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "e70fa92f16a7cd3dfecc061874751291",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "common_folders",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "partial",
+          "started_at": "2026-09-09T05:16:05.278909Z",
+          "updated_at": "2026-09-09T05:16:05.279179Z",
+          "finished_at": "2026-09-09T05:16:05.279187Z",
+          "expires_at": "2026-09-09T05:46:05.279191Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        }
+      },
+      "results": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "e70fa92f16a7cd3dfecc061874751291",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "common_folders",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "partial",
+          "started_at": "2026-09-09T05:16:05.278909Z",
+          "updated_at": "2026-09-09T05:16:05.279179Z",
+          "finished_at": "2026-09-09T05:16:05.279187Z",
+          "expires_at": "2026-09-09T05:46:05.279191Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        },
+        "result": {
+          "os": "Windows",
+          "targets": [
+            {
+              "path": "C:/Synthetic API fixture/Downloads",
+              "label": "Downloads",
+              "safety": "manual",
+              "tip": "Review individual files",
+              "how": "Review",
+              "exists": true,
+              "size_bytes": 3,
+              "size_mb": 0,
+              "size_partial": true,
+              "size_meta": {
+                "partial": true,
+                "denied": 1
+              }
+            }
+          ],
+          "protected_prefixes": [],
+          "meta": {
+            "partial": true,
+            "scope": "host_common_folders"
+          }
+        }
+      }
+    },
+    "cancelled": {
+      "request": {
+        "operation": "scan",
+        "path": "C:/Synthetic API fixture",
+        "profile": "quick",
+        "include_excluded": false,
+        "request_id": "cancelled"
+      },
+      "start": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "fd7ef4ee8be14e7c31612e94158af696",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "queued",
+          "started_at": "2026-09-09T05:16:05.290710Z",
+          "updated_at": "2026-09-09T05:16:05.290720Z",
+          "finished_at": null,
+          "expires_at": null,
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": false,
+          "error": null,
+          "worker_stopped": false
+        }
+      },
+      "status": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "fd7ef4ee8be14e7c31612e94158af696",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "cancelled",
+          "started_at": "2026-09-09T05:16:05.290710Z",
+          "updated_at": "2026-09-09T05:16:05.295386Z",
+          "finished_at": "2026-09-09T05:16:05.295391Z",
+          "expires_at": "2026-09-09T05:46:05.295394Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        }
+      },
+      "results": {
+        "ok": true,
+        "protocol": "storage-jobs-v1",
+        "job": {
+          "id": "fd7ef4ee8be14e7c31612e94158af696",
+          "host": {
+            "id": "synthetic-host",
+            "name": "Synthetic API fixture"
+          },
+          "operation": "scan",
+          "profile": "quick",
+          "include_excluded": false,
+          "path": "C:/Synthetic API fixture",
+          "status": "cancelled",
+          "started_at": "2026-09-09T05:16:05.290710Z",
+          "updated_at": "2026-09-09T05:16:05.295386Z",
+          "finished_at": "2026-09-09T05:16:05.295391Z",
+          "expires_at": "2026-09-09T05:46:05.295394Z",
+          "progress": {
+            "phase": "queued"
+          },
+          "limits": {
+            "max_seconds": 15,
+            "max_entries": 50000,
+            "max_depth": 18,
+            "memory_bytes": 536870912,
+            "max_tree_nodes": 25000,
+            "max_result_bytes": 33554432
+          },
+          "result_available": true,
+          "error": null,
+          "worker_stopped": true
+        },
+        "result": {
+          "tree": {
+            "name": "Synthetic API fixture",
+            "path": "C:/Synthetic API fixture",
+            "size": 3,
+            "size_known": true,
+            "size_partial": true,
+            "size_reason": "incomplete_coverage",
+            "children": [
+              {
+                "name": "unreadable.bin",
+                "path": "C:/Synthetic API fixture/unreadable.bin",
+                "size": 0,
+                "size_known": false,
+                "size_partial": true,
+                "size_reason": "unreadable"
+              },
+              {
+                "name": "example.txt",
+                "path": "C:/Synthetic API fixture/example.txt",
+                "size": 3,
+                "size_known": true,
+                "size_partial": false,
+                "size_reason": null
+              }
+            ]
+          },
+          "largest": [],
+          "meta": {
+            "root": "C:/Synthetic API fixture",
+            "partial": true,
+            "denied": 1,
+            "entries_seen": 2,
+            "files": 2,
+            "seconds": 0.01,
+            "folder_summary": [],
+            "direct_file_bytes": 3,
+            "scan_filters": {
+              "max_seconds": 15,
+              "max_entries": 50000,
+              "max_depth": 18,
+              "excluded_names": [
+                "AppData",
+                "node_modules"
+              ],
+              "follow_links": false
+            },
+            "cancelled": true,
+            "saved_scan": {
+              "protocol": "storage-history-v1",
+              "available": true,
+              "scan_id": "b8225737ea8242edb61df950c4c682c4",
+              "version": 1,
+              "expires_at": 1788932765.2953105,
+              "summary": {
+                "id": "b8225737ea8242edb61df950c4c682c4",
+                "version": 1,
+                "root": "C:\\Synthetic API fixture",
+                "scanned_at": "2026-09-09T05:16:05.295276Z",
+                "host": {
+                  "id": "synthetic-host",
+                  "name": "Synthetic API fixture"
+                },
+                "drive": {
+                  "status": "unknown",
+                  "fingerprint": null,
+                  "detail": "Synthetic identity"
+                },
+                "coverage": {
+                  "complete": false,
+                  "reasons": [
+                    "Unreadable entries"
+                  ]
+                },
+                "filters": {
+                  "max_seconds": 15,
+                  "max_entries": 50000,
+                  "max_depth": 18,
+                  "excluded_names": [
+                    "AppData",
+                    "node_modules"
+                  ],
+                  "follow_links": false
+                },
+                "total_bytes": 3,
+                "direct_file_bytes": 3
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

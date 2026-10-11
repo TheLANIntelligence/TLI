@@ -1,0 +1,6 @@
+// Preview both camera and library flows with a fixed illustration. No camera,
+// local photo library, file upload or network access is requested in the browser.
+import type { Photo } from './types';
+const illustration = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420"><rect width="640" height="420" fill="#e7efe9"/><rect x="112" y="120" width="416" height="226" rx="28" fill="#425f51"/><rect x="168" y="64" width="304" height="138" rx="12" fill="#f9fbf9"/><rect x="151" y="229" width="338" height="90" rx="12" fill="#183a2b"/><text x="320" y="265" text-anchor="middle" font-family="sans-serif" font-size="19" fill="#b7edcf">CHECK PAPER PATH</text><text x="320" y="293" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#b7edcf">Open tray 2 · check for paper</text><text x="320" y="389" text-anchor="middle" font-family="sans-serif" font-size="16" fill="#446653">Sample photo · interactive preview</text></svg>`;
+export async function choosePhoto(_source: 'camera' | 'library'): Promise<Photo> { return { uri: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(illustration)}`, base64: 'sample-preview-image-only', mime: 'image/jpeg', width: 640, height: 420 }; }
+export async function disposePhoto(_uri: string) { /* Sample illustration has no file to remove. */ }

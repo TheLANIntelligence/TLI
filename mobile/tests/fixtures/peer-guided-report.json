@@ -1,0 +1,329 @@
+{
+  "synthetic": true,
+  "options": {
+    "ok": true,
+    "protocol": "tli-guided-checks-v1",
+    "checked_at": "2026-09-10T01:31:57.873638Z",
+    "host": {
+      "id": "host",
+      "name": "Study",
+      "node_id": "host"
+    },
+    "computer_id": "peer",
+    "options": [
+      {
+        "id": "system",
+        "title": "Check host resources",
+        "detail": "A short CPU and memory sample, plus accessible drive usage. This does not establish the cause of slowness.",
+        "available": false,
+        "reason": "Select the TLI host to measure its resources or connection. This is not a remote-computer check.",
+        "kind": "system",
+        "target_id": null,
+        "scope_revision": "2da4943e72d40d92ccc74d313e4065672773a623cb930391016fc1f12b0545a4",
+        "internet": false,
+        "execution_host": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "measured_target": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        }
+      },
+      {
+        "id": "network",
+        "title": "Check the host's network",
+        "detail": "Inspect host interfaces and the default route, and try a gateway ping. The phone's own Wi-Fi is not measured.",
+        "available": false,
+        "reason": "Select the TLI host to measure its resources or connection. This is not a remote-computer check.",
+        "kind": "network",
+        "target_id": null,
+        "scope_revision": "7a5c6e2666300e24388b09487477028c35e978aeb099ed25c17672250fff400f",
+        "internet": false,
+        "execution_host": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "measured_target": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "internet_scope_revision": "a2e02fdb416c262ea1e2b0a2766cd21162bdb1c17b7bd8298df0868009042b37",
+        "internet_detail": "Optional: contact 1.1.1.1:443 and ask the configured DNS resolver for example.com."
+      },
+      {
+        "id": "device",
+        "title": "Check reachability from this host",
+        "kind": "device",
+        "target_id": "peer",
+        "internet": false,
+        "scope_revision": "79879b00b9db8f68cb1f2cf4b769053eb9a227031a034993b03c37ea8c48a84b",
+        "execution_host": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "measured_target": {
+          "id": "peer",
+          "name": "Study",
+          "kind": "computer",
+          "address": "192.0.2.5",
+          "relay": null,
+          "node_id": "fixture-peer",
+          "source": "mesh"
+        },
+        "available": true,
+        "reason": "",
+        "detail": "Try TCP ports 80 and 443 from the TLI host to the registered address. This does not measure remote CPU, apps or successful device operation."
+      },
+      {
+        "id": "peer_system",
+        "title": "Observe this TLI peer's resources",
+        "kind": "peer_system",
+        "target_id": "peer",
+        "internet": false,
+        "available": true,
+        "scope_revision": "b1fbe4f24fc18cda99ba048e5c90e1ca7e1e65ecaa69ef794be3f9ef42418981",
+        "execution_host": {
+          "id": "fixture-peer",
+          "name": "Verified other computer",
+          "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "measured_target": {
+          "id": "peer",
+          "name": "Study",
+          "kind": "computer",
+          "node_id": "fixture-peer",
+          "source_id": null,
+          "source": "mesh"
+        },
+        "reason": "",
+        "detail": "One authenticated CPU, RAM and uptime observation measured by the selected TLI peer. No disk, network, process, repair or phone measurements. No local-host fallback."
+      },
+      {
+        "id": "performance",
+        "title": "Observe an application",
+        "kind": "performance",
+        "target_id": null,
+        "available": false,
+        "reason": "Application observations run on the TLI host only.",
+        "detail": "Open Performance & apps, choose a process and explicitly start a 30-second observation.",
+        "execution_host": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "measured_target": {
+          "id": "host",
+          "name": "Study",
+          "node_id": "host"
+        },
+        "internet": false,
+        "panel": "panel-games"
+      }
+    ],
+    "actions_performed": false
+  },
+  "request": {
+    "kind": "peer_system",
+    "target_id": "peer",
+    "internet": false,
+    "expected_host_id": "fixture-peer",
+    "expected_scope": "b1fbe4f24fc18cda99ba048e5c90e1ca7e1e65ecaa69ef794be3f9ef42418981",
+    "request_id": "reviewed-native-peer"
+  },
+  "response": {
+    "id": "dc032df3-25dc-458b-afbd-b24bb5e95bae",
+    "created_at": "2026-09-09T10:00:00Z",
+    "kind": "system",
+    "host": {
+      "id": "fixture-peer",
+      "name": "Verified other computer",
+      "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "target": {
+      "id": "peer",
+      "name": "Study",
+      "kind": "computer",
+      "node_id": "fixture-peer",
+      "source_id": null,
+      "source": "mesh"
+    },
+    "checks": [
+      {
+        "id": "cpu_percent",
+        "label": "Peer CPU",
+        "status": "pass",
+        "detail": "Recorded 0 percent of the peer's host capacity."
+      },
+      {
+        "id": "logical_cpus",
+        "label": "Peer logical CPUs",
+        "status": "pass",
+        "detail": "Recorded 8 logical CPUs."
+      },
+      {
+        "id": "ram_total_bytes",
+        "label": "Peer total RAM",
+        "status": "pass",
+        "detail": "Recorded 16000 bytes."
+      },
+      {
+        "id": "ram_used_bytes",
+        "label": "Peer used RAM",
+        "status": "pass",
+        "detail": "Recorded 4000 bytes."
+      },
+      {
+        "id": "ram_available_bytes",
+        "label": "Peer available RAM",
+        "status": "pass",
+        "detail": "Recorded 12000 bytes."
+      },
+      {
+        "id": "ram_percent",
+        "label": "Peer RAM use",
+        "status": "pass",
+        "detail": "Recorded 25 percent."
+      },
+      {
+        "id": "uptime_seconds",
+        "label": "Peer uptime",
+        "status": "pass",
+        "detail": "Recorded 900 seconds."
+      }
+    ],
+    "findings": [],
+    "next_steps": [],
+    "internet_checks": false,
+    "scope": "Measurements made on this named TLI peer, not the requesting computer.",
+    "peer_observation": {
+      "protocol": "tli-peer-observation-v1",
+      "host": {
+        "id": "fixture-peer",
+        "name": "Verified other computer",
+        "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "observed_at": "2026-09-09T10:00:00Z",
+      "scope": "Measurements made on this named TLI peer, not the requesting computer.",
+      "facts": {
+        "cpu_percent": 0,
+        "logical_cpus": 8,
+        "ram_total_bytes": 16000,
+        "ram_used_bytes": 4000,
+        "ram_available_bytes": 12000,
+        "ram_percent": 25,
+        "uptime_seconds": 900
+      },
+      "limitations": [
+        "No app cause or repair was measured."
+      ],
+      "peer_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "execution": {
+      "kind": "peer_system",
+      "peer_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "identity_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "requesting_host": {
+        "id": "host",
+        "node_id": "host",
+        "name": "Study",
+        "kind": "computer",
+        "source": "local_node"
+      }
+    },
+    "received_at": "2026-09-10T01:31:57.876127Z",
+    "_check_request": {
+      "key": "0a2a5f6744fc456345126a567ece1fcc953732450e8a52ac169e7f8ba203edf3",
+      "signature": "b1fbe4f24fc18cda99ba048e5c90e1ca7e1e65ecaa69ef794be3f9ef42418981"
+    },
+    "recorded_facts": {
+      "version": 1,
+      "report_id": "dc032df3-25dc-458b-afbd-b24bb5e95bae",
+      "kind": "system",
+      "basis": "saved_report",
+      "host": {
+        "id": "fixture-peer",
+        "name": "Verified other computer"
+      },
+      "target": {
+        "id": "peer",
+        "name": "Study"
+      },
+      "process": null,
+      "recorded_at": "2026-09-09T10:00:00Z",
+      "started_at": null,
+      "finished_at": null,
+      "duration_seconds": null,
+      "requested_duration_seconds": null,
+      "status": "completed",
+      "status_label": "Check results recorded",
+      "recorded_samples": null,
+      "expected_samples": null,
+      "raw_samples_included": 0,
+      "checks": [
+        {
+          "id": "cpu_percent",
+          "label": "Peer CPU",
+          "status": "pass",
+          "detail": "Recorded 0 percent of the peer's host capacity.",
+          "scope": "host"
+        },
+        {
+          "id": "logical_cpus",
+          "label": "Peer logical CPUs",
+          "status": "pass",
+          "detail": "Recorded 8 logical CPUs.",
+          "scope": "host"
+        },
+        {
+          "id": "ram_total_bytes",
+          "label": "Peer total RAM",
+          "status": "pass",
+          "detail": "Recorded 16000 bytes.",
+          "scope": "host"
+        },
+        {
+          "id": "ram_used_bytes",
+          "label": "Peer used RAM",
+          "status": "pass",
+          "detail": "Recorded 4000 bytes.",
+          "scope": "host"
+        },
+        {
+          "id": "ram_available_bytes",
+          "label": "Peer available RAM",
+          "status": "pass",
+          "detail": "Recorded 12000 bytes.",
+          "scope": "host"
+        },
+        {
+          "id": "ram_percent",
+          "label": "Peer RAM use",
+          "status": "pass",
+          "detail": "Recorded 25 percent.",
+          "scope": "host"
+        },
+        {
+          "id": "uptime_seconds",
+          "label": "Peer uptime",
+          "status": "pass",
+          "detail": "Recorded 900 seconds.",
+          "scope": "host"
+        }
+      ],
+      "omitted_checks": 0,
+      "measurements": [],
+      "limitations": [
+        "Saved evidence describes its recorded time, not current computer health.",
+        "Reading this report runs no new check or repair.",
+        "A recorded pass or failure applies only to the named check; it does not establish repair or task completion.",
+        "These measurements were reported by the named TLI peer, not measured on the requesting TLI host or phone. Only CPU, RAM and uptime were requested; they do not establish a slowdown's cause."
+      ]
+    }
+  }
+}

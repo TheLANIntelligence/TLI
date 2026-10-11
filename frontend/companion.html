@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en" data-experience="premium">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>TLI Companion</title>
+  <style>
+    :root {
+      --bg:          #0b0f14;
+      --bg-card:     #111820;
+      --bg-input:    #192130;
+      --bg-lift:     #192030;
+      --bg-float:    #141c28;
+      --border:      rgba(255,255,255,0.07);
+      --border-hi:   rgba(56,232,178,0.28);
+      --accent:      #38e8b2;
+      --accent-dim:  rgba(56,232,178,0.12);
+      --accent-glow: rgba(56,232,178,0.06);
+      --text:        #e6e9ef;
+      --muted:       #6b7a8d;
+      --soft:        #9aa5b4;
+      --danger:      #f87171;
+      --warn:        #f59e0b;
+      --blue:        #60a5fa;
+      --radius:      14px;
+      --radius-sm:   9px;
+      --tab-h:       64px;
+      --hdr-h:       54px;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box; margin: 0; padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      height: 100%; width: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 16px;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+      overscroll-behavior: none;
+    }
+
+    /* ── Shell ──────────────────────────────────────────────────── */
+    #shell {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────── */
+    #comp-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 18px;
+      padding-top: env(safe-area-inset-top, 0px);
+      height: calc(var(--hdr-h) + env(safe-area-inset-top, 0px));
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+    .hdr-left { display: flex; flex-direction: column; gap: 1px; }
+    .comp-logo { font-size: 11px; font-weight: 800; color: var(--accent); letter-spacing: .14em; text-transform: uppercase; }
+    .comp-panel-label { font-size: 15px; font-weight: 700; color: var(--text); transition: opacity .2s; }
+    .hdr-right { display: flex; align-items: center; gap: 10px; }
+    .hdr-bat { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .comp-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); transition: background .4s, box-shadow .4s; }
+    .comp-dot.online { background: var(--accent); box-shadow: 0 0 7px var(--accent); }
+    .comp-dot.warn   { background: var(--warn); }
+
+    /* ── Panels ─────────────────────────────────────────────────── */
+    #panels {
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .comp-panel {
+      position: absolute; inset: 0;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateX(30px);
+      transition: opacity .22s ease, transform .22s ease;
+      will-change: transform, opacity;
+    }
+    .comp-panel.active {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(0);
+    }
+    .comp-panel.slide-left  { transform: translateX(-30px); }
+
+    /* ── Tab bar ────────────────────────────────────────────────── */
+    #tab-bar {
+      display: flex;
+      height: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px));
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      position: relative;
+      z-index: 10;
+    }
+    .comp-tab {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      position: relative;
+      transition: color .15s;
+      padding: 0;
+    }
+    .comp-tab::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 50%;
+      width: 0; height: 2px;
+      background: var(--accent);
+      border-radius: 0 0 2px 2px;
+      transform: translateX(-50%);
+      transition: width .2s cubic-bezier(.34,1.56,.64,1);
+    }
+    .comp-tab.active { color: var(--accent); }
+    .comp-tab.active::after { width: 28px; }
+    .comp-tab-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px; height: 24px;
+      transition: transform .15s;
+    }
+    .comp-tab.active .comp-tab-icon { transform: translateY(-1px); }
+    .tab-badge {
+      position: absolute;
+      top: 6px; right: calc(50% - 16px);
+      background: var(--danger);
+      color: #fff;
+      font-size: 9px; font-weight: 800;
+      min-width: 15px; height: 15px;
+      border-radius: 99px;
+      display: none; align-items: center; justify-content: center;
+      padding: 0 3px;
+      border: 1.5px solid var(--bg-card);
+    }
+    .tab-badge.show { display: flex; }
+
+    /* ── Cards ──────────────────────────────────────────────────── */
+    .c-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+    }
+    .c-card-title {
+      font-size: 10px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: .1em; color: var(--muted); margin-bottom: 14px;
+    }
+    .c-card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .c-card-header .c-card-title { margin-bottom: 0; }
+
+    /* ── Chat panel ─────────────────────────────────────────────── */
+    #panel-chat { padding: 0; gap: 0; }
+
+    #chat-chips {
+      display: flex;
+      gap: 7px;
+      padding: 12px 16px 6px;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+      flex-shrink: 0;
+    }
+    #chat-chips::-webkit-scrollbar { display: none; }
+    .chat-chip {
+      flex-shrink: 0;
+      background: var(--bg-lift);
+      border: 1px solid var(--border);
+      border-radius: 99px;
+      color: var(--soft);
+      font-size: 13px;
+      padding: 6px 14px;
+      cursor: pointer;
+      white-space: nowrap;
+      font-family: inherit;
+      transition: border-color .15s, color .15s, background .15s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .chat-chip:active { border-color: var(--border-hi); color: var(--accent); background: var(--accent-dim); }
+
+    #chat-output {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior-y: contain;
+    }
+    .chat-bubble {
+      max-width: 82%;
+      padding: 10px 14px;
+      border-radius: 18px;
+      font-size: 14.5px;
+      line-height: 1.5;
+      word-break: break-word;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #041a10;
+      font-weight: 500;
+      border-bottom-right-radius: 5px;
+    }
+    .chat-bubble.ai {
+      align-self: flex-start;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-bottom-left-radius: 5px;
+    }
+    .chat-bubble.ai.thinking {
+      color: var(--muted);
+      display: flex; align-items: center; gap: 6px;
+    }
+    .thinking-dots { display: flex; gap: 4px; }
+    .thinking-dots span {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+      animation: tdot 1.2s ease-in-out infinite;
+    }
+    .thinking-dots span:nth-child(2) { animation-delay: .2s; }
+    .thinking-dots span:nth-child(3) { animation-delay: .4s; }
+    @keyframes tdot { 0%,60%,100%{transform:translateY(0);opacity:.4} 30%{transform:translateY(-5px);opacity:1} }
+
+    #chat-compose {
+      display: flex;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--bg-card);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+      align-items: flex-end;
+    }
+    #chat-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      color: var(--text);
+      padding: 10px 16px;
+      font-size: 15px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      max-height: 110px;
+      line-height: 1.45;
+      -webkit-appearance: none;
+      transition: border-color .15s;
+    }
+    #chat-input:focus { border-color: var(--border-hi); }
+    #chat-input::placeholder { color: var(--muted); }
+    #chat-send {
+      width: 40px; height: 40px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: none;
+      color: #041a10;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      transition: opacity .15s, transform .1s, background .15s;
+      align-self: flex-end;
+    }
+    #chat-send:active { transform: scale(.90); }
+    #chat-send:disabled { opacity: .4; }
+
+    /* ── Devices panel ──────────────────────────────────────────── */
+    .device-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 13px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 12px;
+    }
+    .device-row:last-child { border-bottom: none; }
+    .device-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+    .device-vendor-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .device-info { flex: 1; min-width: 0; }
+    .device-name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .device-meta { font-size: 12px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: .04em; }
+
+    /* Toggle */
+    .toggle { position: relative; width: 50px; height: 44px; flex-shrink: 0; cursor: pointer; }
+    .toggle input { opacity: 0; width: 100%; height: 100%; position: absolute; inset: 0; z-index: 1; cursor: pointer; }
+    .toggle-track {
+      position: absolute; inset: 8px 0;
+      background: rgba(255,255,255,.07);
+      border-radius: 28px;
+      border: 1px solid var(--border);
+      transition: background .2s, border-color .2s;
+    }
+    .toggle-track::before {
+      content: "";
+      position: absolute;
+      width: 22px; height: 22px;
+      left: 2px; top: 2px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: transform .2s cubic-bezier(.34,1.56,.64,1), background .2s;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    }
+    .toggle input:checked ~ .toggle-track { background: var(--accent-dim); border-color: rgba(56,232,178,.4); }
+    .toggle input:checked ~ .toggle-track::before { transform: translateX(22px); background: var(--accent); }
+    .toggle input:indeterminate ~ .toggle-track { background: rgba(255,255,255,.07); border-color: var(--border); }
+    .toggle input:indeterminate ~ .toggle-track::before { transform: translateX(11px); background: var(--muted); }
+    .toggle input:disabled { cursor: default; }
+    .toggle input:focus-visible ~ .toggle-track { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+    /* ── Scenes panel ───────────────────────────────────────────── */
+    #scenes-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .scene-card {
+      background: var(--bg-lift);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 14px;
+      cursor: pointer;
+      text-align: left;
+      font-family: inherit;
+      transition: background .15s, border-color .15s, transform .1s;
+      -webkit-tap-highlight-color: transparent;
+      position: relative;
+      overflow: hidden;
+    }
+    .scene-card:active { transform: scale(.96); background: var(--bg-card); }
+    .scene-card.running { border-color: var(--border-hi); }
+    .scene-card-name { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.3; }
+    .scene-card-desc { font-size: 11.5px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+    .scene-card-icon { font-size: 22px; margin-bottom: 8px; display: block; }
+    .scene-run-pulse {
+      position: absolute; inset: 0;
+      background: var(--accent-dim);
+      opacity: 0;
+      transition: opacity .15s;
+    }
+    .scene-card.running .scene-run-pulse { opacity: 1; }
+
+    /* ── Vault panel ────────────────────────────────────────────── */
+    .vault-badge {
+      display: flex; align-items: center; gap: 9px;
+      padding: 13px 16px;
+      border-radius: var(--radius);
+      font-size: 14px; font-weight: 600;
+    }
+    .vault-badge.locked   { background: rgba(248,113,113,.07); border: 1px solid rgba(248,113,113,.2); color: var(--danger); }
+    .vault-badge.unlocked { background: var(--accent-dim); border: 1px solid var(--border-hi); color: var(--accent); }
+    .vault-unlock-form    { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+    .vault-pw-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 11px 14px;
+      font-size: 15px; font-family: inherit;
+      outline: none; -webkit-appearance: none;
+      transition: border-color .15s;
+    }
+    .vault-pw-input:focus { border-color: var(--border-hi); }
+    .secret-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+    .secret-row:last-child { border-bottom: none; }
+    .secret-name { font-size: 14px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .secret-val  { font-size: 12px; font-family: monospace; color: var(--muted); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .copy-btn {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 12px;
+      padding: 5px 12px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: color .15s, border-color .15s;
+      font-family: inherit;
+    }
+    .copy-btn:active, .copy-btn.copied { color: var(--accent); border-color: var(--border-hi); }
+
+    /* ── Status panel ───────────────────────────────────────────── */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-label { color: var(--muted); font-size: 12.5px; }
+    .stat-val   { font-weight: 600; font-size: 13px; }
+    .stat-val.good { color: var(--accent); }
+    .stat-val.warn { color: var(--warn); }
+    .stat-val.bad  { color: var(--danger); }
+    .battery-wrap { margin-top: 4px; }
+    .battery-bar  { width: 100%; height: 4px; background: rgba(255,255,255,.06); border-radius: 99px; overflow: hidden; }
+    .battery-fill { height: 100%; border-radius: 99px; background: var(--accent); transition: width .6s ease; }
+    .battery-fill.warn { background: var(--warn); }
+    .battery-fill.crit { background: var(--danger); }
+
+    /* ── Buttons ────────────────────────────────────────────────── */
+    .comp-btn {
+      display: block; width: 100%;
+      padding: 14px;
+      border-radius: var(--radius);
+      border: none;
+      background: var(--accent);
+      color: #041a10;
+      font-size: 15px; font-weight: 700;
+      font-family: inherit;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    .comp-btn:active { opacity: .82; transform: scale(.99); }
+    .comp-btn.ghost  { background: transparent; border: 1px solid var(--border); color: var(--soft); }
+    .comp-btn.danger { background: rgba(248,113,113,.08); border: 1px solid rgba(248,113,113,.22); color: var(--danger); }
+    .comp-btn.sm     { padding: 8px 14px; font-size: 13px; }
+    .comp-btn.icon-btn { width: auto; display: inline-flex; align-items: center; gap: 5px; }
+
+    /* ── Send to desktop ────────────────────────────────────────── */
+    .push-area textarea {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      padding: 11px 14px;
+      font-size: 14px; font-family: inherit;
+      outline: none; resize: none;
+      -webkit-appearance: none;
+      margin-bottom: 10px;
+      transition: border-color .15s;
+    }
+    .push-area textarea:focus { border-color: var(--border-hi); }
+
+    /* ── Empty states ───────────────────────────────────────────── */
+    .empty {
+      text-align: center; padding: 32px 20px;
+      color: var(--muted); font-size: 14px; line-height: 1.6;
+    }
+    .empty-icon { font-size: 32px; margin-bottom: 10px; opacity: .7; }
+
+    /* ── Loading ────────────────────────────────────────────────── */
+    .spinner {
+      width: 22px; height: 22px;
+      border: 2px solid rgba(255,255,255,.08);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      margin: 24px auto;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Toast ──────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: calc(var(--tab-h) + env(safe-area-inset-bottom, 0px) + 14px);
+      left: 50%; transform: translateX(-50%) translateY(8px);
+      background: var(--bg-float);
+      border: 1px solid var(--border-hi);
+      color: var(--accent);
+      font-size: 13px; font-weight: 600;
+      padding: 9px 20px;
+      border-radius: 99px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s, transform .2s;
+      white-space: nowrap;
+      z-index: 999;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast { width: max-content; max-width: calc(100vw - 32px); white-space: normal; overflow-wrap: anywhere; text-align: center; border-radius: 12px; }
+    #toast[data-kind="error"] { color: var(--danger); border-color: rgba(248,113,113,.4); }
+
+    /* ── Pull-to-refresh indicator ──────────────────────────────── */
+    .ptr-hint {
+      text-align: center;
+      font-size: 11.5px;
+      color: var(--muted);
+      padding: 8px 0 2px;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .ptr-hint.visible { opacity: 1; }
+
+    /* ── Vendor color dots ──────────────────────────────────────── */
+    .vc-shelly       { background: #34d399; }
+    .vc-hue          { background: #60a5fa; }
+    .vc-govee        { background: #c084fc; }
+    .vc-wled         { background: #fb923c; }
+    .vc-yeelight     { background: #fbbf24; }
+    .vc-sonoff       { background: #f87171; }
+    .vc-kasa         { background: #22d3ee; }
+    .vc-tuya         { background: #38bdf8; }
+    .vc-generic_http { background: #94a3b8; }
+    .vc-default      { background: var(--muted); }
+  </style>
+  <link rel="stylesheet" href="/themes.css?v=6e9c2a072031" />
+  <link rel="stylesheet" href="/companion-atmosphere.css?v=b0f067bc8867" />
+  <script src="/js/theme-catalog.js?v=01787136ac84"></script>
+</head>
+<body>
+<div id="shell">
+
+  <!-- Header -->
+  <div id="comp-header">
+    <div class="hdr-left">
+      <div class="comp-logo">TLI</div>
+      <div class="comp-panel-label" id="panel-label">Ask TLI</div>
+    </div>
+    <div class="hdr-right">
+      <div class="hdr-bat" id="hdr-bat"></div>
+      <div class="comp-dot" id="comp-dot"></div>
+    </div>
+  </div>
+
+  <!-- Panels -->
+  <div id="panels">
+
+    <!-- ── Chat ─────────────────────────────────────────────────── -->
+    <div class="comp-panel active" id="panel-chat">
+      <div id="chat-chips">
+        <button class="chat-chip" data-prompt="Help me understand something new.">Explain something</button>
+        <button class="chat-chip" data-prompt="Help me write something.">Help me write</button>
+        <button class="chat-chip" data-prompt="Help me make a plan.">Make a plan</button>
+        <button class="chat-chip" data-prompt="What's the status of my home?">My home</button>
+      </div>
+      <a class="comp-btn ghost sm comp-workspace-link" href="/?desktop=1&amp;panel=devices">Open diagnostics, memory &amp; image tools</a>
+      <div id="chat-output"><div class="comp-chat-welcome"><h1>What's on your mind?</h1><p>Think it through. Make something. Or simply ask.</p></div></div>
+      <div id="chat-compose">
+        <textarea id="chat-input" aria-label="Message TLI" placeholder="Ask TLI anything…" rows="1" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
+        <button id="chat-send" title="Send" aria-label="Send message">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Devices ──────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-devices">
+      <div class="c-card">
+        <div class="c-card-header">
+          <div class="c-card-title">Smart Devices</div>
+          <button class="comp-btn ghost sm icon-btn" id="devices-refresh-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <div id="devices-list"><div class="spinner"></div></div>
+      </div>
+    </div>
+
+    <!-- ── Scenes ───────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-scenes">
+      <div class="c-card">
+        <div class="c-card-header">
+          <div class="c-card-title">Scenes</div>
+          <button class="comp-btn ghost sm icon-btn" id="scenes-refresh-btn">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
+        <div id="scenes-list"><div class="spinner"></div></div>
+      </div>
+      <div class="c-card">
+        <div class="c-card-title">Send to Desktop</div>
+        <div class="push-area">
+          <textarea id="push-msg-input" rows="3" placeholder="Type a note or message to push to the desktop…"></textarea>
+          <button class="comp-btn" id="push-msg-btn">Send to Desktop</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Vault ─────────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-vault">
+      <div id="vault-status-wrap"></div>
+      <div class="c-card" id="vault-secrets-card" hidden>
+        <div class="c-card-title">Secrets</div>
+        <div id="vault-secrets-list"></div>
+      </div>
+      <div class="c-card" id="vault-logins-card" hidden>
+        <div class="c-card-title">Logins</div>
+        <div id="vault-logins-list"></div>
+      </div>
+    </div>
+
+    <!-- ── Status ───────────────────────────────────────────────── -->
+    <div class="comp-panel" id="panel-status">
+      <div class="c-card">
+        <div class="c-card-title">This Device</div>
+        <div class="stat-row">
+          <span class="stat-label">Name</span>
+          <span class="stat-val" id="st-name">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Battery</span>
+          <span class="stat-val" id="st-bat">—</span>
+        </div>
+        <div class="battery-wrap">
+          <div class="battery-bar"><div class="battery-fill" id="st-bat-bar" style="width:0%"></div></div>
+        </div>
+        <div class="stat-row" style="margin-top:8px">
+          <span class="stat-label">Connection</span>
+          <span class="stat-val" id="st-conn">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Platform</span>
+          <span class="stat-val" id="st-platform">—</span>
+        </div>
+      </div>
+      <div class="c-card">
+        <div class="c-card-title">TLI Host</div>
+        <div class="stat-row">
+          <span class="stat-label">AI Status</span>
+          <span class="stat-val" id="st-ai">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Smart Devices</span>
+          <span class="stat-val" id="st-devcount">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Node</span>
+          <span class="stat-val" id="st-node">—</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Mesh Node ID</span>
+          <span class="stat-val" id="st-satid" style="font-family:monospace;font-size:11px;text-align:right;max-width:180px;overflow:hidden;text-overflow:ellipsis">—</span>
+        </div>
+      </div>
+      <button class="comp-btn danger" id="leave-btn">Leave Mesh</button>
+    </div>
+
+  </div><!-- /panels -->
+
+  <!-- Tab bar -->
+  <div id="tab-bar">
+    <button class="comp-tab active" data-panel="panel-chat" data-label="Ask TLI">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      </span>
+      Chat
+    </button>
+    <button class="comp-tab" data-panel="panel-devices" data-label="Devices">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      </span>
+      Devices
+    </button>
+    <button class="comp-tab" data-panel="panel-scenes" data-label="Scenes">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+      </span>
+      Scenes
+    </button>
+    <button class="comp-tab" data-panel="panel-vault" data-label="Vault">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </span>
+      Vault
+    </button>
+    <button class="comp-tab" data-panel="panel-status" data-label="Status">
+      <span class="comp-tab-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/></svg>
+      </span>
+      Status
+      <span class="tab-badge" id="badge-status"></span>
+    </button>
+  </div>
+
+</div><!-- /shell -->
+<div id="toast"></div>
+
+<script src="/js/companion.js?v=098da12febbb"></script>
+</body>
+</html>

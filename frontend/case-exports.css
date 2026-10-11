@@ -1,0 +1,12 @@
+.case-export-dialog{width:min(70rem,calc(100vw - 2rem));max-height:calc(100dvh - 2rem);padding:clamp(1rem,3vw,2rem);color:var(--text);background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--theme-dialog-radius, 18px);box-sizing:border-box;overflow:auto}
+.case-export-dialog::backdrop{background:rgba(10,20,17,.58)}
+.case-export-header{display:flex;align-items:flex-start;justify-content:space-between;gap:1rem}.case-export-header h2{margin:0}
+.case-export-dialog h3{overflow-wrap:anywhere}.case-export-selection{display:grid;gap:1rem}.case-export-selection fieldset{border:1px solid var(--border);border-radius:var(--theme-card-radius, 12px);min-width:0;padding:1rem}
+.case-export-field{display:flex;flex-direction:column;gap:.45rem;min-width:0;overflow-wrap:anywhere}.case-export-field:has(input[type=checkbox]){flex-direction:row-reverse;justify-content:flex-end;align-items:flex-start;gap:.6rem}
+.case-export-field input[type=checkbox]{flex:0 0 auto;margin-top:.25rem}.case-export-field textarea,.case-export-field select{width:100%;box-sizing:border-box;font:inherit;color:inherit;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--theme-control-radius, 8px);padding:.65rem; box-shadow:var(--theme-control-shadow, none);}
+.case-export-evidence{display:grid;gap:.5rem;padding:.8rem 0;border-bottom:1px solid var(--border)}.case-export-evidence:last-child{border-bottom:0}.case-export-evidence small{line-height:1.5}
+.case-export-warning,.case-export-status{line-height:1.6}.case-export-status.error{color:var(--danger,#b42318)}.case-export-preview{margin-top:1.5rem;display:grid;gap:1rem}.case-export-preview[hidden]{display:none}
+#case-export-output iframe{display:block;width:100%;height:32rem;max-height:70dvh;border:1px solid var(--border);border-radius:12px;background:white;box-sizing:border-box}
+#case-export-output pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:32rem;overflow:auto;font:inherit;line-height:1.65;border:1px solid var(--border);padding:1rem;border-radius:12px}
+.case-export-dialog button{min-height:2.75rem;white-space:normal}.case-export-dialog :focus-visible{outline:2px solid var(--accent,#00856a);outline-offset:3px}
+@media(max-width:420px){.case-export-dialog{width:calc(100vw - 1rem);max-height:calc(100dvh - 1rem);padding:1rem}.case-export-header{flex-wrap:wrap}.case-export-preview>button{width:100%}}

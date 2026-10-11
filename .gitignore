@@ -1,0 +1,105 @@
+# Runtime data
+data/
+
+# Sensitive / confidential
+TLI_Confidential/
+TLI_Confidential.rar
+
+# Distribution archives
+*.zip
+*.rar
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+build_work/
+
+# AI model files
+*.gguf
+*.bin
+*.ggml
+*.safetensors
+*.onnx
+*.pt
+*.pth
+
+# OS
+desktop.ini
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+*.code-workspace
+
+# Runtime logs (regenerated on every run — use `git add -f` to force-track one)
+*.log
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+
+# Dependencies and local tooling
+node_modules/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.wrangler/
+.expo/
+.gradle/
+.claude/settings.local.json
+
+# Local environment and signing credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+credentials.json
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+
+# Generated packages and local verification artifacts
+/TLI_Installer/bundle/
+dist_build/
+/artifacts/
+/TLI.exe
+*.apk
+*.aab
+*.ipa
+*.msi
+*.dmg
+*.7z
+*.tar
+*.tar.gz
+
+# Downloaded inference runtimes (source releases do not vendor binaries)
+/backend/ai/runtime/*
+!/backend/ai/runtime/README.md
+
+# Legacy installations may keep private state outside data/
+/backend/ai/memory/
+/backend/memory/
+/backend/ai/active_model.json
+/backend/devices.json
+/backend/routers/printers_snmp.json
+/backend/tli_model_config.json
+/backend/vault_meta.json
+
+# Local shortcuts and editor backups
+*.lnk
+*.bak
+*.orig
+*.rej

@@ -1,0 +1,462 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "case": {
+    "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+    "title": "Video pauses",
+    "symptom": "Video stutters intermittently.",
+    "status": "open",
+    "archived": false,
+    "steps": [
+      {
+        "id": "skipped",
+        "text": "Update driver",
+        "status": "skipped",
+        "outcome": "Not attempted."
+      },
+      {
+        "id": "tried",
+        "text": "Close browser",
+        "status": "tried",
+        "outcome": "Stutter continued."
+      }
+    ],
+    "resolution": "",
+    "computer": {
+      "id": "node-study-id",
+      "name": "Study"
+    },
+    "evidence": [
+      {
+        "kind": "note",
+        "id": "f-198f218e0d6b4aa3afc4fbb305907a0a",
+        "revision": "d9d6ba4c0f4ec325469bdcd2c866ed6fb56c689bf0eb320a6ca24a7335d0b779",
+        "label": "Cable suggestion",
+        "linked_at": "2026-09-10T04:52:55.743547+00:00",
+        "availability": "unavailable"
+      },
+      {
+        "kind": "report",
+        "id": "report-fixture",
+        "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+        "label": "performance report · 2026-09-01T12:00:00+00:00",
+        "linked_at": "2026-09-10T04:52:55.762914+00:00",
+        "availability": "current"
+      }
+    ],
+    "created_at": "2026-09-10T04:52:55.743547+00:00",
+    "updated_at": "2026-09-10T04:52:55.762914+00:00",
+    "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50"
+  },
+  "request": {
+    "case_ref": {
+      "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+      "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50",
+      "step_ids": [
+        "skipped",
+        "tried"
+      ],
+      "include_resolution": false,
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+        }
+      ],
+      "report_refs": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+        }
+      ]
+    }
+  },
+  "response": {
+    "ok": true,
+    "protocol": "tli-cases-v1",
+    "checked_at": "2026-09-10T04:52:55.800969+00:00",
+    "actions_performed": false,
+    "next_check_protocol": "tli-case-next-check-v1",
+    "case_context": {
+      "schema_version": 1,
+      "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+      "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50",
+      "title": "Video pauses",
+      "updated_at": "2026-09-10T04:52:55.762914+00:00",
+      "computer_id": "node-study-id",
+      "status": "open",
+      "archived": false,
+      "steps": [
+        {
+          "id": "skipped",
+          "status": "skipped"
+        },
+        {
+          "id": "tried",
+          "status": "tried"
+        }
+      ],
+      "omitted_step_count": 0,
+      "resolution_included": false,
+      "evidence_links": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "message_index": null,
+          "label": "performance report · 2026-09-01T12:00:00+00:00",
+          "availability": "current"
+        }
+      ],
+      "omitted_link_count": 1,
+      "linked_bodies_included": false,
+      "actions_performed": false,
+      "included_reports": [
+        {
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "handle": "R1",
+          "host_id": "study-id",
+          "target_id": null,
+          "recorded_at": "2026-09-01T12:00:00+00:00"
+        }
+      ]
+    },
+    "evidence_context": {
+      "version": 1,
+      "interpretation": "backend",
+      "sources": [
+        {
+          "handle": "R1",
+          "kind": "report",
+          "id": "report-fixture",
+          "label": "Saved diagnostic report",
+          "provenance": "recorded_measurement",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "saved_at": null,
+          "observed_at": "2026-09-01T12:00:00+00:00",
+          "host_id": "study-id",
+          "target_id": null,
+          "ranges": []
+        },
+        {
+          "handle": "C1",
+          "kind": "case",
+          "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+          "label": "Video pauses",
+          "provenance": "user_case",
+          "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50",
+          "saved_at": "2026-09-10T04:52:55.762914+00:00",
+          "observed_at": null,
+          "host_id": null,
+          "target_id": "node-study-id",
+          "ranges": []
+        }
+      ],
+      "historical_notes": {
+        "checked": false,
+        "changed": 0,
+        "unavailable": 0
+      },
+      "citations_checked": false,
+      "citations": [],
+      "invalid_citations": 0,
+      "recorded_report": {
+        "version": 1,
+        "report_id": "report-fixture",
+        "kind": "performance",
+        "basis": "saved_report",
+        "host": {
+          "id": "study-id",
+          "name": "Study"
+        },
+        "target": null,
+        "process": {
+          "name": "Render",
+          "pid": 42,
+          "create_time": 1788250000.25
+        },
+        "recorded_at": "2026-09-01T12:00:00+00:00",
+        "started_at": "2026-09-01T12:00:00+00:00",
+        "finished_at": "2026-09-01T12:00:07+00:00",
+        "duration_seconds": 3.0,
+        "requested_duration_seconds": null,
+        "status": "partial",
+        "status_label": "Observation partially completed",
+        "recorded_samples": 3,
+        "expected_samples": 30,
+        "raw_samples_included": 0,
+        "checks": [],
+        "omitted_checks": 0,
+        "measurements": [
+          {
+            "key": "host_cpu_percent",
+            "label": "Host CPU",
+            "scope": "host",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_percent",
+            "label": "Host RAM",
+            "scope": "host",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_used_bytes",
+            "label": "Host RAM used",
+            "scope": "host",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_total_bytes",
+            "label": "Host RAM total",
+            "scope": "host",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "process_cpu_percent",
+            "label": "Selected process CPU (whole host capacity)",
+            "scope": "selected_process",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "process_rss_bytes",
+            "label": "Selected process resident memory",
+            "scope": "selected_process",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          }
+        ],
+        "limitations": [
+          "Saved evidence describes its recorded time, not current computer health.",
+          "Reading this report runs no new check or repair.",
+          "Sampling completion does not establish that the application's task finished or that a repair worked.",
+          "Host CPU and selected-process CPU are different measurements. One process may not represent the whole application.",
+          "These samples do not measure FPS, dropped frames or a causal bottleneck."
+        ]
+      }
+    },
+    "guidance": {
+      "version": 1,
+      "status": "suggested",
+      "selection": {
+        "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+        "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50",
+        "step_ids": [
+          "skipped",
+          "tried"
+        ],
+        "include_resolution": false,
+        "evidence_refs": [
+          {
+            "kind": "report",
+            "id": "report-fixture",
+            "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+          }
+        ],
+        "report_refs": [
+          {
+            "kind": "report",
+            "id": "report-fixture",
+            "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+          }
+        ]
+      },
+      "selection_sha256": "178e9550f9ecc094916ca8b7147be838ec4a7866b3ebe5cd891610ce7356bc1c",
+      "known": [
+        {
+          "id": "symptom",
+          "label": "User-recorded symptom",
+          "text": "Video stutters intermittently.",
+          "source": "C1",
+          "recorded_at": "2026-09-10T04:52:55.762914+00:00"
+        },
+        {
+          "id": "report_scope",
+          "label": "Separately reviewed historical report",
+          "text": "Host: Study; target: study-id. Observation partially completed. Exact recorded values, units and limitations are shown with the report facts.",
+          "source": "R1",
+          "recorded_at": "2026-09-01T12:00:00+00:00"
+        },
+        {
+          "id": "sample_coverage",
+          "label": "Recorded sample coverage",
+          "text": "3 recorded samples; 30 expected. Individual measurement coverage is shown in the report facts.",
+          "source": "R1",
+          "recorded_at": "2026-09-01T12:00:00+00:00"
+        }
+      ],
+      "missing": [
+        {
+          "id": "current_observation",
+          "text": "No new observation was taken for this guidance. Saved facts describe their recorded time, not current health or the cause of this symptom."
+        }
+      ],
+      "steps": [
+        {
+          "id": "skipped",
+          "text": "Update driver",
+          "status": "skipped",
+          "outcome": "Not attempted."
+        },
+        {
+          "id": "tried",
+          "text": "Close browser",
+          "status": "tried",
+          "outcome": "Stutter continued."
+        }
+      ],
+      "limitations": [
+        "This is a rule-based choice of one available observation, not an AI diagnosis or a repair.",
+        "Only the selected whole steps and explicitly selected report facts were used. Other linked bodies, notes and earlier chat were not used.",
+        "Selection coverage: 2 steps included, 0 omitted; 1 link descriptions included, 1 omitted.",
+        "A tried step is a user-recorded attempt. Planned or skipped steps are not recorded as attempted; outcomes do not prove current health."
+      ],
+      "check_options": {
+        "ok": true,
+        "protocol": "tli-guided-checks-v1",
+        "checked_at": "2026-09-10T04:52:55.799150Z",
+        "host": {
+          "id": "study-id",
+          "name": "Study",
+          "node_id": "study-id"
+        },
+        "computer_id": "node-study-id",
+        "options": [
+          {
+            "id": "system",
+            "title": "Check host resources",
+            "detail": "A short CPU and memory sample, plus accessible drive usage. This does not establish the cause of slowness.",
+            "available": true,
+            "reason": "",
+            "kind": "system",
+            "target_id": null,
+            "scope_revision": "d504042425878880b24b212f4bec5c23885e1c8b37ceff5fff3944a12c63309b",
+            "internet": false,
+            "execution_host": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            },
+            "measured_target": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            }
+          },
+          {
+            "id": "network",
+            "title": "Check the host's network",
+            "detail": "Inspect host interfaces and the default route, and try a gateway ping. The phone's own Wi-Fi is not measured.",
+            "available": true,
+            "reason": "",
+            "kind": "network",
+            "target_id": null,
+            "scope_revision": "9111138e57e9a537ae34bc3c53ebfdee76adc9150868da8df65f3b8df86dc1b9",
+            "internet": false,
+            "execution_host": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            },
+            "measured_target": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            },
+            "internet_scope_revision": "87132a8050f90eb97f665013f3e426bc81b8144d217237da8fe07d7074b789b4",
+            "internet_detail": "Optional: contact 1.1.1.1:443 and ask the configured DNS resolver for example.com."
+          },
+          {
+            "id": "performance",
+            "title": "Observe an application",
+            "kind": "performance",
+            "target_id": null,
+            "available": true,
+            "reason": "",
+            "detail": "Open App performance check, choose a process and explicitly start a 30-second observation.",
+            "execution_host": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            },
+            "measured_target": {
+              "id": "study-id",
+              "name": "Study",
+              "node_id": "study-id"
+            },
+            "internet": false,
+            "panel": "panel-games",
+            "desktop_panel": "panel-performance"
+          }
+        ],
+        "actions_performed": false
+      },
+      "suggestion": {
+        "option_id": "system",
+        "rule_id": "resource_observation",
+        "rationale": "The reviewed report already contains host CPU and RAM results, but only for its recorded time. A new observation on the same computer would add a current comparison while the symptom recurs, not repeat or verify a repair. The historical readings alone do not identify a bottleneck. The user-recorded outcome for 'Close browser' is 'Stutter continued.'. This adds evidence without changing that recorded outcome."
+      }
+    }
+  },
+  "diagnostic_request": {
+    "kind": "system",
+    "target_id": null,
+    "internet": false,
+    "expected_host_id": "study-id",
+    "expected_scope": "d504042425878880b24b212f4bec5c23885e1c8b37ceff5fff3944a12c63309b",
+    "request_id": "one-reviewed-observation",
+    "next_check_ref": {
+      "case_ref": {
+        "id": "case-335d038becbf4bfd9f01fdafa07d7049",
+        "revision": "275d5162cf5796d21c85370638e206bd99daa777eaa318e21a5403dcbd8c0b50",
+        "step_ids": [
+          "skipped",
+          "tried"
+        ],
+        "include_resolution": false,
+        "evidence_refs": [
+          {
+            "kind": "report",
+            "id": "report-fixture",
+            "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+          }
+        ],
+        "report_refs": [
+          {
+            "kind": "report",
+            "id": "report-fixture",
+            "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+          }
+        ]
+      },
+      "selection_sha256": "178e9550f9ecc094916ca8b7147be838ec4a7866b3ebe5cd891610ce7356bc1c",
+      "option_id": "system"
+    }
+  }
+}

@@ -1,0 +1,37 @@
+/* Only existing network and specialist surfaces. */
+.network-device-dialog{width:min(680px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;background:var(--bg-panel);color:var(--text-main);border:1px solid var(--border-subtle);border-radius:var(--theme-dialog-radius, 16px);padding:24px}
+.network-device-dialog::backdrop{background:var(--bg-overlay,rgba(0,0,0,.4))}
+.network-dialog-header{display:flex;justify-content:space-between;align-items:center;gap:16px}.network-dialog-header h2{font-size:19px;margin:0; font-family:var(--theme-font-heading, inherit);}
+.network-device-dialog p{color:var(--text-muted);font-size:13px;line-height:1.65}
+.network-device-dialog .sha-add-strip{display:flex;flex-wrap:wrap;gap:10px;margin:20px 0 0;padding:0;border:0;max-width:100%}
+.network-device-dialog input{min-height:44px;min-width:0;max-width:100%;font-size:16px}.network-device-dialog button{min-height:44px}
+.network-device-dialog .sha-add-ip,.network-device-dialog .sha-add-name{flex:1 1 220px}
+#panel-homeauto .page-header{flex-wrap:wrap;gap:12px}
+#panel-mesh .mcd-stale{opacity:.6}#panel-mesh .mcd-last-updated{max-width:480px;line-height:1.5}#panel-mesh .mcd-status-dot[title="Status unavailable"]{background:var(--text-muted)}
+#panel-mesh .mcd-header{flex-wrap:wrap}
+#panel-mesh .mcd-header-left{min-width:0;flex:1 1 220px}
+#panel-mesh .mcd-header-right{flex-wrap:wrap;max-width:100%;min-width:0}
+#panel-mesh .mcd-header-right button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#panel-tli-chat .network-federation{border:1px solid var(--border-subtle);border-radius:var(--theme-card-radius, 12px);margin-top:18px;padding:16px;background:var(--bg-panel)}
+#panel-tli-chat .network-federation>summary{cursor:pointer;font-weight:600;min-height:28px}
+#panel-tli-chat .network-federation>p{font-size:13px;line-height:1.6;color:var(--text-muted)}
+#panel-tli-chat .network-federation .fed-chat-card{box-shadow:none;border:0;padding:0;margin:16px 0 0;min-width:0}
+#panel-tli-chat .network-federation :is(.fed-relay-row,.fed-relay-panel-header,.fed-relay-port-row,.fed-compose){flex-wrap:wrap;min-width:0}
+#panel-tli-chat .network-federation :is(.fed-relay-field,.fed-input-field){flex:1 1 160px;min-width:0;max-width:100%}
+#panel-tli-chat .network-federation .fed-relay-label{flex:1 0 100%}
+#panel-automations .network-automation-review{font-size:13px;line-height:1.65;padding:14px;border-radius:var(--theme-card-radius, 10px);background:var(--accent-soft);color:var(--text-main)}
+#panel-tools #tools-guided-fields{display:grid;gap:12px;margin:14px 0}#panel-tools #tools-guided-fields label{display:grid;gap:7px;font-size:13px}#panel-tools #tools-guided-fields input{min-height:44px;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius, 8px);padding:8px;background:var(--bg-panel);color:var(--text-main); box-shadow:var(--theme-control-shadow, none);}
+#panel-tools #tools-description,#panel-tools #tools-explain-box{font-size:13px;line-height:1.7}#panel-tools #tools-advanced-arguments{margin:16px 0}#panel-tools #tools-advanced-arguments>summary{cursor:pointer;min-height:36px}#panel-tools #tools-advanced-arguments>label{display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0}
+#panel-tools #tools-explain-btn{margin-top:14px;min-height:44px}#panel-tools [data-state=error]{border-left:3px solid var(--danger)}#panel-tools [data-state=warning]{border-left:3px solid var(--warning)}
+#panel-games #go-request-status{font-size:13px;line-height:1.6;color:var(--text-muted)}#panel-games #go-previous-advice{margin-top:18px;border-top:1px solid var(--border-subtle);padding-top:14px}#panel-games #go-previous-advice pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font-family:var(--theme-font-ui, inherit);font-size:13px;line-height:1.65}
+#panel-hub .network-hub-note{font-size:13px;line-height:1.65;color:var(--text-muted);margin:4px 20px 16px}#panel-hub .hub-card-actions{flex-wrap:wrap}
+#panel-hub .hub-tabs{flex-wrap:wrap;overflow:visible;align-items:stretch}#panel-hub .hub-tab{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#panel-hub .hub-tab.active,#panel-hub .hub-install-btn,#panel-hub .hub-pkg-type-badge{color:var(--text-main)}
+#panel-hub .hub-publish-inner>div:has(>#pub-submit){flex-wrap:wrap}#panel-hub .hub-publish-inner>div:has(>#pub-submit)>.hub-settings-note{flex:1 1 220px;overflow-wrap:anywhere}
+#panel-hub .hub-publish-inner .hub-url-field{width:100%;max-width:100%;box-sizing:border-box}
+#panel-hub .hub-publish-inner button{max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#panel-hub :is(input,textarea)::placeholder{color:var(--text-muted);opacity:1}
+#panel-hub .hub-status-bar{opacity:1!important}
+#panel-tools .chip-button{color:var(--text-main)!important}
+#panel-hub .hub-pub-row-info{flex-wrap:wrap;overflow-wrap:anywhere}
+@media(max-width:700px){#panel-automations .auto-row{grid-template-columns:42px minmax(0,1fr) minmax(0,1fr);gap:10px}#panel-automations .auto-row>div{min-width:0;overflow-wrap:anywhere}#panel-tli-chat .network-federation{padding:12px}.network-device-dialog{padding:18px}#panel-tools #tools-guided-fields input{font-size:16px}#panel-games .go-ask-row{flex-wrap:wrap}#panel-games #go-stop-btn{min-height:44px}#panel-hub .hub-grid{grid-template-columns:minmax(0,1fr)}#panel-hub .hub-tabs{gap:4px;padding:10px 12px}#panel-hub .hub-tab{min-height:44px;padding:8px 12px}#panel-hub .hub-publish-form{min-width:0}#panel-hub .hub-publish-inner{min-width:0;max-width:100%}}
