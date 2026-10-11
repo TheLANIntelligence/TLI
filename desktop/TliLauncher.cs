@@ -79,7 +79,9 @@ internal sealed class TliWindow : Form
         onAccent = highContrast ? SystemColors.HighlightText : dark ? Color.FromArgb(16, 23, 23) : Color.White;
         accentHover = highContrast ? SystemColors.Highlight : dark ? Color.FromArgb(138, 233, 198) : Color.FromArgb(6, 98, 71);
         surface = highContrast ? SystemColors.Window : dark ? Color.FromArgb(23, 33, 36) : Color.FromArgb(237, 243, 240);
-        Text = "TLI";
+        var release = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(
+            Assembly.GetExecutingAssembly(), typeof(AssemblyInformationalVersionAttribute));
+        Text = release == null ? "TLI" : "TLI " + release.InformationalVersion;
         ClientSize = new Size(560, 448);
         MinimumSize = new Size(530, 480);
         StartPosition = FormStartPosition.CenterScreen;

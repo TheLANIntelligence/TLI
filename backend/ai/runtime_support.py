@@ -1,5 +1,6 @@
 """Bounded local runtime inspection. Never downloads or replaces a runtime."""
 import os
+import platform
 import re
 import subprocess
 import threading
@@ -9,6 +10,20 @@ from pathlib import Path
 
 _LOCK = threading.Lock()
 FLAGS = ("--jinja", "--chat-template-kwargs", "--reasoning-budget", "--reasoning-format")
+
+
+def select_runtime(directory):
+    """Select this process's macOS architecture, retaining legacy root layouts."""
+    directory = Path(directory)
+    if platform.system() == "Darwin":
+        architecture = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(platform.machine().lower())
+        if architecture:
+            native = directory / f"macos-{architecture}"
+            if native.is_dir():
+                # An incomplete native directory must not select another CPU.
+                return native / "llama-server"
+        return directory / "llama-server"
+    return directory / ("llama_server.exe" if os.name == "nt" else "llama-server")
 
 
 def runtime_info(path):

@@ -154,12 +154,25 @@ def test_reused_request_or_process_identity_rejected_before_worker(isolated):
 
 
 def test_stop_is_request_then_terminal_idempotent_and_keeps_samples(isolated):
+    sampled, release_sample = threading.Event(), threading.Event()
+    class ControlledProbe(FakeProbe):
+        def sample(self):
+            sampled.set()
+            assert release_sample.wait(2), 'Test did not release its synthetic sample'
+            return dict(VALUES)
+    isolated.probe_factory = ControlledProbe
+    # Synchronize with the worker instead of assuming the scheduler records a
+    # sample during a 16 ms sleep. No real sampling or elapsed-time claim here.
+    isolated.clock = lambda: 0.0
     row = start(isolated)
-    time.sleep(.016)
-    stopping = isolated.stop(OWNER, row['id'])
+    try:
+        assert sampled.wait(2), 'Synthetic observation worker did not start'
+        stopping = isolated.stop(OWNER, row['id'])
+    finally:
+        release_sample.set()
     assert stopping['status'] in ('running','stopped')
     result = finished(isolated, row['id'])
-    assert result['status'] == 'stopped' and 0 < result['sample_count'] < 3
+    assert result['status'] == 'stopped' and result['sample_count'] == 1
     assert isolated.stop(OWNER, row['id']) == result
     report = isolated.save(OWNER, row['id'], 'stop-save')
     assert all(check['status'] == 'unavailable' for check in report['checks'])

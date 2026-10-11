@@ -1,209 +1,85 @@
 #!/usr/bin/env bash
-# ============================================================
-#  TLI — Cross-platform launcher (macOS / Linux)
-#  Usage: bash start_tli.sh
-#         ./start_tli.sh  (after chmod +x)
-# ============================================================
+# Source-based macOS/Linux launcher. Dependencies stay in this installation.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 VENV_DIR="$BACKEND_DIR/.venv"
+VENV_PYTHON="$VENV_DIR/bin/python"
+SETUP_ONLY=0
+OPEN_BROWSER="${TLI_OPEN_BROWSER:-1}"
 
-# ── Colours ──────────────────────────────────────────────────
-GRN='\033[0;32m'; CYN='\033[0;36m'; YLW='\033[1;33m'; RED='\033[0;31m'; RST='\033[0m'
+fail() { printf '\nTLI: %s\n' "$*" >&2; exit 1; }
+for argument in "$@"; do
+    case "$argument" in
+        --setup-only) SETUP_ONLY=1 ;;
+        --no-browser) OPEN_BROWSER=0 ;;
+        --help|-h)
+            printf 'Usage: bash TLI_Start.sh [--setup-only] [--no-browser]\n'
+            printf 'Requires Python 3.10+. First setup downloads Python dependencies.\n'
+            exit 0 ;;
+        *) fail "Unknown option: $argument" ;;
+    esac
+done
 
-_on_error() {
-    echo ""
-    echo -e "${RED}  TLI failed to start. See the error above.${RST}"
-    echo "  Common fixes:"
-    echo "    - Python 3.10+ not installed: https://python.org/downloads"
-    echo "    - Address in use: choose a free TLI_PORT and try again"
-    echo ""
-}
-trap '_on_error' ERR
+printf '\nTheLANIntelligence — private AI and connected tools\n\n'
+if [ "$(uname -s)" = "Darwin" ]; then
+    mac_version="$(sw_vers -productVersion)"
+    mac_arch="$(uname -m)"
+    [[ "$mac_version" =~ ^([0-9]+)\.([0-9]+) ]] || fail "Could not determine this Mac's version."
+    mac_major="${BASH_REMATCH[1]}"; mac_minor="${BASH_REMATCH[2]}"
+    case "$mac_arch" in
+        arm64) (( 10#$mac_major >= 14 )) || fail "This release requires macOS 14 or newer on Apple Silicon (found $mac_version)." ;;
+        x86_64) (( 10#$mac_major > 13 || (10#$mac_major == 13 && 10#$mac_minor >= 3) )) || fail "This release requires macOS 13.3 or newer on Intel (found $mac_version)." ;;
+        *) fail "Unsupported Mac architecture: $mac_arch. This release supports Apple Silicon and Intel Macs." ;;
+    esac
+fi
+[ -f "$BACKEND_DIR/main.py" ] && [ -f "$BACKEND_DIR/requirements.txt" ] && \
+    [ -f "$BACKEND_DIR/launch_checks.py" ] && [ -f "$BACKEND_DIR/host_launcher.py" ] || \
+    fail "This folder is incomplete. Extract the complete TLI release into a new folder."
 
-echo ""
-echo -e "${CYN}  ╔══════════════════════════════════════╗${RST}"
-echo -e "${CYN}  ║   TheLANIntelligence                 ║${RST}"
-echo -e "${CYN}  ║   Private AI and connected tools     ║${RST}"
-echo -e "${CYN}  ╚══════════════════════════════════════╝${RST}"
-echo ""
+# Avoid an unrelated Python environment choosing this installation's modules.
+unset PYTHONHOME PYTHONPATH
+export TLI_ROOT="$SCRIPT_DIR"
 
-# ── Auto-install Python if missing ───────────────────────────
-_install_python() {
-    local OS
-    OS="$(uname -s)"
-    echo -e "  ${YLW}Python 3 not found — attempting automatic install…${RST}"
-
-    if [ "$OS" = "Darwin" ]; then
-        # macOS — try Homebrew, then xcode-select
-        if command -v brew &>/dev/null; then
-            echo "  Installing Python via Homebrew…"
-            brew install python3
-        else
-            echo -e "  ${YLW}Homebrew not found. Installing Homebrew first…${RST}"
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            # Reload PATH for Apple Silicon
-            if [ -f /opt/homebrew/bin/brew ]; then
-                eval "$(/opt/homebrew/bin/brew shellenv)"
-            fi
-            brew install python3
+if [ ! -e "$VENV_DIR" ] && [ ! -L "$VENV_DIR" ]; then
+    PYTHON=""
+    # Finder's PATH may omit Homebrew or the python.org framework installation.
+    for candidate in python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 \
+            /Library/Frameworks/Python.framework/Versions/Current/bin/python3 python; do
+        executable="$(command -v "$candidate" 2>/dev/null || true)"
+        if [ -n "$executable" ] && "$executable" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+            PYTHON="$executable"
+            break
         fi
-    elif command -v apt-get &>/dev/null; then
-        echo "  Installing Python via apt-get…"
-        sudo apt-get update -qq && sudo apt-get install -y python3 python3-pip python3-venv
-    elif command -v dnf &>/dev/null; then
-        echo "  Installing Python via dnf…"
-        sudo dnf install -y python3 python3-pip
-    elif command -v pacman &>/dev/null; then
-        echo "  Installing Python via pacman…"
-        sudo pacman -Sy --noconfirm python python-pip
-    elif command -v zypper &>/dev/null; then
-        echo "  Installing Python via zypper…"
-        sudo zypper install -y python3 python3-pip
-    else
-        echo -e "${RED}  Could not auto-install Python. Please install Python 3.10+ from https://python.org${RST}"
-        exit 1
-    fi
-}
-
-# ── Auto-download bundled AI runtime (Mac / Linux) ───────────
-_setup_llama_runtime() {
-    local RUNTIME="$BACKEND_DIR/ai/runtime/llama-server"
-
-    # Already present and executable — nothing to do
-    if [ -f "$RUNTIME" ] && [ -x "$RUNTIME" ]; then
-        return 0
-    fi
-
-    local ARCH OS
-    ARCH="$(uname -m)"
-    OS="$(uname -s)"
-
-    echo ""
-    echo -e "  ${YLW}Bundled AI runtime not found.${RST}"
-    echo "  Without it TLI can't run a local AI model (LM Studio still works)."
-    echo ""
-    read -r -p "  Download AI runtime now? [Y/n] " _dl < /dev/tty
-    _dl="${_dl:-Y}"
-    if [[ "$_dl" =~ ^[Nn] ]]; then
-        echo "  Skipped — configure LM Studio in Settings → AI."
-        return 0
-    fi
-
-    # Pick the right asset name for this platform / arch
-    local ASSET_PAT
-    if [ "$OS" = "Darwin" ]; then
-        [ "$ARCH" = "arm64" ] && ASSET_PAT="macos-arm64" || ASSET_PAT="macos-x64"
-    else
-        ( [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ] ) && \
-            ASSET_PAT="ubuntu-arm64" || ASSET_PAT="ubuntu-x64"
-    fi
-
-    echo -e "  Fetching latest llama.cpp release info (${ARCH})..."
-    local ASSET_URL
-    ASSET_URL=$(curl -fsSL "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest" 2>/dev/null | \
-        $PYTHON -c "
-import json, sys
-data = json.load(sys.stdin)
-pat  = '$ASSET_PAT'
-for a in data.get('assets', []):
-    n = a.get('name', '')
-    if pat in n and (n.endswith('.zip') or n.endswith('.tar.gz')):
-        print(a['browser_download_url'])
-        break
-" 2>/dev/null)
-
-    if [ -z "$ASSET_URL" ]; then
-        echo -e "  ${RED}Could not find a release for ${ASSET_PAT}.${RST}"
-        echo "  Download manually: https://github.com/ggml-org/llama.cpp/releases"
-        echo "  Place 'llama-server' in: $BACKEND_DIR/ai/runtime/"
-        return 1
-    fi
-
-    local TMP_DIR ARCHIVE
-    TMP_DIR="$(mktemp -d)"
-    ARCHIVE="$TMP_DIR/runtime_pkg"
-
-    echo -e "  Downloading $(basename "$ASSET_URL")..."
-    curl -L --progress-bar -o "$ARCHIVE" "$ASSET_URL"
-
-    mkdir -p "$BACKEND_DIR/ai/runtime" "$TMP_DIR/extracted"
-
-    if [[ "$ASSET_URL" == *.zip ]]; then
-        unzip -q -o "$ARCHIVE" -d "$TMP_DIR/extracted" 2>/dev/null
-    else
-        tar -xzf "$ARCHIVE" -C "$TMP_DIR/extracted" 2>/dev/null
-    fi
-
-    local FOUND
-    FOUND="$(find "$TMP_DIR/extracted" -type f -name "llama-server" 2>/dev/null | head -1)"
-
-    if [ -n "$FOUND" ]; then
-        cp "$FOUND" "$RUNTIME"
-        chmod +x "$RUNTIME"
-        echo -e "  ${GRN}AI runtime installed successfully.${RST}"
-    else
-        echo -e "  ${RED}Could not find llama-server in the archive.${RST}"
-        echo "  Download manually: https://github.com/ggml-org/llama.cpp/releases"
-    fi
-
-    rm -rf "$TMP_DIR"
-}
-
-# ── Check Python ─────────────────────────────────────────────
-PYTHON=""
-if command -v python3 &>/dev/null; then
-    PYTHON=python3
-elif command -v python &>/dev/null && python -c "import sys; assert sys.version_info >= (3,8)" 2>/dev/null; then
-    PYTHON=python
+    done
+    [ -n "$PYTHON" ] || fail "Install Python 3.10 or newer from https://www.python.org/downloads/ and open TLI again. No software was installed automatically."
+    printf 'Preparing the Python environment in this TLI folder...\n'
+    "$PYTHON" -m venv "$VENV_DIR" || fail "Python could not create this installation's environment. On Linux, install your distribution's python3-venv package. Existing files were preserved."
 fi
 
-if [ -z "$PYTHON" ]; then
-    _install_python
-    # Re-check after install
-    if command -v python3 &>/dev/null; then
-        PYTHON=python3
-    elif command -v python &>/dev/null; then
-        PYTHON=python
-    else
-        echo -e "${RED}  Python still not found after install attempt. Please install manually.${RST}"
-        exit 1
-    fi
+[ -x "$VENV_PYTHON" ] || fail "The existing backend/.venv is incomplete or belongs to another platform. Keep your data and use a freshly extracted TLI folder; this launcher will not delete the old environment."
+"$VENV_PYTHON" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' || \
+    fail "This installation's environment needs Python 3.10 or newer. Use a new TLI folder with a supported Python installation."
+
+if ! "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies >/dev/null 2>&1; then
+    printf 'Installing this release\047s Python dependencies. Internet access is needed for this step.\n'
+    "$VENV_PYTHON" -m pip --disable-pip-version-check install -r "$BACKEND_DIR/requirements.txt" || \
+        fail "Dependencies could not be installed. Check the error and connection, then reopen TLI. No backend was started."
+    "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies || \
+        fail "Dependencies are not ready. No backend was started."
 fi
 
-PY_VER=$($PYTHON -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-echo -e "  Python $PY_VER detected"
-
-# ── Create venv if missing ────────────────────────────────────
-if [ ! -d "$VENV_DIR" ]; then
-    echo -e "  ${YLW}Creating virtual environment...${RST}"
-    $PYTHON -m venv "$VENV_DIR"
+if [ "$SETUP_ONLY" -eq 1 ]; then
+    printf '\nTLI dependencies are ready. No backend or AI model was started.\n'
+    exit 0
 fi
 
-# Activate venv
-source "$VENV_DIR/bin/activate"
-
-# ── Install / update dependencies ────────────────────────────
-REQ="$BACKEND_DIR/requirements.txt"
-if [ ! -f "$REQ" ]; then
-    # Fallback minimal requirements
-    pip install --quiet fastapi uvicorn requests cryptography python-multipart psutil send2trash
-else
-    pip install --quiet -r "$REQ"
-fi
-
-# ── Download AI runtime if missing ───────────────────────────
-_setup_llama_runtime
-
-# Check the resolved address without stopping an existing server.
-TLI_ROOT="$SCRIPT_DIR" "$PYTHON" "$BACKEND_DIR/launch_checks.py" || exit 1
-
-# ── Launch ───────────────────────────────────────────────────
-echo ""
-echo -e "  ${GRN}Starting TLI with saved settings and explicit environment overrides.${RST}"
-echo "  Press Ctrl+C to stop."
-echo ""
-
+# Check the saved address without terminating or replacing an existing process.
+"$VENV_PYTHON" "$BACKEND_DIR/launch_checks.py" || exit 1
+printf '\nStarting TLI. The browser will use the address printed by the host.\n'
+printf 'Keep this Terminal window open. Press Ctrl+C here to stop TLI.\n'
+printf 'AI model weights are separate: configure a model in TLI or a local provider such as LM Studio.\n\n'
 cd "$BACKEND_DIR"
-TLI_ROOT="$SCRIPT_DIR" TLI_OPEN_BROWSER=1 "$PYTHON" main.py
+export TLI_OPEN_BROWSER="$OPEN_BROWSER"
+exec "$VENV_PYTHON" "$BACKEND_DIR/main.py"

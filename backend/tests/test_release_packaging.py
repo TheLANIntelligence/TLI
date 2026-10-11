@@ -94,6 +94,51 @@ def test_frontend_only_is_explicit_and_contains_no_backend(package_root, capsys)
     assert '"frontend_only": true' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("platform", ["windows", "macos"])
+def test_platform_packages_keep_matching_runtime_and_launchers_only(package_root, platform):
+    for name in (packager.COMMON_ROOT_FILES | set().union(*packager.PLATFORM_ROOT_FILES.values())):
+        (package_root / name).write_text("synthetic release file", encoding="utf-8")
+    for arch in ("macos-arm64", "macos-x64"):
+        base = package_root / "backend/ai/runtime" / arch
+        base.mkdir(parents=True)
+        for name in ("llama-server", "libllama.0.dylib", "LICENSE"):
+            (base / name).write_text("synthetic runtime", encoding="utf-8")
+    (package_root / ".github/workflows").mkdir(parents=True)
+    (package_root / ".github/workflows/build.yml").write_text("developer only")
+    (package_root / "build_mac.sh").write_text("legacy developer script")
+    output = package_root / f"{platform}.zip"
+    packager.build(output, platform=platform)
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+    assert packager.PLATFORM_ROOT_FILES[platform] <= names
+    assert not (packager.PLATFORM_ROOT_FILES['macos' if platform == 'windows' else 'windows'] & names)
+    assert not any(name.startswith((".github/", "scripts/", "desktop/")) for name in names)
+    assert "build_mac.sh" not in names
+    assert "START_HERE.md" in names and "LICENSE" in names
+    if platform == "macos":
+        assert "backend/ai/runtime/macos-arm64/llama-server" in names
+        assert "backend/ai/runtime/macos-x64/libllama.0.dylib" in names
+        assert not any(name.endswith((".exe", ".dll", ".bat", ".ps1")) for name in names)
+    else:
+        assert "backend/ai/runtime/llama_server.exe" in names
+        assert not any("macos-" in name or name.endswith(".dylib") for name in names)
+
+
+def test_platform_package_fails_when_not_prepared(package_root):
+    with pytest.raises(RuntimeError, match="Prepare the platform package"):
+        packager.build(package_root / "not-ready.zip", platform="windows")
+    assert not (package_root / "not-ready.zip").exists()
+
+
+def test_windows_built_shell_scripts_have_unix_line_endings(package_root):
+    (package_root / "TLI_Start.command").write_bytes(b"#!/bin/bash\r\necho TLI\r\n")
+    output = package_root / "portable.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        assert archive.read("TLI_Start.command") == b"#!/bin/bash\necho TLI\n"
+        assert archive.getinfo("TLI_Start.command").external_attr >> 16 & 0o111 == 0o111
+
+
 def test_only_named_public_guides_are_packaged(package_root):
     for name in ["docs/HOST_START.md", "docs/TLI_HOST_START.md", "docs/TLI_SMART_HUB_REFINEMENT.md",
                  "docs/private.md", "docs/nested/HOST_START.md", "docs/credentials.json"]:

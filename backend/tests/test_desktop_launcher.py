@@ -153,6 +153,7 @@ def test_existing_backend_keeps_verified_settings_snapshot_and_opens_no_browser(
 
     monkeypatch.setattr(D.L.startup_config, "resolve", resolve)
     monkeypatch.setattr(D.L, "inspect_backend", inspect)
+    monkeypatch.setattr(D.L, "verify_release", lambda *_args: None)
     monkeypatch.setattr(D.L, "spawn_backend", lambda *args: pytest.fail("An existing backend must be reused."))
     monkeypatch.setattr(D.L.webbrowser, "open", lambda *args: pytest.fail("Only the native UI opens the browser."))
 

@@ -7,6 +7,8 @@ Run from the TLI root directory:
     python build_dist.py                   # produces TLI_dist_<version>.zip
     python build_dist.py --out my_name.zip # custom output name
     python build_dist.py --dry-run         # print file list without writing
+    python build_dist.py --platform windows # prepared Windows launcher/runtime
+    python build_dist.py --platform macos   # Apple Silicon + Intel runtimes
 
 Reads TLI_VERSION from backend/tli_state.py automatically.
 """
@@ -151,7 +153,29 @@ SKIP_ROOT_FILES: set[str] = {
 PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
-                "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md"}
+                "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",
+                "RELEASE_1.4.0_BETA.md"}
+
+PLATFORM_ROOT_FILES = {
+    "windows": {"TLI.exe", "TLI_Start.bat", "TLI_Diagnostics.bat", "TLI_Bootstrap.ps1",
+                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1"},
+    "macos": {"TLI_Start.command", "TLI_Start.sh"},
+}
+COMMON_ROOT_FILES = {"README.md", "START_HERE.md", "LICENSE", "SECURITY.md", "TLI_MANUAL.md"}
+
+
+def _platform_includes(rel: pathlib.Path, platform: str) -> bool:
+    if platform == "all":
+        return True
+    if len(rel.parts) == 1:
+        return rel.name in COMMON_ROOT_FILES | PLATFORM_ROOT_FILES[platform]
+    if rel.parts[0] not in {"backend", "frontend", "docs"}:
+        return False
+    if rel.parts[:3] == ("backend", "ai", "runtime"):
+        if platform == "macos":
+            return len(rel.parts) > 4 and rel.parts[3] in {"macos-arm64", "macos-x64"}
+        return len(rel.parts) == 4 and rel.suffix.lower() != ".dylib"
+    return True
 
 
 def _should_skip(rel: pathlib.Path) -> tuple[bool, str]:
@@ -218,7 +242,11 @@ def _is_linked_path(path: pathlib.Path) -> bool:
 
 
 # ── Main ─────────────────────────────────────────────────────────────
-def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = False) -> None:
+def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = False, platform: str = "all") -> None:
+    if platform not in {"all", "windows", "macos"}:
+        raise ValueError("Unknown distribution platform")
+    if frontend_only and platform != "all":
+        raise ValueError("A platform installation cannot be a frontend-only update")
     version = _read_version()
     print(f"TLI version : {version}")
     print(f"Output      : {out_path}")
@@ -254,11 +282,22 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
                 skip, reason = True, "skip-linked-file"
             if frontend_only and rel.parts[0] != "frontend":
                 skip, reason = True, "frontend-only"
+            if not _platform_includes(rel, platform):
+                skip, reason = True, "other-platform-or-developer-file"
             if skip:
                 skipped.append((rel, reason))
             else:
                 included.append(rel)
     included.sort()
+
+    if platform != "all":
+        required = {"backend/main.py", "backend/requirements.txt", "frontend/index.html",
+                    "START_HERE.md", "LICENSE"} | PLATFORM_ROOT_FILES[platform]
+        required |= ({"backend/ai/runtime/llama_server.exe"} if platform == "windows" else {
+            "backend/ai/runtime/macos-arm64/llama-server", "backend/ai/runtime/macos-x64/llama-server"})
+        missing = required - {rel.as_posix() for rel in included}
+        if missing:
+            raise RuntimeError("Prepare the platform package first; missing: " + ", ".join(sorted(missing)))
 
     print(f"Included    : {len(included)} files")
     print(f"Excluded    : {len(skipped)} files")
@@ -291,10 +330,15 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
         return False
 
     # Write zip
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for rel in included:
             abs_path = ROOT / rel
             data = abs_path.read_bytes()
+            # A Windows checkout may contain CRLF. Finder/bash need portable
+            # Unix line endings even when the Mac ZIP is built on Windows.
+            if rel.suffix.lower() in {".sh", ".command"}:
+                data = data.replace(b"\r\n", b"\n")
             info = zipfile.ZipInfo.from_file(abs_path, rel)
             info.compress_type = zipfile.ZIP_DEFLATED
             if _needs_exec(rel):
@@ -319,6 +363,10 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
     print(f"SHA256 (zip file hash — matches auto_update.py verification):")
     print(f"  {digest}")
     print()
+    if platform != "all":
+        print("Fresh-install package: publish the verified checksum in landing/downloads.json.")
+        print("Do not point the legacy application updater at this platform package.")
+        return
     print("Paste this into your latest.json when you publish the release:")
     print(f'  "version":      "{version}",')
     print(f'  "sha256":       "{digest}",')
@@ -333,6 +381,8 @@ def main():
     parser.add_argument("--out",     metavar="FILE",  help="Output zip path (default: TLI_dist_<version>.zip)")
     parser.add_argument("--dry-run", action="store_true", help="Print file list without writing zip")
     parser.add_argument("--frontend-only", action="store_true", help="Package only frontend files; use only for changes with no backend/dependency requirements")
+    parser.add_argument("--platform", choices=("all", "windows", "macos"), default="all",
+                        help="Package a prepared platform installation; requires its launcher and runtime")
     args = parser.parse_args()
 
     version  = _read_version()
@@ -342,7 +392,7 @@ def main():
     if out_path.exists() and not args.dry_run:
         print(f"Warning: {out_path.name} already exists and will be overwritten.")
 
-    build(out_path, dry_run=args.dry_run, frontend_only=args.frontend_only)
+    build(out_path, dry_run=args.dry_run, frontend_only=args.frontend_only, platform=args.platform)
 
 
 if __name__ == "__main__":

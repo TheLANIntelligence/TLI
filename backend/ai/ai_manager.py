@@ -440,7 +440,8 @@ class BundledAIManager:
             if cls._instance:
                 return cls._instance
             ai_dir = _ai_base_dir()
-            runtime = ai_dir / "runtime" / ("llama_server.exe" if os.name == "nt" else "llama-server")
+            from .runtime_support import select_runtime
+            runtime = select_runtime(ai_dir / "runtime")
             model = _resolve_model_path()
             cfg = BundledAIConfig(ai_dir, runtime, model)
             cls._instance = cls(cfg)

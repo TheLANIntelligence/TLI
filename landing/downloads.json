@@ -1,0 +1,17 @@
+{
+  "version": "1.4.0-beta",
+  "release_date": "2026-10-11",
+  "release_notes_url": "https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.0-beta",
+  "platforms": {
+    "windows": {
+      "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip",
+      "filename": "TLI_1.4.0-beta_Windows.zip",
+      "sha256": "SHA256_WINDOWS_PENDING"
+    },
+    "macos": {
+      "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip",
+      "filename": "TLI_1.4.0-beta_macOS.zip",
+      "sha256": "SHA256_MACOS_PENDING"
+    }
+  }
+}

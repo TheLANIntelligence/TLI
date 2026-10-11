@@ -1,0 +1,348 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-11T21:08:11.979Z",
+  "current_source_fingerprint_sha256": "3caebae5de06257c8f1d08f0d1b6be8ea84314053933fdbb4f275121e47b054a",
+  "current_conditions": "Fresh Microsoft Edge rendering of the actual development frontend, 1440 \u00d7 1000, reduced motion, isolated browser storage, synthetic intercepted services only. No personal files, live models, devices, or network observations. Images resized and WebP encoded only; interface pixels were not retouched.",
+  "historical_conditions": "Preserved inert reconstructions of the earliest retained repository snapshot (May 3, 2026, v1.3.5-beta), using example content. Historical application scripts were not executed. The historical date is not an assertion of the project creation date.",
+  "historical_commit": "ff6c4e51a2b8476b1100a89fd964a4413b248afa",
+  "historical_commit_date": "2026-05-03T14:13:09-04:00",
+  "source_evidence": "frontend/history/provenance.json; build_work/site-launch/product-capture-report.json",
+  "assets": [
+    {
+      "name": "ask-pacific",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "pacific",
+      "source": "build_work/site-launch/product-originals/ask-pacific.png",
+      "source_sha256": "7c349259162bc85741d91c57c349bb29a77f9a3165e9b0aba1004324e5536c49",
+      "variants": [
+        {
+          "file": "ask-pacific.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 41102,
+          "sha256": "4c49f11b747ea2d00e2fd0b119ef29b90c08c47a753737bc736ec1b47364d916"
+        },
+        {
+          "file": "ask-pacific-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 21688,
+          "sha256": "1be2d5a119dc83443094a91dbd989abf5b68130cd66a41459757ebd9a2111f1b"
+        }
+      ]
+    },
+    {
+      "name": "ask-emerald-light",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "emeraldLight",
+      "source": "build_work/site-launch/product-originals/ask-emerald-light.png",
+      "source_sha256": "9ed185ff9dec30259da0bb0376db902470248c69f1262edc8c359aba7df39221",
+      "variants": [
+        {
+          "file": "ask-emerald-light.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 40440,
+          "sha256": "835c4c4679a20a4c814ffc136441bfb3c57989c4180293505391409a4fcbda4a"
+        },
+        {
+          "file": "ask-emerald-light-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 21192,
+          "sha256": "3fab82fc715e18f9916501216ac4f1e6b310426ffe6920e9f849bd327f924ac2"
+        }
+      ]
+    },
+    {
+      "name": "ask-midnight",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "midnight",
+      "source": "build_work/site-launch/product-originals/ask-midnight.png",
+      "source_sha256": "cb85df438cb49b8511bce4c11d08dcda7b43e5dd23cd173c011863270d77933b",
+      "variants": [
+        {
+          "file": "ask-midnight.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 40224,
+          "sha256": "b07c6ab4471e24964be24be174e4d8b306d49f3521c645dd63f19ec5cb68964f"
+        },
+        {
+          "file": "ask-midnight-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 21782,
+          "sha256": "dd45490501793b42a44a35cfd18459bb060cdc3bb7892adf1b3310ab1c2ffd25"
+        }
+      ]
+    },
+    {
+      "name": "ask-oled",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "oled",
+      "source": "build_work/site-launch/product-originals/ask-oled.png",
+      "source_sha256": "b943fbda3ba93e3a29fcd7d04f0b3eb58cc13cba8e766d60515b4f6f4daba081",
+      "variants": [
+        {
+          "file": "ask-oled.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 41250,
+          "sha256": "92b100ed7ac63511422d5daf86cc9764659e43f9b6ff4b546507bcc992acc36e"
+        },
+        {
+          "file": "ask-oled-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 21960,
+          "sha256": "a722c8129e5960e5afb03a039d5595291ca8c2ab248f21ecfad1371a25728637"
+        }
+      ]
+    },
+    {
+      "name": "ask-copper",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "copper",
+      "source": "build_work/site-launch/product-originals/ask-copper.png",
+      "source_sha256": "40df0cf2dab05992450ae7c12fccf145e74d6a20ec43a2f1548c22c5eaae249c",
+      "variants": [
+        {
+          "file": "ask-copper.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 41444,
+          "sha256": "824a72ad2c04390ef744295f815e606d1b9982daa052a59476a152887a46577c"
+        },
+        {
+          "file": "ask-copper-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 22234,
+          "sha256": "3063f9ebec95f3fc45417c7033221c5410ef7cf1031c9a94401e6adf99658644"
+        }
+      ]
+    },
+    {
+      "name": "ask-rose-quartz",
+      "edition": "development",
+      "panel": "panel-main",
+      "theme": "roseQuartz",
+      "source": "build_work/site-launch/product-originals/ask-rose-quartz.png",
+      "source_sha256": "9828599ee9afcf67c052a8e77cb16f71ae892d5cd0bf218cdb8c444904654b66",
+      "variants": [
+        {
+          "file": "ask-rose-quartz.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 40662,
+          "sha256": "95f2738241c5853dccd9941af8c5a1c92e8ef9edf2892e3186037542f4822ef0"
+        },
+        {
+          "file": "ask-rose-quartz-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 21334,
+          "sha256": "489cd62ce11ce8a1f8d269749ccb195d1cbe0e430162e0d9446ddde389c2e7ba"
+        }
+      ]
+    },
+    {
+      "name": "now-dashboard",
+      "edition": "development",
+      "panel": "panel-dashboard2",
+      "theme": "pacific",
+      "source": "build_work/site-launch/product-originals/now-dashboard.png",
+      "source_sha256": "8cb0caa376c6d6f33fce1f57e1a0ebd46bb57cc8ee945a3f65b22bfcabae5a8d",
+      "variants": [
+        {
+          "file": "now-dashboard.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 77486,
+          "sha256": "96b056f23fede570fdfbf724b7fb5a0bef58e1d67ae282fa85a1f2308c636f0e"
+        },
+        {
+          "file": "now-dashboard-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 38082,
+          "sha256": "586ea48b1d611566d3c3f73360691da6efbb4fcea4b9c13b342125950754f40d"
+        }
+      ]
+    },
+    {
+      "name": "now-vault",
+      "edition": "development",
+      "panel": "panel-vault",
+      "theme": "pacific",
+      "source": "build_work/site-launch/product-originals/now-vault.png",
+      "source_sha256": "3499db6eeb40b901fedc3d57f9da17afb61ce79f778f733d56f21335649faf89",
+      "variants": [
+        {
+          "file": "now-vault.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 62598,
+          "sha256": "7a0c418f238e8d52a885454c5dd5c34a794bfaf544aef1dfc1e4d935b00517b0"
+        },
+        {
+          "file": "now-vault-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 31370,
+          "sha256": "0130f6fd7fd728b85410374091553c9ec37f671aa78eee3bb888a9f4ab2b6b81"
+        }
+      ]
+    },
+    {
+      "name": "now-files",
+      "edition": "development",
+      "panel": "panel-files",
+      "theme": "pacific",
+      "source": "build_work/site-launch/product-originals/now-files.png",
+      "source_sha256": "f4912b48e13a88381c783bf38dd4ca93cff63919136933d9661e09bfd61eca81",
+      "variants": [
+        {
+          "file": "now-files.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 53818,
+          "sha256": "2cd066bf6c25102b8e47f4347897038bc045bb3895b00b0b2457e6073bea3137"
+        },
+        {
+          "file": "now-files-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 25990,
+          "sha256": "d49eedad9125ddcfc2d023913ebd0a819aeed6dfc451d29ba63d0e94a33f6618"
+        }
+      ]
+    },
+    {
+      "name": "now-computers",
+      "edition": "development",
+      "panel": "panel-mesh",
+      "theme": "pacific",
+      "source": "build_work/site-launch/product-originals/now-computers.png",
+      "source_sha256": "7b81f8889c3b42e14d8312eadbd741032d622d995c4c1e2a73d2f87ff99a3bf0",
+      "variants": [
+        {
+          "file": "now-computers.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 64356,
+          "sha256": "bfb05c6169704e3c4d1e87a5a2d72e1984d66f8c0028f8a589bf1a8dbe20f667"
+        },
+        {
+          "file": "now-computers-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 32176,
+          "sha256": "b9e133d9a3b13edc262b54825c7baaf6c1b6350e18abcfc99571d783fe3f78fb"
+        }
+      ]
+    },
+    {
+      "name": "early-chat",
+      "edition": "historical",
+      "panel": "chat",
+      "theme": null,
+      "source": "frontend/history/early-chat.png",
+      "source_sha256": "66fc66ccbcad10fee40a09fefcb868cad4cd374cc00b80cf72f46fdbc223c710",
+      "variants": [
+        {
+          "file": "early-chat.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 52422,
+          "sha256": "45a7d5313e7bc62b87f51da114282055936d6b6ef93f8770da2aedeed7aa06d3"
+        },
+        {
+          "file": "early-chat-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 23954,
+          "sha256": "af81dff5dd96a44fc434d5794c0a5e3e5e9e8dc1ac14ee34d595c3233e862b2f"
+        }
+      ]
+    },
+    {
+      "name": "early-dashboard",
+      "edition": "historical",
+      "panel": "dashboard",
+      "theme": null,
+      "source": "frontend/history/early-dashboard.png",
+      "source_sha256": "55b9225c33e8aec5ee6c770f1e193e41818825acdef818bd0fe7a2a8d4c9c5ce",
+      "variants": [
+        {
+          "file": "early-dashboard.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 36424,
+          "sha256": "d12c37c24cf4dd19a189991b89f6d25e6bee036aee5b5a461f2a3d20bc6ca1ff"
+        },
+        {
+          "file": "early-dashboard-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 16650,
+          "sha256": "6cc1a583f2ccdbaf580e1ec525b79bad68c34b1ec93e2bb1fbd96706a77b7583"
+        }
+      ]
+    },
+    {
+      "name": "early-vault",
+      "edition": "historical",
+      "panel": "vault",
+      "theme": null,
+      "source": "frontend/history/early-vault.png",
+      "source_sha256": "c32ce46030e8457c59479c81bb1c5ce2fa2dbdd6ba7e69e34dc25872fcc5663f",
+      "variants": [
+        {
+          "file": "early-vault.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 15780,
+          "sha256": "2bf3a4551f1c00c635cdb87172d25b5a5411c94b77f83cd51d4b58937a0adc87"
+        },
+        {
+          "file": "early-vault-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 7586,
+          "sha256": "f0b550613a8b386010af76957df20a66f4dfa0ba688307318a54b14bc6270944"
+        }
+      ]
+    },
+    {
+      "name": "early-files",
+      "edition": "historical",
+      "panel": "files",
+      "theme": null,
+      "source": "frontend/history/early-files.png",
+      "source_sha256": "8a50ab82506a27a206a0898252d7f0134f62f08bc69ef5e8514ffcbdc15fb77b",
+      "variants": [
+        {
+          "file": "early-files.webp",
+          "width": 1440,
+          "height": 1000,
+          "bytes": 52962,
+          "sha256": "afc685b79705b01486bf2ece31a47f0733c86d802cfbc00055c52b15342ac568"
+        },
+        {
+          "file": "early-files-960.webp",
+          "width": 960,
+          "height": 667,
+          "bytes": 24802,
+          "sha256": "60396eba44979d632e8b152731e7f4571f33a6090217ded84d69e7686742d660"
+        }
+      ]
+    }
+  ]
+}

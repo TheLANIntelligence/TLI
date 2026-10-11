@@ -1,10 +1,12 @@
+param([string]$PythonEnvironment = '')
 $ErrorActionPreference = 'Stop'
 $tliRepo = Split-Path -Parent $PSScriptRoot
+if (!$PythonEnvironment) { $PythonEnvironment = Join-Path $tliRepo 'backend\.venv' }
 $tliQa = Join-Path $tliRepo 'build_work\launcher-qa'
 $tliFixture = Join-Path $tliQa 'Synthetic TLI & app'
 New-Item -ItemType Directory -Force (Join-Path $tliFixture 'backend\.venv\Scripts'), (Join-Path $tliFixture 'frontend') | Out-Null
-Copy-Item -LiteralPath (Join-Path $tliRepo 'backend\.venv\Scripts\python.exe') -Destination (Join-Path $tliFixture 'backend\.venv\Scripts\python.exe')
-Copy-Item -LiteralPath (Join-Path $tliRepo 'backend\.venv\pyvenv.cfg') -Destination (Join-Path $tliFixture 'backend\.venv\pyvenv.cfg')
+Copy-Item -LiteralPath (Join-Path $PythonEnvironment 'Scripts\python.exe') -Destination (Join-Path $tliFixture 'backend\.venv\Scripts\python.exe')
+Copy-Item -LiteralPath (Join-Path $PythonEnvironment 'pyvenv.cfg') -Destination (Join-Path $tliFixture 'backend\.venv\pyvenv.cfg')
 Copy-Item -LiteralPath (Join-Path $tliRepo 'frontend\tli-icon-192.png') -Destination (Join-Path $tliFixture 'frontend\tli-icon-192.png')
 $tliCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (!(Test-Path -LiteralPath $tliCompiler)) { $tliCompiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }

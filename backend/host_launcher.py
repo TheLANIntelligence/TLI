@@ -18,6 +18,7 @@ import webbrowser
 
 import host_control as H
 import startup_config
+from process_utils import hidden_process_kwargs
 
 
 def _loopback(settings):
@@ -121,6 +122,39 @@ def inspect_backend(root, settings):
         return "running", "The running backend proved this installation's identity. Refresh the TLI connection for current readiness."
     except Exception:
         return "unavailable", "The saved port is occupied, but this TLI installation could not be verified. No process was stopped or replaced."
+    finally:
+        if connection:
+            connection.close()
+
+
+def verify_release(root, settings):
+    """Do not open a process that still serves application code from before an update."""
+    from release_identity import ReleaseIdentity
+    expected = ReleaseIdentity(Path(root)).loaded
+    connection = None
+    try:
+        if expected is None:
+            raise ValueError("Local application identity is unavailable")
+        if settings["https"]:
+            context = ssl.create_default_context(cafile=str(Path(root) / "data/tls/cert.pem"))
+            connection = http.client.HTTPSConnection("localhost", settings["port"], context=context, timeout=5)
+        else:
+            connection = http.client.HTTPConnection(_loopback(settings), settings["port"], timeout=5)
+        connection.request("GET", "/api/diagnostics/version",
+                           headers={"Accept": "application/json", "Connection": "close"})
+        response = connection.getresponse()
+        raw = response.read(65537)
+        if response.status != 200 or len(raw) > 65536:
+            raise ValueError("Release identity response unavailable")
+        release = json.loads(raw)["release"]
+        if (release.get("compatibility", {}).get("state") != "matched"
+                or release.get("source_id") != expected["source_id"]
+                or release.get("on_disk", {}).get("source_id") != expected["source_id"]):
+            raise ValueError("Running application does not match this release")
+    except Exception:
+        H._fail("The running TLI has not confirmed this release's application files. "
+                "Finish active work and use Restart TLI in the existing local app, or Stop TLI in local setup, "
+                "then open this release again. No process was stopped or replaced.", 409)
     finally:
         if connection:
             connection.close()
@@ -237,9 +271,40 @@ def spawn_backend(root, settings):
     return spawn_fixed(root, "main.py", settings=settings)
 
 
+def check_packaged_runtime(root):
+    """Probe a prepared Windows runtime without a model or automatic installation."""
+    runtime = Path(root) / "backend/ai/runtime/llama_server.exe"
+    if sys.platform != "win32" or not runtime.exists():
+        return  # Source installations and external AI providers need no bundled runtime.
+    message = (
+        "The packaged local AI runtime could not start. Windows may need the Microsoft Visual C++ v14 "
+        "Redistributable (x64). Install or repair the x64 package from Microsoft's official page: "
+        "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/ . "
+        "Then reopen TLI or run TLI_Diagnostics.bat to retry. If it still fails, extract the complete "
+        "release into a new folder. TLI did not install system software or start a backend."
+    )
+    previous_error_mode = None
+    try:
+        if os.name == "nt":
+            import ctypes
+            # Child processes inherit this mode, preventing missing-DLL crash dialogs.
+            previous_error_mode = ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
+        result = subprocess.run([str(runtime), "--version"], cwd=str(runtime.parent),
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                timeout=5, check=False, **hidden_process_kwargs())
+        if result.returncode != 0:
+            H._fail(message, 503)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise H.HostControlError(503, message) from error
+    finally:
+        if previous_error_mode is not None:
+            ctypes.windll.kernel32.SetErrorMode(previous_error_mode)
+
+
 def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings=None):
     root = H.root_path(root)
     report = progress or (lambda message: None)
+    check_packaged_runtime(root)
     report("Checking whether TLI is already running...")
     child = None
     with H.FileLock(H.path_for(root, "launch.lock")):
@@ -275,6 +340,8 @@ def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings
                 "it will reuse the existing process. See " + str(H.path_for(root, "backend.log")) + ".", 503)
         H._fail("TLI has not confirmed readiness. See " + str(H.path_for(root, "backend.log"))
                 + "; no second process was started.", 503)
+    report("Verifying this release before opening TLI...")
+    verify_release(root, settings)
     url = startup_config.browser_url(settings)
     report("TLI is ready at " + url)
     if open_browser:
@@ -368,11 +435,19 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check-dependencies", action="store_true")
+    parser.add_argument("--check-runtime", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent  # fixed code installation; ignore inherited TLI_ROOT
     if args.check_dependencies:
         raise SystemExit(0 if dependencies_ready(root) else 1)
+    if args.check_runtime:
+        try:
+            check_packaged_runtime(root)
+        except H.HostControlError as error:
+            print(error.detail, file=sys.stderr, flush=True)
+            raise SystemExit(1)
+        return
     try:
         launch(root, open_browser=not args.no_browser, progress=lambda message: print(message, flush=True))
     except Exception as error:

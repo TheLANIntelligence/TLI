@@ -14,7 +14,7 @@ function fixture({ response = { data: { enabled: true } }, unlocked = false } = 
     const n = { textContent: '', value: '', style: {}, attrs: {}, hidden: false, disabled: false, handlers: {},
       setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; },
       addEventListener(event, fn) { (this.handlers[event] ||= []).push(fn); }, fire(event, data = {}) { return Promise.all((this.handlers[event] || []).map(fn => fn(data))); },
-      click() { return this.disabled ? Promise.resolve() : this.fire('click'); }, focus() {}, after(n) { this.afterNode = n; },
+      click() { return this.disabled ? Promise.resolve() : this.fire('click'); }, focus() {}, after(n) { this.afterNode = n; }, remove() { this.removed = true; },
       classList: { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) },
       querySelector: () => nodes['recovery-copy'],
     };
@@ -23,7 +23,7 @@ function fixture({ response = { data: { enabled: true } }, unlocked = false } = 
   for (const id of ['tli-lock-screen', 'tli-lock-input', 'tli-lock-error', 'tli-lock-btn', 'tli-lock-submit', 'tli-lock-forgot', 'tli-lock-reset-panel', 'tli-lock-reset-confirm-btn', 'tli-lock-reset-cancel-btn', 'recovery-copy', 'settings-pin-status-desc', 'settings-pin-action-label', 'settings-pin-current', 'settings-pin-save', 'settings-pin-remove', 'settings-pin-callout']) nodes[id] = element();
   const ctx = vm.createContext({ console, setTimeout() {},
     CustomEvent: class { constructor(type) { this.type = type; } },
-    document: { body: { style: {} }, getElementById: id => nodes[id] || null, createElement: element, addEventListener: (event, fn) => (docEvents[event] ||= []).push(fn) },
+    document: { body: { style: {} }, getElementById: id => nodes[id] || null, querySelectorAll: selector => selector === '.tli-pin-nudge' && nodes.nudge ? [nodes.nudge] : [], createElement: element, addEventListener: (event, fn) => (docEvents[event] ||= []).push(fn) },
     sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     localStorage: { getItem: () => 'dismissed', removeItem() {} },
     window: { addEventListener: (event, fn) => (events[event] ||= []).push(fn), dispatchEvent: event => { for (const fn of events[event.type] || []) fn(event); } },
@@ -244,4 +244,73 @@ test('Settings never presents missing or unavailable PIN status as a fresh setup
     assert.equal(f.nodes['settings-pin-save'].disabled, true); assert.equal(f.nodes['settings-pin-remove'].disabled, true); assert.equal(f.nodes['settings-pin-callout'].style.display, 'none'); assert.equal(f.locked(), true);
     f.handler(async () => ({ data: { enabled: true } })); await f.ctx._refreshPinUI(); assert.equal(f.nodes['settings-pin-save'].disabled, false); assert.match(f.nodes['settings-pin-status-desc'].textContent, /PIN is set/);
   }
+});
+
+test('setup verification confirms the supplied PIN and removes the obsolete PIN nudge', async () => {
+  const f = fixture({ response: { data: { enabled: false } } }); await f.init();
+  f.nodes.nudge = f.ctx.document.createElement('aside');
+  f.nodes['tli-lock-input'].value = 'unrelated lock-screen input';
+  let resumed = 0; f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+  f.handler(async () => ({ data: { ok: true } }));
+  assert.equal(await f.ctx.window.TLIPinLock.verifyForSetup('new saved PIN'), true);
+  const call = f.calls.find(c => c.url === '/system/pin/verify');
+  assert.deepEqual(JSON.parse(call.options.body), { pin: 'new saved PIN' });
+  assert.equal(call.options.credentials, 'same-origin');
+  assert.equal(f.storage.get('tli_session_unlocked'), '1');
+  assert.equal(f.locked(), false); assert.equal(resumed, 1);
+  assert.equal(f.nodes.nudge.removed, true);
+  assert.equal(f.nodes['tli-lock-submit'].disabled, false);
+});
+
+test('unconfirmed or incorrect setup PIN stays in setup without granting access', async () => {
+  for (const response of [{ data: { ok: false } }, { data: {} }, { invalidJSON: true }, { status: 403, data: { detail: 'Incorrect PIN.' } }]) {
+    const f = fixture({ response: { data: { enabled: false } } }); await f.init();
+    let resumed = 0; f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+    f.handler(async () => response);
+    await assert.rejects(f.ctx.window.TLIPinLock.verifyForSetup('1234'), /PIN/);
+    assert.equal(f.storage.has('tli_session_unlocked'), false);
+    assert.equal(f.locked(), false, 'An ordinary setup verification failure belongs in onboarding');
+    assert.equal(resumed, 0); assert.equal(f.nodes['tli-lock-submit'].disabled, false);
+  }
+});
+
+test('setup verification retains security-state errors and opens access recovery', async () => {
+  const f = fixture({ response: { data: { enabled: false } } }); await f.init();
+  f.handler(async () => ({ status: 503, data: { detail: 'Saved PIN files unavailable; preserve the installation.' } }));
+  await assert.rejects(f.ctx.window.TLIPinLock.verifyForSetup('1234'), /preserve the installation/);
+  assert.equal(f.locked(), true); assert.equal(f.storage.has('tli_session_unlocked'), false);
+  assert.match(f.nodes['tli-lock-error'].textContent, /preserve the installation/);
+});
+
+test('manual lock cancels setup verification and waits for its cookie before revoking access', async () => {
+  const f = fixture({ response: { data: { enabled: false } } }); await f.init();
+  let finishVerification, resumed = 0;
+  f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+  f.handler(url => url === '/system/pin/verify' ? new Promise(resolve => { finishVerification = resolve; })
+    : url === '/system/pin/lock' ? { data: { ok: true, locked: true } } : { data: { enabled: true } });
+  const verification = f.ctx.window.TLIPinLock.verifyForSetup('1234');
+  const rejected = assert.rejects(verification, /cancelled.*locked/);
+  await assert.rejects(f.ctx.window.TLIPinLock.verifyForSetup('1234'), /in progress/);
+  const locking = f.ctx.window.TLIPinLock.lock();
+  assert.equal(f.calls.filter(c => c.url === '/system/pin/lock').length, 0);
+  assert.equal(f.nodes['tli-lock-submit'].disabled, true);
+  finishVerification({ data: { ok: true } });
+  await Promise.all([rejected, locking]);
+  assert.equal(f.calls.filter(c => c.url === '/system/pin/verify').length, 1);
+  assert.equal(f.calls.filter(c => c.url === '/system/pin/lock').length, 1);
+  assert.equal(f.storage.has('tli_session_unlocked'), false); assert.equal(f.locked(), true);
+  assert.equal(resumed, 0); assert.equal(f.nodes['tli-lock-submit'].disabled, false);
+});
+
+test('background rejection does not override an explicit setup PIN verification', async () => {
+  const f = fixture({ response: { data: { enabled: false } } }); installInterceptor(f); await f.init();
+  let finishVerification;
+  f.handler(url => url === '/system/pin/verify' ? new Promise(resolve => { finishVerification = resolve; })
+    : url === '/status' ? { status: 401, data: {} } : { data: { enabled: true } });
+  const verification = f.ctx.window.TLIPinLock.verifyForSetup('1234');
+  await f.ctx.window.fetch('/status');
+  assert.equal(f.locked(), true);
+  finishVerification({ data: { ok: true } });
+  assert.equal(await verification, true);
+  assert.equal(f.locked(), false); assert.equal(f.storage.get('tli_session_unlocked'), '1');
 });

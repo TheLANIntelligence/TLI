@@ -1,0 +1,95 @@
+name: Desktop packages
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package and verify (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows
+            runner: windows-latest
+            label: Windows
+          - platform: macos
+            runner: macos-15
+            label: macOS
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+      TLI_OPEN_BROWSER: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install verification dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
+      - name: Prepare hash-verified inference runtime
+        run: python scripts/prepare_desktop_runtime.py --platform ${{ matrix.platform }}
+      - name: Build Windows launcher
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: ./build_launcher.ps1
+      - name: Build platform ZIP
+        run: python build_dist.py --platform ${{ matrix.platform }} --out build_work/packages/TLI_1.4.0-beta_${{ matrix.label }}.zip
+      - name: Verify extracted installation and native runtime
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.0-beta_${{ matrix.label }}.zip --platform ${{ matrix.platform }} --expected-version 1.4.0-beta --output-dir build_work/package-verification --check-setup
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: build_work/packages/*.zip
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: verification-${{ matrix.platform }}
+          path: build_work/package-verification/**/report.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  macos-intel:
+    name: Verify same macOS ZIP (Intel)
+    needs: package
+    runs-on: macos-15-intel
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+      TLI_OPEN_BROWSER: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+      - name: Install verification dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: desktop-macos
+          path: build_work/packages
+      - name: Verify extracted installation and Intel runtime
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.0-beta_macOS.zip --platform macos --expected-version 1.4.0-beta --output-dir build_work/package-verification --check-setup
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: verification-macos-intel
+          path: build_work/package-verification/**/report.json
+          if-no-files-found: warn
+          retention-days: 30
