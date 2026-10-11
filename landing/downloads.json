@@ -6,12 +6,12 @@
     "windows": {
       "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip",
       "filename": "TLI_1.4.0-beta_Windows.zip",
-      "sha256": "SHA256_WINDOWS_PENDING"
+      "sha256": "b55d2bc8e1362d46ea5be4069b5ff7e0355081b211dc64e2ffb5ece83b666e75"
     },
     "macos": {
       "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip",
       "filename": "TLI_1.4.0-beta_macOS.zip",
-      "sha256": "SHA256_MACOS_PENDING"
+      "sha256": "3fc0f206e7fa04da2099e4460c4de74cc8252b0aacfc9d7b6d7fc8b8f333a636"
     }
   }
 }
