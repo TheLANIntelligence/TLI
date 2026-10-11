@@ -1,0 +1,41 @@
+/* Header summaries replace the spacious dashboard cards in the premium UI. */
+.premium-status-bar[hidden] { display:none!important; }
+html[data-experience='premium'] body[data-header-status-ready] #panel-dashboard2 :is(.dashboard-health-heading,.nd-vitals) { display:none; }
+html[data-experience='premium'] body[data-tli-ui] .main-region > header { display:grid; grid-template-columns:minmax(0,1fr) auto auto; row-gap:6px; }
+html[data-experience='premium'] body[data-tli-ui] .header-left { grid-column:1; grid-row:1; }
+html[data-experience='premium'] body[data-tli-ui] .header-right { grid-column:3; grid-row:1; }
+.premium-status-bar { grid-column:2; grid-row:1; }
+.premium-status-bar { display:flex; gap:6px; flex:0 1 auto; min-width:0; }
+body[data-tli-ui] .premium-status-chip { display:flex; align-items:center; gap:7px; min-width:0; min-height:34px; padding:7px 12px; border:1px solid transparent; border-radius:24px; background:var(--bg-main); color:var(--text-muted); font:inherit; font-size:11px; line-height:1.4; cursor:pointer; }
+.premium-status-chip > span:last-child { min-width:0; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.premium-status-chip .ui-icon { width:16px; height:16px; flex-shrink:0; }
+body[data-tli-ui] .premium-status-chip[data-tone='critical'] { color:var(--danger); border-color:var(--danger); }
+body[data-tli-ui] .premium-status-chip[data-tone='warning'] { color:var(--warning); border-color:var(--warning); }
+body[data-tli-ui] .premium-status-chip:hover { background:var(--bg-elevated); border-color:var(--accent); }
+body[data-tli-ui] .premium-status-chip:focus-visible, .premium-status-dialog button:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.premium-status-dialog { position:fixed; inset:var(--status-top,84px) 24px auto auto; width:min(420px,calc(100vw - 24px)); max-height:calc(100dvh - var(--status-top,84px) - 16px); overflow:auto; box-sizing:border-box; margin:0; padding:22px; border:1px solid var(--border-strong); border-radius:14px; color:var(--text-main); background:var(--bg-panel); box-shadow:var(--ui-shadow); font-family:var(--font-ui); }
+.premium-status-dialog::backdrop { background:transparent; }
+.premium-status-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.premium-status-heading h2 { font-size:18px; line-height:1.4; margin:0; letter-spacing:-.025em; }
+.premium-status-close { min-height:44px; padding:8px 12px; border:1px solid var(--border-subtle); border-radius:8px; font:inherit; font-size:12px; color:var(--text-muted); background:var(--bg-panel); cursor:pointer; }
+.premium-status-description { color:var(--text-muted); font-size:13px; line-height:1.7; margin:12px 0 18px; overflow-wrap:anywhere; }
+.premium-status-dialog[data-tone='critical'] .premium-status-description { color:var(--danger); }
+.premium-status-facts { margin:0 0 22px; font-size:13px; line-height:1.65; }
+.premium-status-facts > div { display:grid; grid-template-columns:minmax(80px,.85fr) minmax(0,1.3fr); gap:8px; padding:10px 0; border-bottom:1px solid var(--border-subtle); }
+.premium-status-facts dt { color:var(--text-muted); }
+.premium-status-facts dd { margin:0; overflow-wrap:anywhere; }
+.premium-status-dialog > .btn-primary { min-height:44px; padding:10px 14px; border-radius:8px; font:inherit; font-size:13px; }
+@media(max-width:1250px) {
+  html[data-experience='premium'] body[data-tli-ui] .main-region > header { grid-template-columns:minmax(0,1fr) auto; }
+  html[data-experience='premium'] body[data-tli-ui] .header-right { grid-column:2; }
+  .premium-status-bar { grid-column:1/-1; grid-row:2; padding-top:3px; }
+  body[data-tli-ui] .premium-status-chip { min-height:36px; }
+}
+@media(max-width:768px) {
+  html[data-experience='premium'] body[data-tli-ui] .main-region > header .header-right { display:flex; gap:2px; }
+  .premium-status-bar { gap:5px; }
+  body[data-tli-ui] .premium-status-chip { flex:1 1 0; min-height:44px; border-radius:10px; font-size:11px; padding:8px 7px; gap:5px; }
+  .premium-status-chip > span:last-child { white-space:normal; overflow-wrap:anywhere; }
+  .premium-status-chip .ui-icon { display:none; }
+  .premium-status-dialog { right:12px; padding:18px; }
+}

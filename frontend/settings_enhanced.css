@@ -1,0 +1,484 @@
+/* ============================================
+   TLI Settings Enhanced v3 — v1.3 redesign
+   ============================================ */
+
+/* ---- Section container ---- */
+.settings-section {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--theme-card-radius, var(--radius-md));
+  margin-bottom: 10px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+  transition: border-color 0.2s;
+ box-shadow:var(--theme-card-shadow, none);}
+.settings-section:hover {
+  border-color: var(--border-strong);
+}
+
+/* ---- Section header (clickable) ---- */
+.settings-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s;
+}
+.settings-section-header:hover {
+  background: rgba(var(--accent-rgb), 0.04);
+}
+
+.settings-section-title {
+  font-size: 14px;
+  font-weight: var(--theme-heading-weight, 600);
+  color: var(--text-main);
+ font-family:var(--theme-font-heading, inherit);}
+.settings-section-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.settings-section-chevron {
+  font-size: 16px;
+  color: var(--text-soft);
+  transition: transform 0.2s ease-out;
+  flex-shrink: 0;
+}
+
+/* ---- Body ---- */
+.settings-section-body {
+  padding: 0 16px 14px 16px;
+}
+
+/* ---- Collapsed state ---- */
+.settings-section.collapsed .settings-section-body {
+  display: none;
+}
+.settings-section.collapsed .settings-section-chevron {
+  transform: rotate(-90deg);
+}
+
+/* ---- Fix inner spacing ---- */
+.settings-section-body .field-label {
+  margin-top: 10px;
+}
+.settings-section-body .field-label:first-child {
+  margin-top: 0;
+}
+.settings-section-body .settings-row {
+  margin-top: 6px;
+}
+.settings-section-body .small-meta {
+  margin-top: 6px;
+}
+.settings-section-body .button-row {
+  margin-top: 10px;
+}
+.settings-section-body hr.settings-divider {
+  display: none;
+}
+
+/* ---- Tighten up existing settings rows inside sections ---- */
+.settings-section .settings-row {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(var(--accent-rgb), 0.05);
+}
+.settings-section .settings-row:last-child {
+  border-bottom: none;
+}
+
+/* ---- Model cards ---- */
+.tli-model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--theme-card-radius, var(--radius-sm));
+  margin-bottom: 6px;
+  background: var(--bg-elevated);
+  transition: all 0.2s ease-out;
+  position: relative;
+ box-shadow:var(--theme-card-shadow, none);}
+.tli-model-card:hover {
+  border-color: var(--border-strong);
+}
+.tli-model-card.tli-model-active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.06);
+  box-shadow: var(--theme-card-shadow, 0 0 0 1px rgba(var(--accent-rgb), 0.15));
+}
+.tli-model-card-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.08);
+}
+.tli-model-card.tli-model-active .tli-model-card-icon {
+  background: rgba(var(--accent-rgb), 0.15);
+}
+.tli-model-card-info {
+  flex: 1;
+  min-width: 0;
+}
+.tli-model-card-name {
+  font-weight: var(--theme-heading-weight, 600);
+  font-size: 13px;
+  color: var(--text-main);
+ font-family:var(--theme-font-heading, inherit);}
+.tli-model-card-desc {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+.tli-model-card-meta {
+  font-size: 10.5px;
+  color: var(--text-soft);
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tli-model-card-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Active badge (replaces plain text) */
+.tli-active-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11.5px;
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+}
+.tli-active-badge::before {
+  content: "✓";
+  font-size: 12px;
+}
+
+/* Size pill */
+.tli-size-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+/* ---- Section badge (inline tag on header title) ---- */
+.settings-section-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  margin-left: 8px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  background: rgba(var(--accent-rgb), 0.10);
+  color: var(--accent);
+  border: 1px solid rgba(var(--accent-rgb), 0.20);
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+
+/* ---- Loading placeholder ---- */
+.settings-loading-placeholder {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0 4px;
+}
+
+/* ---- Row action groups ---- */
+.settings-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.settings-row-actions--inline {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.settings-num-input {
+  width: 72px;
+  text-align: right;
+}
+.settings-unit {
+  font-size: 12px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+/* ---- Update state inline text ---- */
+.settings-update-state {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-left: 2px;
+}
+
+/* ---- URL row (update URL + inline save) ---- */
+.settings-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.settings-url-row .field-input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- Checkbox label ---- */
+.settings-check-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+  cursor: pointer;
+  margin-top: 8px;
+}
+.settings-check-label input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+
+/* ---- Section divider ---- */
+.settings-section-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 12px 0;
+}
+
+/* ---- Danger zone (collapsible details) ---- */
+.settings-danger-details {
+  margin-top: 6px;
+  border: 1px solid var(--danger);
+  border-radius: var(--theme-card-radius, var(--radius-sm));
+  overflow: hidden;
+}
+.settings-danger-details summary {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--danger-soft, var(--bg-elevated));
+}
+.settings-danger-details summary::before {
+  content: "⚠";
+  font-size: 12px;
+}
+.settings-danger-details[open] summary {
+  border-bottom: 1px solid var(--danger);
+}
+.settings-danger-body {
+  padding: 10px 12px 12px;
+  background: var(--danger-soft, var(--bg-elevated));
+}
+
+/* ---- Identity block (fingerprint / pubkey) ---- */
+.settings-identity-block {
+  margin-top: 8px;
+}
+.settings-identity-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.settings-identity-code {
+  display: block;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12.5px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-rgb), 0.15);
+  border-radius: 4px;
+  padding: 6px 10px;
+  word-break: break-all;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.settings-identity-code--small {
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+/* ---- Status dot (inline connection indicator) ---- */
+.settings-status-dot {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-subtle);
+}
+.settings-status-dot.connected {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: rgba(var(--accent-rgb), 0.20);
+}
+.settings-status-dot.error {
+  color: var(--danger);
+  background: var(--danger-soft, var(--bg-elevated));
+  border-color: var(--danger);
+}
+
+/* ---- Right-column info card ---- */
+.settings-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 18px;
+}
+
+.settings-info-version {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.settings-info-version-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+.settings-info-version-val {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.settings-info-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-info-heading {
+  font-size: 11px;
+  font-weight: var(--theme-heading-weight, 700);
+  letter-spacing: var(--theme-heading-tracking, 0.06em);
+  text-transform: uppercase;
+  color: var(--text-muted);
+ font-family:var(--theme-font-heading, inherit);}
+
+.settings-info-links {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.settings-info-link-btn {
+  display: block;
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: var(--theme-control-radius, var(--radius-sm));
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-main);
+  color: var(--text-main);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s;
+ box-shadow:var(--theme-control-shadow, none);}
+.settings-info-link-btn:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+  border-color: rgba(var(--accent-rgb), 0.25);
+  color: var(--accent);
+}
+
+.settings-info-list {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.settings-info-list li {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ---- Main card max-width + scroll ---- */
+.settings-main-card {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-y: auto;
+  max-height: calc(100vh - 140px);
+}
+
+/* ---- Progress bar (download) ---- */
+.tli-dl-wrap {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--theme-card-radius, var(--radius-md));
+}
+.tli-dl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.tli-dl-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.tli-dl-pct {
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 13px;
+}
+.tli-dl-track {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-main);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.tli-dl-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-blue));
+  border-radius: 99px;
+  transition: width 0.5s ease-out;
+}
+.tli-dl-detail {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-soft);
+}

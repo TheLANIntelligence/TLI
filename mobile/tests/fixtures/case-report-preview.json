@@ -1,0 +1,217 @@
+{
+  "synthetic": true,
+  "request": {
+    "case_ref": {
+      "id": "case-62e3c144f1a94e34bdebb475eb49cd1b",
+      "revision": "7f7f09a96cefc7f3bcaaac182285d674169450cc6fcfee1f0a856a2152bb2158",
+      "step_ids": [
+        "skipped",
+        "tried"
+      ],
+      "include_resolution": false,
+      "evidence_refs": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+        }
+      ],
+      "report_refs": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd"
+        }
+      ]
+    }
+  },
+  "response": {
+    "ok": true,
+    "protocol": "tli-cases-v1",
+    "checked_at": "2026-09-10T01:31:57.772321+00:00",
+    "actions_performed": false,
+    "case_report_context": "tli-case-report-context-v1",
+    "case_context": {
+      "schema_version": 1,
+      "id": "case-62e3c144f1a94e34bdebb475eb49cd1b",
+      "revision": "7f7f09a96cefc7f3bcaaac182285d674169450cc6fcfee1f0a856a2152bb2158",
+      "title": "Printer stalls",
+      "updated_at": "2026-09-10T01:31:57.710632+00:00",
+      "computer_id": null,
+      "status": "open",
+      "archived": false,
+      "steps": [
+        {
+          "id": "skipped",
+          "status": "skipped"
+        },
+        {
+          "id": "tried",
+          "status": "tried"
+        }
+      ],
+      "omitted_step_count": 2,
+      "resolution_included": false,
+      "evidence_links": [
+        {
+          "kind": "report",
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "message_index": null,
+          "label": "performance report \u00b7 2026-09-01T12:00:00+00:00",
+          "availability": "current"
+        }
+      ],
+      "omitted_link_count": 1,
+      "linked_bodies_included": false,
+      "actions_performed": false,
+      "included_reports": [
+        {
+          "id": "report-fixture",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "handle": "R1",
+          "host_id": "study-id",
+          "target_id": null,
+          "recorded_at": "2026-09-01T12:00:00+00:00"
+        }
+      ]
+    },
+    "evidence_context": {
+      "version": 1,
+      "interpretation": "ai",
+      "sources": [
+        {
+          "handle": "R1",
+          "kind": "report",
+          "id": "report-fixture",
+          "label": "Saved diagnostic report",
+          "provenance": "recorded_measurement",
+          "revision": "8ea89c7d17ddf151960df0dfa81d1d889d1447dd5a45a141300f816945de3bbd",
+          "saved_at": null,
+          "observed_at": "2026-09-01T12:00:00+00:00",
+          "host_id": "study-id",
+          "target_id": null,
+          "ranges": []
+        },
+        {
+          "handle": "C1",
+          "kind": "case",
+          "id": "case-62e3c144f1a94e34bdebb475eb49cd1b",
+          "label": "Printer stalls",
+          "provenance": "user_case",
+          "revision": "7f7f09a96cefc7f3bcaaac182285d674169450cc6fcfee1f0a856a2152bb2158",
+          "saved_at": "2026-09-10T01:31:57.710632+00:00",
+          "observed_at": null,
+          "host_id": null,
+          "target_id": null,
+          "ranges": []
+        }
+      ],
+      "historical_notes": {
+        "checked": false,
+        "changed": 0,
+        "unavailable": 0
+      },
+      "citations_checked": false,
+      "citations": [],
+      "invalid_citations": 0,
+      "recorded_report": {
+        "version": 1,
+        "report_id": "report-fixture",
+        "kind": "performance",
+        "basis": "saved_report",
+        "host": {
+          "id": "study-id",
+          "name": "Study"
+        },
+        "target": null,
+        "process": {
+          "name": "Render",
+          "pid": 42,
+          "create_time": 1788250000.25
+        },
+        "recorded_at": "2026-09-01T12:00:00+00:00",
+        "started_at": "2026-09-01T12:00:00+00:00",
+        "finished_at": "2026-09-01T12:00:07+00:00",
+        "duration_seconds": 3.0,
+        "requested_duration_seconds": null,
+        "status": "partial",
+        "status_label": "Observation partially completed",
+        "recorded_samples": 3,
+        "expected_samples": 30,
+        "raw_samples_included": 0,
+        "checks": [],
+        "omitted_checks": 0,
+        "measurements": [
+          {
+            "key": "host_cpu_percent",
+            "label": "Host CPU",
+            "scope": "host",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_percent",
+            "label": "Host RAM",
+            "scope": "host",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_used_bytes",
+            "label": "Host RAM used",
+            "scope": "host",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "host_ram_total_bytes",
+            "label": "Host RAM total",
+            "scope": "host",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "process_cpu_percent",
+            "label": "Selected process CPU (whole host capacity)",
+            "scope": "selected_process",
+            "unit": "percent",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          },
+          {
+            "key": "process_rss_bytes",
+            "label": "Selected process resident memory",
+            "scope": "selected_process",
+            "unit": "bytes",
+            "valid_samples": 3,
+            "mean": 1.0,
+            "minimum": 0.0,
+            "maximum": 2.0
+          }
+        ],
+        "limitations": [
+          "Saved evidence describes its recorded time, not current computer health.",
+          "Reading this report runs no new check or repair.",
+          "Sampling completion does not establish that the application's task finished or that a repair worked.",
+          "Host CPU and selected-process CPU are different measurements. One process may not represent the whole application.",
+          "These samples do not measure FPS, dropped frames or a causal bottleneck."
+        ]
+      }
+    }
+  }
+}

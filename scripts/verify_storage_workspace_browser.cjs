@@ -1,0 +1,95 @@
+/* Full SPA storage workflows against synthetic route fixtures. No TLI server or real file/device actions. */
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{chromium}=require('playwright');
+process.argv.push('--label','storage-flows');
+const {makePage,layout,fixtures:baseFixtures,out,source,fingerprintFiles,unexpectedRequests}=require('./verify_anniversary_ui_browser.cjs');
+
+baseFixtures['/status'].vault_status={initialized:true,unlocked:false};
+const scanPath='C:\\Users\\Demo\\Downloads';
+const tree={name:'Downloads',path:scanPath,is_dir:true,size:900000000,children:[
+ {name:'Photos',path:scanPath+'\\Photos',is_dir:true,size:300000000,children:[{name:'Holiday.jpg',path:scanPath+'\\Photos\\Holiday.jpg',size:300000000}]},
+ {name:'Review this old installer.exe',path:scanPath+'\\Review this old installer.exe',size:500000000},
+ {name:'Archive.zip',path:scanPath+'\\Archive.zip',size:100000000}]};
+baseFixtures['/visualizer/scan']={path:scanPath,tree,meta:{coverage:{complete:true}}};
+baseFixtures['/vault/list']={files:[{name:'private-fixture.pdf',size_display:'12 KB'}]};
+baseFixtures['/vault/secrets']={secrets:[]};baseFixtures['/vault/notes']={notes:[{id:'fixture-note',title:'Private fixture note'}]};
+(async()=>{
+ const hashesAtStart=fingerprintFiles(source);
+ const browser=await chromium.launch({channel:'msedge',headless:true});const records=[],sessions=[];
+ try {for(const width of [1440,390,320])for(const theme of ['emeraldLight','midnight']){
+   const run=await makePage(browser,width,theme),page=run.page;let replacementFails=false;const writes=[];
+   await page.route('**/files/scan',r=>{writes.push('/files/scan');return r.fulfill({contentType:'application/json',body:JSON.stringify({extension_summary:[{extension:'.txt',count:1,example:'one.txt'}]})});});
+   await page.route('**/file/scan',r=>{writes.push('/file/scan');return r.fulfill({status:replacementFails?403:200,contentType:'application/json',body:JSON.stringify(replacementFails?{detail:'Fixture denied'}:{buckets:{Documents:['one.txt']},total_files:1})});});
+   await page.route('**/file/operations/capabilities',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({ok:true,protocol:'reviewed-file-operations-v1'})}));
+   await page.route('**/file/organize',r=>{const body=r.request().postDataJSON();writes.push(body.confirm?'confirm':'preview');return r.fulfill({contentType:'application/json',body:JSON.stringify(body.confirm?{ok:false,preview:false,status:'failed',results:[{source:scanPath+'\\one.txt',destination:scanPath+'\\Documents\\one.txt',status:'failed',reason:'Fixture file in use'}],message:'Moved 0 of 1 files.',moved_count:0,undo_available:false}:{ok:true,preview:true,status:'preview',preview_id:'a'.repeat(32),expires_at:Date.now()/1000+600,can_execute:true,results:[{source:scanPath+'\\one.txt',destination:scanPath+'\\Documents\\one.txt',status:'ready',reason:''}],message:'Review these paths. Nothing has changed.',history:[]})});});
+   await page.evaluate(()=>switchPanel('panel-visualizer'));
+   await page.locator('#visualizerPathInput').fill(scanPath);await page.locator('#visualizerScanBtn').click();
+   await page.waitForFunction(()=>document.querySelectorAll('#visualizerTableBody .storage-file-action').length===3);
+   await page.locator('th[data-sort="name"] button').focus();await page.keyboard.press('Enter');
+   assert.equal(await page.locator('th[data-sort="name"]').getAttribute('aria-sort'),'ascending');
+   const file=page.locator('#visualizerTableBody .storage-file-action').filter({hasText:'Archive.zip'});await file.focus();await page.keyboard.press('Enter');
+   assert.match(await page.locator('#visualizerDetailsPath').innerText(),/Archive.zip/);
+   await page.locator('#visualizerTableBody [data-cleanup-path]').first().check();
+   assert.match(await page.locator('#storage-cleanup-review > summary').innerText(),/1 of 100 files selected/);
+   const before=run.calls.length;await page.evaluate(()=>TLIStorageWorkspace.openCleanup());
+   assert.equal(await page.locator('#storage-cleanup-review').evaluate(e=>e.open),true);
+   assert.equal(await page.locator('#cleanup-check').isVisible(),true);
+   assert.ok(!run.calls.slice(before).some(c=>!['GET','HEAD'].includes(c.method)));
+   await page.locator('#storage-cleanup-review > summary').click();
+   await page.locator('#storage-folders').evaluate(e=>{e.open=true;});
+   const folder=page.locator('#visualizerFolderTree button').filter({hasText:'Photos'});await folder.focus();await page.keyboard.press('Enter');
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'visualizerCenterTitle');
+   assert.match(await page.locator('#visualizerCenterSubtitle').innerText(),/Photos/);
+   await page.locator('#visualizerBackBtn').click();
+   await page.locator('#storage-results').scrollIntoViewIfNeeded();
+   records.push({width,theme,panel:'visualizer',...await layout(page,'panel-visualizer')});
+   await page.screenshot({path:path.join(out,'storage-results-'+width+'-'+theme+'.png')});
+   await page.evaluate(()=>switchPanel('panel-files'));
+   await page.locator('#filesRootInput').fill(scanPath);await page.locator('#filesScanButton').click();
+   await page.waitForFunction(()=>document.getElementById('filesStatus').textContent.includes('Scan complete'));
+   assert.equal(await page.locator('#filesPreviewButton').isVisible(),false);
+   await page.locator('#filesRunButton').click();await page.waitForFunction(()=>document.getElementById('files-operation-confirm'));
+   assert.equal(await page.locator('#files-plan #files-operation-review').count(),1);
+   await page.locator('#files-operation-confirm').click();
+   await page.waitForFunction(()=>document.querySelector('#files-operation-stage #files-operation-review'));
+   assert.match(await page.locator('#files-operation-stage').innerText(),/failed|Moved 0 of 1/);
+   assert.equal(writes.filter(x=>x==='confirm').length,1);
+   const ext=await page.locator('#filesExtTableBody').innerHTML(),buckets=await page.locator('#filesBucketsContainer').innerHTML();
+   replacementFails=true;await page.locator('#filesRootInput').fill('N:\\');await page.locator('#filesScanButton').click();
+   await page.waitForFunction(()=>document.getElementById('filesStatus').textContent.includes('Scan failed'));
+   assert.equal(await page.locator('#filesExtTableBody').innerHTML(),ext);assert.equal(await page.locator('#filesBucketsContainer').innerHTML(),buckets);
+   assert.equal(await page.evaluate(()=>filesBuildOrganizePayload()),null);
+   records.push({width,theme,panel:'files',...await layout(page,'panel-files')});
+   await page.locator('#files-operation-stage').scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'files-failed-'+width+'-'+theme+'.png')});
+   await page.evaluate(()=>switchPanel('panel-vault'));await page.evaluate(()=>fetchVaultStatus());
+   assert.equal(await page.locator('#vault-status-pill').innerText(),'Locked');
+   records.push({width,theme,panel:'vault-locked',...await layout(page,'panel-vault')});
+   await page.screenshot({path:path.join(out,'vault-locked-'+width+'-'+theme+'.png')});
+   baseFixtures['/vault/status']={initialized:true,unlocked:true};baseFixtures['/status'].vault_status={initialized:true,unlocked:true};
+   await page.evaluate(()=>fetchVaultStatus());assert.ok(await page.locator('#vault-content-area').isVisible());
+   await page.locator('[data-vault-tab="files"]').focus();await page.keyboard.press('End');
+   assert.equal(await page.locator('[data-vault-tab="notes"]').getAttribute('aria-selected'),'true');
+   assert.ok(await page.locator('#vault-notes-list button').isVisible());
+   const retainedVault=await page.locator('#vault-content-area').innerHTML();
+   baseFixtures['/vault/status']={initialized:true};baseFixtures['/status'].vault_status={};
+   await page.evaluate(()=>fetchVaultStatus());assert.equal(await page.locator('#vault-status-pill').innerText(),'Unavailable');
+   assert.equal(await page.locator('#vault-content-area').isVisible(),false);
+   assert.equal(await page.locator('#vault-content-area').innerHTML(),retainedVault);
+   baseFixtures['/vault/status']={initialized:true,unlocked:true};baseFixtures['/status'].vault_status={initialized:true,unlocked:true};
+   await page.evaluate(()=>fetchVaultStatus());assert.equal(await page.locator('#vault-status-pill').innerText(),'Unlocked');
+   assert.equal(await page.locator('#vault-notes-list button').innerText(),'Private fixture note');
+   assert.ok(!run.calls.some(c=>c.path.startsWith('/vault/')&&!['GET','HEAD'].includes(c.method)));
+   baseFixtures['/vault/status']={initialized:true,unlocked:false};baseFixtures['/status'].vault_status={initialized:true,unlocked:false};
+   assert.ok(!run.calls.some(c=>c.path==='/printshop/print'||c.path.includes('/cleanup/execute')));
+   assert.deepEqual(unexpectedRequests(run.calls),[],'Navigation must not trigger actions or inference');
+   assert.deepEqual(run.errors,[]);
+   sessions.push({width,theme,errors:run.errors,unexpectedRequests:unexpectedRequests(run.calls),syntheticReviewedOperations:writes});
+   await run.context.close();
+ }} finally{await browser.close();}
+ const hashes=fingerprintFiles(source);
+ const changedDuringRun=[...new Set([...Object.keys(hashesAtStart),...Object.keys(hashes)])].filter(file=>hashesAtStart[file]!==hashes[file]);
+ fs.writeFileSync(path.join(out,'storage-report.json'),JSON.stringify(records,null,2));
+ fs.writeFileSync(path.join(out,'storage-integrity.json'),JSON.stringify({source,hashes,changedDuringRun,sessions,synthetic:true},null,2));
+ console.log(JSON.stringify({out,checks:records.length,overflow:records.filter(r=>r.overflow.length||r.documentWidth>r.width+2),duplicates:records.filter(r=>r.duplicateIds.length),changedDuringRun}));
+ assert.equal(changedDuringRun.length,0,'Source changed during storage verification; rerun this candidate');
+ if(records.some(r=>r.overflow.length||r.documentWidth>r.width+2||r.duplicateIds.length))process.exitCode=1;
+})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -1,0 +1,72 @@
+/* A task-first Home, using every existing palette's own colors. */
+#panel-dashboard2 .home-launchpad { border:1px solid var(--border-subtle); border-radius:var(--theme-card-radius,16px); padding:24px; background:linear-gradient(115deg,var(--accent-soft),transparent 65%),var(--bg-panel); }
+.home-launch-heading { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:22px; }
+#panel-dashboard2 .home-eyebrow { font-size:10px; letter-spacing:.16em; font-weight:650; color:var(--accent); margin:0 0 10px; }
+#panel-dashboard2 .home-launch-heading h2 { margin:0; font-weight:600; font-size:clamp(22px,2.4vw,32px); line-height:1.2; font-family:var(--theme-font-heading,inherit); letter-spacing:-.035em; }
+#panel-dashboard2 .home-launch-intro { margin:10px 0 0; color:var(--text-muted); font-size:13px; line-height:1.5; }
+body[data-tli-ui] .home-ask { display:flex; align-items:center; gap:9px; flex-shrink:0; min-height:42px; padding:10px 18px; }
+.home-task-list { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+body[data-tli-ui] .home-task { display:flex; align-items:flex-start; gap:12px; border:1px solid var(--border-subtle); border-radius:var(--theme-control-radius,10px); background:var(--bg-panel); color:var(--text-main); padding:18px 16px; font:inherit; text-align:left; cursor:pointer; transition:border-color .15s,background .15s; }
+body[data-tli-ui] .home-task:hover { border-color:var(--accent); background:var(--bg-elevated); }
+.home-task > .ui-icon { color:var(--accent); flex-shrink:0; margin-top:2px; }
+.home-task-copy { min-width:0; display:flex; flex-direction:column; align-items:flex-start; height:100%; gap:8px; }
+.home-task-copy strong { font-size:14px; line-height:1.35; }
+.home-task-copy > span { font-size:12px; line-height:1.6; color:var(--text-muted); }
+.home-task-copy small { margin-top:auto; padding-top:5px; font-size:11px; color:var(--accent); line-height:1.5; }
+.home-task-list:has(> :nth-child(5)) { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.home-launch-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; font-size:11px; color:var(--text-muted); }
+body[data-tli-ui] :is(.home-text-button,.home-vital-link,.home-recent-link) { border:0; background:transparent; color:var(--accent); padding:6px 0; min-height:32px; font:inherit; font-size:12px; cursor:pointer; text-align:left; }
+body[data-tli-ui] .home-text-button { flex-shrink:0; }
+body[data-tli-ui] .home-text-button:hover,body[data-tli-ui] .home-vital-link:hover { text-decoration:underline; }
+.home-resume { display:flex; align-items:center; flex-wrap:wrap; gap:10px; color:var(--text-muted); font-size:12px; }
+.home-recent-list { display:flex; flex-wrap:wrap; flex:1; gap:8px; }
+body[data-tli-ui] .home-recent-link { border:1px solid var(--border-subtle); border-radius:20px; padding:6px 12px; color:var(--text-main); background:var(--bg-panel); }
+body[data-tli-ui] .home-recent-link:hover { border-color:var(--accent); }
+#panel-dashboard2 .nd-vital { position:relative; padding:16px 18px 12px; }
+#panel-dashboard2 .nd-vital .home-vital-link { margin-top:8px; font-size:11px; }
+#panel-dashboard2 .nd-vital__val { font-size:22px; }
+#panel-dashboard2 .nd-narrator { padding:16px 20px; }
+#panel-dashboard2 .nd-narrator__lead { gap:16px; margin-top:8px; }
+#panel-dashboard2 .nd-statement { font-size:17px; line-height:1.5; }
+#panel-dashboard2 .dashboard-attention-footer { padding:9px 18px; }
+#panel-dashboard2 .dashboard-page-header { margin-bottom:10px; }
+#panel-dashboard2 > .ui-section-help { margin-bottom:14px; }
+#panel-dashboard2 .dashboard-secondary-column > .nd-shortcuts { margin:0; padding:16px 20px; border:1px solid var(--border-subtle); border-radius:var(--theme-card-radius,12px); background:var(--bg-panel); }
+#panel-dashboard2 .dashboard-secondary-column > .nd-shortcuts > summary { color:var(--text-muted); cursor:pointer; font-size:12px; }
+#panel-dashboard2 .dashboard-secondary-column > .nd-shortcuts[open] > summary { margin-bottom:14px; }
+#panel-dashboard2[data-access="locked"] :is(.home-launchpad,.home-resume) { display:none; }
+body[data-tli-ui] .home-edit-dialog { width:min(600px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; box-sizing:border-box; border:1px solid var(--border-strong); border-radius:var(--theme-card-radius,16px); padding:24px; background:var(--bg-panel); color:var(--text-main); }
+.home-edit-dialog::backdrop { background:rgb(0 0 0 / .45); }
+.home-edit-dialog h2 { font-size:23px; margin:0 0 12px; }
+.home-edit-dialog > p { font-size:13px; color:var(--text-muted); line-height:1.6; }
+.home-task-choices { border:0; padding:0; margin:20px 0 0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.home-task-choices legend { font-weight:600; font-size:13px; margin-bottom:10px; }
+.home-task-choices label { display:flex; align-items:center; gap:10px; padding:12px; border:1px solid var(--border-subtle); border-radius:8px; cursor:pointer; }
+.home-task-choices label:has(input:checked) { border-color:var(--accent); background:var(--accent-soft); }
+.home-task-choices label:has(input:disabled) { opacity:.6; cursor:default; }
+.home-task-choices input { width:16px; height:16px; flex-shrink:0; accent-color:var(--accent); }
+.home-task-choices label span { display:grid; gap:4px; min-width:0; }
+.home-task-choices strong { font-size:12px; font-weight:600; }
+.home-task-choices small { font-size:11px; color:var(--text-muted); }
+.home-edit-actions { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:16px; }
+body[data-tli-ui] :is(.home-task,.home-text-button,.home-recent-link,.home-vital-link):focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+html[data-interface="classic"] #panel-dashboard2 .home-launchpad { padding:18px; background:var(--bg-panel); }
+html[data-interface="classic"] #panel-dashboard2 .home-launch-heading h2 { font-size:24px; letter-spacing:normal; }
+html[data-interface="classic"] .home-task-list { gap:8px; }
+html[data-interface="classic"] body[data-tli-ui] .home-task { padding:14px 12px; }
+@media(max-width:1200px) { .home-task-list { grid-template-columns:repeat(2,minmax(0,1fr)); } .home-task-list:has(> :nth-child(5)) { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:620px) { #panel-dashboard2 .home-launchpad { padding:18px 14px; } .home-launch-heading { align-items:flex-start; gap:12px; } #panel-dashboard2 .home-launch-heading h2 { font-size:23px; } body[data-tli-ui] .home-ask { padding:8px 10px; font-size:12px; } .home-ask .ui-icon { display:none; } body[data-tli-ui] .home-task { padding:14px 12px; flex-direction:column; gap:10px; } .home-task-copy > span { display:none; } .home-task-copy strong { font-size:13px; } .home-launch-footer > span { display:none; } .home-launch-footer { justify-content:flex-end; margin-top:6px; } .home-task-choices { grid-template-columns:1fr; } .home-edit-dialog { padding:18px; } #panel-dashboard2 .nd-narrator { padding:14px; } #panel-dashboard2 .nd-statement { font-size:15px; } }
+@media(prefers-reduced-motion:reduce) { body[data-tli-ui] .home-task { transition:none; } }
+/* Keep every header control reachable without a third row on a phone. */
+@media(max-width:620px) {
+  body[data-tli-ui] .main-region > header .header-right { display:grid; grid-template-columns:minmax(68px,1fr) 44px minmax(70px,1fr) 44px 44px; gap:6px; align-items:center; }
+  body[data-tli-ui] .main-region > header .interface-controls { min-width:0; display:block; }
+  body[data-tli-ui] .main-region > header .interface-controls > span { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  body[data-tli-ui] #tli-interface-select { width:100%; min-width:0; padding:8px 3px; font-size:11px; }
+  body[data-tli-ui] #ai-source-pill { width:100%; min-width:0; max-width:100%; padding:7px 4px; font-size:10px; white-space:normal; overflow-wrap:anywhere; }
+  body[data-tli-ui] #tli-search-launcher,body[data-tli-ui] #tli-activity-trigger,body[data-tli-ui] #tli-lock-btn { width:44px; padding:8px; }
+  body[data-tli-ui] #tli-activity-trigger { position:relative; justify-content:center; }
+  body[data-tli-ui] #tli-activity-trigger > span:not(#tli-alert-badge) { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  body[data-tli-ui] #tli-alert-badge:not([hidden]) { position:absolute; right:0; top:0; min-width:16px; font-size:9px; }
+  body[data-tli-ui] #tli-activity-panel { top:116px; }
+}

@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>TLI User Manual</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="js/theme-catalog.js?v=01787136ac84"></script>
+  <script src="/js/help-workspace.js?v=5d26346319a3"></script>
+  <style>
+    :root { --warn:var(--warning); }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--theme-font-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+      background: var(--bg);
+      background-image:var(--theme-canvas-image, none);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Layout */
+    .layout { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 0;
+    }
+    .sidebar-logo {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .sidebar-logo-mark { font-size: 22px; font-weight: 800; color: var(--accent); }
+    .sidebar-logo-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .sidebar-section { padding: 0 8px; margin-bottom: 8px; }
+    .sidebar-section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      padding: 4px 12px 6px;
+    }
+    .sidebar-link {
+      display: block;
+      padding: 6px 12px;
+      border-radius: var(--theme-control-radius, 6px);
+      font-size: 13px;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background .12s, color .12s;
+    }
+    .sidebar-link:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+    .sidebar-link.qs { color: var(--accent); font-weight: 600; }
+    .content { flex: 1; max-width: 900px; padding: 48px 56px; }
+
+    /* Typography */
+    h1 { font-size: 28px; font-weight: var(--theme-heading-weight, 700); margin-bottom: 8px;  font-family:var(--theme-font-heading, inherit);}
+    h2 {
+      font-size: 20px; font-weight: var(--theme-heading-weight, 700); margin: 48px 0 16px;
+      padding-bottom: 10px; border-bottom: 1px solid var(--border);
+      scroll-margin-top: 24px;
+     font-family:var(--theme-font-heading, inherit);}
+    h3 { font-size: 15px; font-weight: var(--theme-heading-weight, 600); margin: 24px 0 8px; color: var(--accent);  font-family:var(--theme-font-heading, inherit);}
+    p { margin-bottom: 12px; color: var(--text-secondary); }
+    ul, ol { padding-left: 20px; margin-bottom: 12px; color: var(--text-secondary); }
+    li { margin-bottom: 4px; }
+    strong { color: var(--text); font-weight: 600; }
+    code {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "Cascadia Code", "Fira Code", monospace;
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    /* Quick Start card */
+    .quick-start-card {
+      background: var(--accent-soft);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--theme-card-radius, 12px);
+      padding: 28px 32px;
+      margin: 24px 0 40px;
+     box-shadow:var(--theme-card-shadow, none);}
+    .quick-start-card h2 {
+      margin: 0 0 6px;
+      border: none;
+      padding: 0;
+      font-size: 20px;
+      color: var(--accent);
+     font-family:var(--theme-font-heading, inherit);}
+    .quick-start-card .qs-sub {
+      color: var(--text-muted);
+      font-size: 13px;
+      margin-bottom: 20px;
+    }
+    .qs-steps {
+      list-style: none;
+      padding: 0;
+      counter-reset: qsstep;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .qs-steps li {
+      counter-increment: qsstep;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--theme-card-radius, 8px);
+      padding: 12px 14px 12px 44px;
+      position: relative;
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+    .qs-steps li::before {
+      content: counter(qsstep);
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      width: 22px;
+      height: 22px;
+      background: var(--accent);
+      color: var(--on-accent);
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .qs-steps li strong { display: block; color: var(--text); margin-bottom: 2px; }
+
+    /* Components */
+    .lead { font-size: 15px; color: var(--text-secondary); margin-bottom: 32px; line-height: 1.7; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .03em;
+    }
+    .badge-green { background:var(--success-soft); color:var(--success); border:1px solid var(--success); }
+    .badge-yellow { background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning); }
+    .badge-red { background:var(--danger-soft); color:var(--danger); border:1px solid var(--danger); }
+    .badge-blue { background:var(--info-soft); color:var(--info); border:1px solid var(--info); }
+
+    .info-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--theme-card-radius, var(--radius));
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .warn-box {
+      background: var(--warning-soft);
+      border: 1px solid var(--warning);
+      border-left: 3px solid var(--warn);
+      border-radius: var(--theme-card-radius, var(--radius));
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .danger-box {
+      background: var(--danger-soft);
+      border: 1px solid var(--danger);
+      border-left: 3px solid var(--danger);
+      border-radius: var(--theme-card-radius, var(--radius));
+      padding: 12px 16px;
+      margin: 16px 0;
+    }
+    .info-box p, .warn-box p, .danger-box p { margin: 0; }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 12px;
+      margin: 16px 0 24px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--theme-card-radius, var(--radius));
+      padding: 14px;
+     box-shadow:var(--theme-card-shadow, none);}
+    .feature-card-icon  { font-size: 20px; margin-bottom: 6px; }
+    .feature-card-title { font-size: 13px; font-weight: var(--theme-heading-weight, 600); margin-bottom: 4px;  font-family:var(--theme-font-heading, inherit);}
+    .feature-card-desc  { font-size: 12px; color: var(--text-muted); }
+
+    .step-list { list-style: none; padding: 0; counter-reset: steps; }
+    .step-list li {
+      counter-increment: steps;
+      padding: 10px 0 10px 40px;
+      position: relative;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+    }
+    .step-list li:last-child { border-bottom: none; }
+    .step-list li::before {
+      content: counter(steps);
+      position: absolute;
+      left: 0; top: 10px;
+      width: 24px; height: 24px;
+      background: var(--accent);
+      color: var(--on-accent);
+      border-radius: 50%;
+      font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    .data-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    .data-table th {
+      text-align: left; padding: 8px 12px; font-size: 11px;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: var(--text-muted); border-bottom: 1px solid var(--border);
+    }
+    .data-table td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-secondary); }
+    .data-table tr:last-child td { border-bottom: none; }
+    .preset-comparison { max-width: 100%; overflow-x: auto; border-radius: 8px; }
+    .preset-comparison:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .preset-comparison .data-table { min-width: 560px; }
+    .preset-comparison-hint { display: none; }
+
+    .back-link {
+      display: inline-flex; align-items: center; gap: 6px;
+      color: var(--text-muted); font-size: 13px; margin-bottom: 32px;
+    }
+    .back-link:hover { color: var(--accent); }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+    .two-col .info-box { margin: 0; }
+
+    @media (max-width: 700px) {
+      .sidebar { display: none; }
+      .content { padding: 24px 20px; }
+      .qs-steps { grid-template-columns: 1fr; }
+      .two-col { grid-template-columns: 1fr; }
+      .preset-comparison-hint { display: block; font-size: 12px; }
+    }
+  </style>
+  <link rel="stylesheet" href="themes.css?v=6e9c2a072031" />
+  <link rel="stylesheet" href="help-workspace.css?v=c54b0f70ca7d" />
+</head>
+<body>
+<div class="layout">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-mark">TLI</div>
+      <div class="sidebar-logo-sub">User Manual · Anniversary</div>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Start Here</div>
+      <a class="sidebar-link qs" href="#quickstart">Quick Start Guide</a>
+      <a class="sidebar-link" href="#overview">What is TLI?</a>
+      <a class="sidebar-link" href="#install">Installation</a>
+      <a class="sidebar-link" href="#setup">First-Run Setup</a>
+      <a class="sidebar-link" href="#navigation">Navigation</a>
+      <a class="sidebar-link" href="#shortcuts">Keyboard Shortcuts</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Panels</div>
+      <a class="sidebar-link" href="#dashboard">Home</a>
+      <a class="sidebar-link" href="#main">Ask TLI</a>
+      <a class="sidebar-link" href="#files">Files</a>
+      <a class="sidebar-link" href="#free-space">Free Space</a>
+      <a class="sidebar-link" href="#games">Game Optimizer</a>
+      <a class="sidebar-link" href="#vault">Vault</a>
+      <a class="sidebar-link" href="#mesh">Computers</a>
+      <a class="sidebar-link" href="#homeauto">Smart devices</a>
+      <a class="sidebar-link" href="#routines">Routines</a>
+      <a class="sidebar-link" href="#phone-companion">Phone Companion</a>
+      <a class="sidebar-link" href="#devices">Printers &amp; scanners</a>
+      <a class="sidebar-link" href="#usb-drives">USB drives</a>
+      <a class="sidebar-link" href="#notes-fixes">Saved notes</a>
+      <a class="sidebar-link" href="#performance">App performance check</a>
+      <a class="sidebar-link" href="#problems">Troubleshooting workspace</a>
+      <a class="sidebar-link" href="#tli-chat">LAN Messages</a>
+      <a class="sidebar-link" href="#tools">Utilities &amp; Scripts</a>
+      <a class="sidebar-link" href="#more">Installed apps &amp; Advanced tools</a>
+      <a class="sidebar-link" href="#settings">Settings</a>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">Reference</div>
+      <a class="sidebar-link" href="#ai-providers">AI Providers</a>
+      <a class="sidebar-link" href="#vault-extension">Vault Extension</a>
+      <a class="sidebar-link" href="#lan-discovery">LAN Discovery</a>
+      <a class="sidebar-link" href="#security">Security &amp; PIN</a>
+      <a class="sidebar-link" href="#troubleshoot">Troubleshooting</a>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <main class="content">
+    <a class="back-link" href="/">← Back to TLI</a>
+
+    <h1>TheLANIntelligence</h1>
+    <p class="lead">
+      TLI is your private home console for computers, devices, files and local AI.
+      The computer hosting TLI stores your saved information. Optional online search,
+      downloads, registries and configured external services make network requests;
+      their settings explain where they connect. Features depend on the host's
+      platform, available providers and license.
+    </p>
+
+    <section class="anniversary-guide" aria-labelledby="anniversary-guide-title">
+      <h2 id="anniversary-guide-title">Find your way around TLI</h2>
+      <p>Search TLI with Ctrl+K (⌘K on Mac) to open a page or resume saved work. On a phone, More contains the full navigation.</p>
+      <dl>
+        <dt>Home</dt><dd>Observed health, the Narrator and recorded activity. AI readiness is separate from host availability.</dd>
+        <dt>Ask TLI</dt><dd>Ask a question and review the computer, notes or files you choose to include. Opening a saved item does not send it to AI.</dd>
+        <dt>Ask TLI → Saved notes</dt><dd>Keep setup details, preferences and past fixes so you can refer to them later. These are different from chat history and the notes inside Vault.</dd>
+        <dt>Files</dt><dd>Choose a folder, select files and review exact moves. Organize and Free Space retain their shared folder workflow.</dd>
+        <dt>Free Space</dt><dd>Open directly from the desktop sidebar to inspect storage and review selected files for Trash. This is the updated name for Visualizer.</dd>
+        <dt>Computers, Smart devices, Routines, Phone Companion, Printers &amp; scanners, USB drives</dt><dd>Each opens directly from the desktop sidebar. Open messages and transfers from the relevant computer. The Devices overview remains a secondary destination for existing links.</dd>
+        <dt>Game Optimizer</dt><dd>Choose your game and goal, analyze the host PC, correct missing information, and ask your selected AI for a settings plan.</dd>
+        <dt>Help and More</dt><dd>Help holds problems, guided checks, app performance observations and saved reports. More holds Installed apps and Advanced tools: Utilities, Builder, Scripts and Package management.</dd>
+        <dt>Settings</dt><dd>General, AI &amp; chat, Security &amp; connections, Saved data &amp; backups, and App &amp; troubleshooting.</dd>
+      </dl>
+      <p><strong>Backups:</strong> check saved data, create an encrypted notes/chats/reports archive, or verify a saved archive. Verification does not restore over your current data or back up the entire installation.</p>
+      <p><strong>Recovery:</strong> in Saved data &amp; backups, review an archive and create a separate recovery copy in a new folder on the TLI host. Its records are checked with current readers before success. Your current installation stays in use.</p>
+    </section>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  QUICK START                                              -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <div class="quick-start-card" id="quickstart">
+      <h2>Quick Start Guide</h2>
+      <p class="qs-sub">Set up protected access, then choose an available AI option.</p>
+      <ul class="qs-steps">
+        <li>
+          <strong>Run install.bat</strong>
+          Extract the TLI zip, double-click <code>install.bat</code>. It copies files, sets up auto-start, and creates a Desktop shortcut.
+        </li>
+        <li>
+          <strong>Open TLI in your browser</strong>
+          Use the Desktop shortcut or go to <code>http://localhost:8000</code>. TLI opens in your default browser — no app required.
+        </li>
+        <li>
+          <strong>Complete the setup wizard</strong>
+          Name your node (e.g. "Home Server"), set an optional access PIN, and continue. Takes about 60 seconds.
+        </li>
+        <li>
+          <strong>Download an AI model</strong>
+          Open the <strong>model library</strong> and review compatibility on the computer hosting TLI. Downloading installs model files; selecting and starting a model are separate operations.
+        </li>
+        <li>
+          <strong>Start chatting</strong>
+          Wait for confirmed runtime readiness after selecting a compatible installed model. Type a question and review its context before sending.
+        </li>
+        <li>
+          <strong>Access from other devices</strong>
+          On any device on your home network, open a browser and go to <code>http://your-pc-ip:8000</code>. No install needed on those devices.
+        </li>
+      </ul>
+      <div style="margin-top:16px;">
+        <div class="info-box">
+          <p><strong>Find your PC's IP:</strong> Open a terminal and run <code>ipconfig</code>. Look for the IPv4 address under your active adapter (usually 192.168.x.x). Alternatively, TLI's Mesh panel shows your node address automatically.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  OVERVIEW                                                 -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="overview">What is TLI?</h2>
+    <p>TLI gives you a unified control panel for your entire local environment. It replaces a dozen separate tools with one browser-based console that knows your network, your devices, your files, and your secrets.</p>
+    <p>TLI's bundled AI and local features can work without internet access after installation. Downloads, updates, online search and external providers use their configured connections when enabled.</p>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <div class="feature-card-icon">💬</div>
+        <div class="feature-card-title">Local AI Assistant</div>
+        <div class="feature-card-desc">Ask an available local provider using the host facts and context supplied for this request. Read its context receipt.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🔐</div>
+        <div class="feature-card-title">Encrypted Vault</div>
+        <div class="feature-card-desc">Files, secret values and private notes encrypted on the TLI host, behind a separate Vault passphrase.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🏠</div>
+        <div class="feature-card-title">Home Automation</div>
+        <div class="feature-card-desc">Review registered devices and relay targets, then choose a supported command or a saved manual routine.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🌐</div>
+        <div class="feature-card-title">Mesh Network</div>
+        <div class="feature-card-desc">Reachable TLI computers can discover each other when network configuration allows it. Each keeps its own identity.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">📁</div>
+        <div class="feature-card-title">Files and Free Space</div>
+        <div class="feature-card-desc">Scan a folder, select exact files and review moves. Free Space adds storage observations and a separate Trash review.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🧩</div>
+        <div class="feature-card-title">Vault Extension</div>
+        <div class="feature-card-desc">Legacy integration. Extension setup and saved-login controls are not exposed or verified in this release.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🎮</div>
+        <div class="feature-card-title">Game Optimizer</div>
+        <div class="feature-card-desc">Use the selected AI model to choose bounded setting trials, with known current values, scope and tradeoffs. Apply and compare them yourself.</div>
+      </div>
+      <div class="feature-card">
+        <div class="feature-card-icon">🖥️</div>
+        <div class="feature-card-title">System Dashboard</div>
+        <div class="feature-card-desc">Live CPU, RAM, disk, mesh status, and recent activity — all on one screen the moment you open TLI.</div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  INSTALLATION                                             -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="install">Installation</h2>
+    <p>Extract the TLI package to a folder you intend to keep. The Windows launcher prepares its local Python environment; local Setup creates an everyday shortcut and manages optional host-start access.</p>
+
+    <h3>Requirements</h3>
+    <ul>
+      <li>Windows 10 or 11 (64-bit)</li>
+      <li>~200 MB disk space for TLI itself</li>
+      <li>~1–5 GB additional disk space for the AI model (downloaded separately after install)</li>
+      <li>Any modern browser (Chrome, Edge, Firefox) — <strong>no special browser required</strong></li>
+    </ul>
+
+    <h3>Install Steps</h3>
+    <ol class="step-list">
+      <li>Extract the current package. Keep an existing installation's saved data and backups safe when replacing source files.</li>
+      <li>Double-click <strong>TLI_Start.bat</strong>. First-time setup may need to install Python and dependencies. Review any operating-system installation prompts.</li>
+      <li>After the first successful launch, open <strong>TLI_Setup.bat → Desktop shortcuts</strong>. Use the TLI shortcut for everyday access.</li>
+      <li>The browser opens at this installation's configured address. Complete setup and choose an AI model when ready. <strong>TLI_Diagnostics.bat</strong> provides a visible diagnostic launch if needed.</li>
+    </ol>
+
+    <div class="info-box">
+      <p><strong>Running in the background:</strong> the everyday shortcut starts or reuses this installation's verified backend. Closing the browser leaves TLI running. On this computer, use <strong>Device menu → Restart TLI… or Quit TLI…</strong>, also available in <strong>Settings → App &amp; troubleshooting</strong>. Review the confirmation and finish important work first. Restart waits for the old backend to exit; the page checks for the new instance. Quit leaves this browser tab open. The optional phone host-start helper remains a separate, explicit choice.</p>
+    </div>
+
+    <h3>Uninstalling</h3>
+    <p>Review and verify the backups you need before removing an installation. Use local Setup to disable phone host start, remove its sign-in shortcut and stop TLI. Saved data is under this installation's <code>data</code> folder; deleting that folder deletes its saved work. Read the local uninstaller's exact scope before confirming removal.</p>
+
+    <h3>Accessing TLI from Other Devices</h3>
+    <p>The default startup is local access. Configure secure LAN access deliberately before using TLI from another device.</p>
+    <ol class="step-list">
+      <li>Open <strong>Settings → Security &amp; connections</strong>, set an owner PIN, and review Secure LAN startup with HTTPS.</li>
+      <li>Save the intended address and port. Use <strong>Device menu → Restart TLI…</strong> on the hosting computer when a restart is required. Review the new address, then use Open TLI to reconnect if it changed.</li>
+      <li>Use the certificate-covered HTTPS address shown in Phone Companion. Browser access and native Companion pairing are different connection flows.</li>
+    </ol>
+
+    <div class="warn-box">
+      <p>Reachability depends on the chosen address, certificate, network and firewall policy. The new host-start setup does not open public ports or install a firewall rule. Read the actual running and saved startup values before changing your network.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  FIRST-RUN SETUP                                         -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="setup">First-Run Setup</h2>
+    <p>On first launch, TLI walks you through a short setup wizard:</p>
+    <ol class="step-list">
+      <li><strong>Node Name</strong> — Give this TLI instance a name (e.g. "Gaming PC", "Home Server", "Office"). This name appears in the mesh directory when other TLI nodes discover yours.</li>
+      <li><strong>Access PIN</strong> — Set a 4–32 character PIN to lock TLI. Recommended if others share your network. You can skip this and set it later in Settings.</li>
+      <li><strong>AI Setup</strong> — TLI checks whether a local AI model is installed. If none is found, you'll see a prompt to download Qwen2.5. Pick a preset (see below) and click Download — it runs in the background. If storage or hardware is a concern, you can skip this step and use a <strong>mesh node's AI</strong> instead — see <a href="#ai-providers">AI Providers</a>.</li>
+      <li><strong>Done</strong> — The wizard marks setup complete. TLI lands on the Dashboard.</li>
+    </ol>
+
+    <h3 id="choosing-ai-preset">Choosing an AI Preset</h3>
+    <p class="preset-comparison-hint" id="preset-comparison-hint">Scroll the table sideways to compare every column. Keyboard users can focus the table and use the arrow keys.</p>
+    <div class="preset-comparison" role="region" aria-labelledby="choosing-ai-preset" aria-describedby="preset-comparison-hint" tabindex="0">
+    <table class="data-table">
+      <thead><tr><th>Preset</th><th>Estimated Download</th><th>Conservative RAM Estimate</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Lite</strong></td><td>~1 GB</td><td>8 GB+</td><td>Smallest bundled text preset for general questions.</td></tr>
+        <tr><td><strong>Standard</strong></td><td>~2 GB</td><td>12 GB+</td><td>Default bundled text preset for conversation and tasks.</td></tr>
+        <tr><td><strong>Power</strong></td><td>~4.5 GB</td><td>16 GB+</td><td>Larger bundled text preset with higher memory needs.</td></tr>
+      </tbody>
+    </table>
+
+    </div>
+    <p>These are initial resource estimates, not a guarantee of compatibility or answer quality. Open the model library for checks of the TLI host's total and available RAM, storage, context and runtime support. Installing a model does not select or start it. Optional Qwen3 choices and their requirements are listed there.</p>
+    <p>The <a href="model-comparison-anniversary.html">current six-model answer comparison</a> found no validated winner under its recorded conditions. Your selected model and default remain unchanged. Technical details show artifact-specific findings; a reference evaluation does not verify your installed copy or its performance on this computer.</p>
+
+    <div class="info-box">
+      <p><strong>Re-run wizard:</strong> search Settings for <strong>Reset onboarding</strong>. Review its action before continuing; this does not replace your saved data.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  NAVIGATION                                               -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="navigation">Navigation</h2>
+    <p>The desktop left sidebar directly lists Home, Ask TLI, Files, Free Space, Game Optimizer, Vault, Computers, Smart devices, Routines, Phone Companion, Printers &amp; scanners and USB drives. Help, More and Settings remain available below them. The Devices overview is retained through secondary navigation and legacy links; it no longer bundles the individual desktop entries.</p>
+    <p>On a phone, the compact Home, Ask TLI, Files and More navigation keeps every destination reachable. Organize/Free Space and other workflow subnavigation remain available inside their workspaces. Use Pin in a secondary workspace to add a shortcut; Unpin removes only that shortcut. Search accepts old names such as Automations, File Organizer and TLI Hub. Opening a navigation entry alone does not scan files or run a device.</p>
+    <p>The header shows your <strong>node name</strong>, the current <strong>AI status pill</strong>, and quick-access buttons for locking TLI and managing your AI model.</p>
+    <p>The <strong>Command Palette</strong> (<code>Ctrl+K</code>) is the fastest way to navigate. Start typing any panel name, action, or tool name — results appear instantly.</p>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  SHORTCUTS                                               -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="shortcuts">Keyboard Shortcuts</h2>
+    <table class="data-table">
+      <thead><tr><th>Shortcut</th><th>Action</th></tr></thead>
+      <tbody>
+        <tr><td><code>Ctrl + K</code></td><td>Open Command Palette — search for any panel, action, tool, or mesh node</td></tr>
+        <tr><td><code>Enter</code></td><td>Submit chat message (when the chat input is focused)</td></tr>
+        <tr><td><code>Esc</code></td><td>Close Command Palette / close any open modal</td></tr>
+        <tr><td><code>↑ / ↓</code></td><td>Navigate Command Palette results</td></tr>
+        <tr><td><code>Ctrl + Shift + L</code></td><td>Legacy Vault Extension shortcut; not a current TLI console control. See <a href="#vault-extension">legacy integration status</a>.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  DASHBOARD                                               -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="dashboard">Home</h2>
+<p>Start with what needs attention, the Narrator, compact observed health and activity catch-up. Host availability, AI readiness and system health are separate. Read the computer or drive named in an alert before acting.</p>
+<p><strong>Choose a task:</strong> Home offers Make room, Put files in order, Get ready to play and Set the scene. These open the relevant workspace. <strong>Edit shortcuts</strong> lets you choose up to six tasks for this browser. <strong>Back to</strong> returns to up to three workspaces opened during this visit; it clears on locking or leaving the page. Ask TLI keeps your existing chat draft.</p>
+<p><strong>Continue a task:</strong> connected workspace links can carry the entered folder, game or printer into a reviewed, unsaved checklist. Scripts and Builder starters show editable text before filling an empty editor. Existing drafts are preserved. Saving, generating, sending and running remain separate deliberate steps.</p>
+<p>CPU, RAM and disk observations become stale after 30 seconds without a successful probe. Unknown values are not zero. Sustained CPU/RAM warnings use their existing timing; critical disk warnings can appear immediately. The full activity feed remains available even when the Narrator suppresses repeated messages.</p>
+<p>Use Make the next move to open existing tools. More shortcuts includes Notes &amp; fixes and Phone Companion. Opening Free Space does not free space. Activity is marked reviewed only through its explicit review control; historical warnings are not fresh checks.</p>
+
+
+    <h2 id="main">Ask TLI</h2>
+<p>Ask a question and watch the response indicator while TLI works. Review the provider badge and context summary before sending. The connected host, an explicitly selected computer, a diagnostic report, documents, notes and images have distinct sharing rules.</p>
+<p>Existing status, navigation and supported device commands can use deterministic handlers. General AI answers require an available provider. An answer can be wrong even when inference is healthy; inspect its supplied context and any action receipt.</p>
+<h3>Notes and conversation context</h3>
+<p><strong>Use saved notes</strong> allows ordinary chat to include relevant Notes &amp; fixes when enabled. Disabling it does not remove earlier conversation messages. New Chat starts a separate conversation. History resumes a saved conversation without automatically sending a message.</p>
+<p><strong>Earlier conversation</strong> starts on for each ordinary question. Turn it off in the context summary to leave prior messages out of that request without deleting the conversation. Selected-note and document questions retain their stricter standalone sharing rules. The latest question and explicitly selected computer guide the request; a conflicting report must be reviewed before sending.</p>
+<p><strong>Evidence for this answer</strong> identifies observations, saved information and included sources from the actual request. The model's explanation is interpretation. A dated saved report or historical fix does not establish current health. Source references are checked against supplied handles and document lines; an unknown reference remains unverified. A matched reference identifies a source, not proof that the model's claim is correct.</p>
+<p>A short follow-up such as “What fixed it last time?” can refer to the recent user question in this conversation. TLI still checks the current saved note version and the explicitly selected computer. This is limited word-based recall; an unrelated new topic or another conversation does not silently supply a subject.</p>
+<p><strong>Save to Notes &amp; fixes…</strong> lets you save a reviewed reply as a new note or deliberately update an existing note. Review its current and proposed text before saving. If another view changed the note, review that newer version first. Replacing a confirmed historical fix with an AI suggestion does not confirm the new advice.</p>
+<p><strong>Documents:</strong> select up to four UTF-8 .txt or .md files, with a combined limit of 64 KiB. Longer documents use whole numbered lines chosen for your question or sampled across the text. The answer’s document details show the included lines and omitted coverage. Original files stay unchanged. Citations are generated by the model and can be wrong; omitted passages may contain important exceptions. Document questions exclude earlier conversation and other context.</p>
+<p><strong>PDF and DOCX:</strong> choose Check PDF &amp; Word support first. Extraction requires HTTPS or localhost and an available bounded reader. Selecting a supported file up to 8 MiB uploads the binary to this TLI host before Send; inspect and accept the extracted text before adding it to the question. Extraction reports omitted content; it does not perform OCR or execute macros. Existing document-count, text and model-input limits still apply. An extraction preview is not an automatic attachment.</p>
+<p><strong>Local voice:</strong> open the voice dialog, check on-device recognition support and explicitly start recording. Review the editable transcript, then choose Add to draft. Recording does not send the question. Playback offers only voices the browser reports as local. Unsupported local speech remains unavailable; language-pack installation is a separate explicit choice.</p>
+<p>Response timing measures what this browser sees: waiting for the first text and elapsed response time. It is not a measure of model reasoning. Stop ends receipt in this view; it cannot guarantee that a server action stopped. An interrupted reply remains incomplete, and retry requires another deliberate Send.</p>
+<p>Questions about up to four selected notes stand alone: the selected note versions and current question are supplied, without earlier conversation, documents, images, other saved memory, tools or selected-computer/report context. Remove displayed conflicts before sending. Bundled and configured LM Studio support this path; unsupported mesh routing does not silently receive it.</p>
+<p>Vault content remains separate. Unlocking Vault does not share it with AI. Copying a secret into a question or deliberately using a supported secret reference can expose it to the provider and saved conversation.</p>
+<p>Notes &amp; fixes and conversations follow the current TLI account. With PIN protection disabled, local access shares one owner.</p>
+
+
+    <h2 id="notes-fixes">Ask TLI → Saved notes</h2>
+<p>Keep setup details, preferences and past fixes so you can refer to them later. Setup detail, Preference and Fix to remember open unsaved drafts. Save explicitly; choosing the fix starter does not mark a fix confirmed.</p>
+<p>User notes, saved AI replies and confirmed historical fixes have distinct source labels. Back, Close and opening another note retain unfinished drafts in memory; discard is explicit and locking clears drafts. Vault notes remain behind their separate passphrase.</p>
+<p><strong>Linked notes</strong> records a reviewed relationship to another note's exact revision. Changed or missing sources stay visible; a correction reference is not proof that a fact is correct. <strong>Related notes</strong> separately reviews selected notes before using an existing local embedding server to build a temporary search index. Similarity results are suggestions, and do not silently change Chat's memory or attach notes.</p>
+<h2 id="phone-companion">Phone Companion</h2>
+<p>Open Phone Companion in the sidebar. Settings, Computers, onboarding and Ctrl+K lead to the same page. Opening it does not create an invitation.</p>
+<ol><li><strong>Owner access:</strong> install a supported native Companion build, set an owner PIN through the linked Settings controls, and unlock TLI.</li><li><strong>Secure connection:</strong> use HTTPS, LAN access and an address covered by the host certificate. Review running, saved and effective next startup settings. A saved change requires a manual restart when indicated.</li><li><strong>Pair your phone:</strong> choose Create pairing QR, then scan it in the native app or use the manual bundle. The invitation is single-use and expires after five minutes. Hiding it does not revoke it.</li><li><strong>Manage paired phones:</strong> check observation times and explicitly remove access when needed. A failed refresh preserves previous entries; an unavailable list is not empty.</li></ol>
+<p>The older Browser satellite code connects a browser and is not a native pairing QR. This browser update does not install, rebuild or pair the native app for you.</p>
+<p><strong>Beyond home Wi-Fi:</strong> an externally managed private route can make the already paired private HTTPS address reachable. TLI does not create a VPN or open public ports. Keep the existing certificate and pairing; a listed address does not prove that the route works. Reconnection never automatically replays Chat or actions.</p>
+<p><strong>Start TLI from your phone:</strong> locally enable the independent HTTPS helper through <code>TLI_Setup.bat</code>, then review and save its connection in a compatible native Companion build while TLI is online. Later, check the helper and deliberately choose Start TLI. Accepted is different from ready; reconnect to the original backend to confirm readiness. The helper requires the computer to be awake, its Windows user signed in and the helper reachable. It does not wake a sleeping computer or start before sign-in. A browser update alone does not add this capability to an older native app.</p>
+
+<h2 id="vault">Vault</h2>
+    <p>Vault keeps personal files, secret values and private note contents encrypted on the computer hosting TLI. A separate Vault passphrase opens them; your access PIN controls entry to TLI. Vault notes are separate from <strong>Notes &amp; fixes</strong> and AI conversation history.</p>
+    <p>File names and note titles remain visible in stored filenames. Secret names and values are inside their encrypted store. When connecting from another device, the passphrase is processed by the TLI host. Use a secure HTTPS connection for that access.</p>
+
+    <h3>Initial Setup</h3>
+    <ol class="step-list">
+      <li>Choose <strong>Set up Vault</strong> to open Security settings. Choose and confirm a long, unique passphrase; the minimum is eight characters.</li>
+      <li>Keep the passphrase somewhere you can recover it. Spaces and capitalization are part of the passphrase.</li>
+      <li>After setup, open Vault and enter the same passphrase to unlock it.</li>
+    </ol>
+
+    <h3>Access and Locking</h3>
+    <p>Access lasts <strong>30 minutes from a successful unlock</strong>. Reading or editing does not extend that time. Unlocking applies to this TLI account, including its other signed-in sessions. Closing a tab does not lock Vault, and unexpired access may survive a host restart.</p>
+    <p>Choose <strong>Lock Vault</strong> to end access for the account. Save your notes first; unsaved edits are discarded when you confirm locking. If TLI cannot confirm removal of a saved unlock session, private content is hidden and an error explains the remaining risk. Retry locking explicitly.</p>
+    <p>Ten wrong passphrases cause a ten-minute lockout. <strong>Passphrase help</strong> explains the available options; it cannot reveal or recover the passphrase.</p>
+
+    <h3>Files</h3>
+    <p>Open <strong>Add a file</strong>, choose a file, then select <strong>Encrypt &amp; add file</strong>. The original file stays where it is. Search by stored name or sort by encrypted size. Names are normalized for storage; review a matching name before replacing an existing file. Files beginning with two underscores are reserved for internal Vault data.</p>
+    <p><strong>Download</strong> saves an ordinary, unencrypted copy through your browser. Locking Vault does not remove downloaded copies. <strong>Delete</strong> permanently removes the Vault copy after confirmation. Individual uploads are limited to 250 MiB.</p>
+
+    <h3>Secrets</h3>
+    <p>Use <strong>Add a secret</strong> to enter a name and value, then choose <strong>Save secret</strong>. Search names and deliberately choose <strong>Show</strong> or <strong>Copy</strong> when you need a value. Copied values remain in your device’s clipboard; hiding a value or locking Vault does not erase the clipboard.</p>
+
+    <h3>Vault Notes</h3>
+    <p>Choose <strong>New note</strong>, enter a title and text, then choose <strong>Save note</strong>. You can search existing titles and reopen a note to edit it. Typing does not save automatically. Changing a title saves under the new title; the original note remains. A matching title may replace an existing note after review.</p>
+    <p>These notes stay in Vault. They are not the setup details, preferences and past fixes stored in TLI’s separate <strong>Notes &amp; fixes</strong> view.</p>
+
+    <h3>Existing Login Data</h3>
+    <p>Legacy saved-login data is preserved, but this Vault interface does not expose Logins or Extension tabs. See <a href="#vault-extension">legacy extension status</a>. Saved logins are excluded from the encrypted-file export below.</p>
+
+    <h3>Encrypted Copy and Reset</h3>
+    <ul>
+      <li><strong>Download encrypted copy</strong> includes encrypted files, Vault notes and this account’s secret store. It omits saved logins, Vault metadata, encryption salts, machine keys and sessions.</li>
+      <li>This ZIP is <strong>not a standalone, restorable backup</strong>. Keep the matching original installation and Vault metadata as well as the passphrase. The passphrase alone cannot reconstruct the encryption key without the original salt. There is no archive import or Restore button.</li>
+      <li><strong>Delete Vault data &amp; reset</strong> requires the correct current passphrase and <code>RESET VAULT</code>. It permanently deletes Vault files, secrets, saved logins and Vault notes. Reset does not recover a forgotten passphrase.</li>
+    </ul>
+
+    <div class="danger-box">
+      <p><strong>TLI cannot recover a forgotten Vault passphrase.</strong> Keep your original data and matching installation if you may remember it later. If Vault reports unavailable or damaged saved data, do not run setup over it. Existing files are preserved when a read or save fails.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  HOME AUTOMATION                                         -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="homeauto">Smart devices</h2>
+<p>Start with registered devices. Read the device identifier, relay target and last reported state before choosing an action. Find Shelly devices searches the supported network flow; Add device and connection details are separate from everyday controls. Other existing drivers depend on their supported configuration.</p>
+<p>An empty discovery result means no matching devices were returned; a failed request means the result is unavailable. Exact identifiers and unique exact names take precedence. Ambiguous names or a shared address without its relay do not execute. Typos may produce suggestions, not automatic device actions.</p>
+<h3>Routines (formerly Automations)</h3>
+<p>Choose a routine starter, prepare up to 20 supported steps and preview every exact device and relay before saving. Saving runs nothing. Open a saved routine, review its current targets and explicitly choose Run. All targets must resolve before any step executes; duplicate requests do not start another run. Inspect per-step results and saved receipts for failure, partial completion or an uncertain result.</p>
+<p>Legacy trigger, enabled and cooldown fields remain preserved. This installation has no active presence, power or scheduled-trigger executor; these fields do not activate automatic work.</p>
+<h3>Optional Home Assistant</h3>
+<p>Smart devices offers a temporary connection to an existing Home Assistant server. With the owner PIN unlocked, review its origin and private addresses before entering a token. Read lights and switches explicitly, select one exact entity, review Turn on or Turn off, then choose Run. A service acknowledgement does not prove physical device state. Temporary access lasts up to 15 minutes. Credentials stay in host process memory and are not automatically reconnected or written into the device registry.</p>
+
+
+    <h2 id="files">Files</h2>
+<p>Open Files directly from the desktop sidebar to organize files. Free Space has its own sidebar entry; the Organize and Free Space subnavigation also remains available.</p>
+<h3>Organize: choose → select → review → results</h3>
+<p>Choose a folder, then Scan folder. Search and filter the list; select individual files or matching categories. A new folder listing starts with nothing selected; a successful rescan of the same folder keeps surviving selections. Edit destination subfolders or use Leave here to exclude files. Recipes add only the file types they name. Review moves shows exact paths and collisions before confirmation.</p>
+<p>One operation supports up to 500 selected files. A 501-file selection is explained and left for you to narrow; TLI never silently truncates it or starts automatic batches. Leave blocked files here changes the draft and requires a fresh review.</p>
+<p>Organize and Free Space share folder handoffs. Opening a saved place or drive prepares a location; it does not scan. A different incoming folder offers Keep current draft or Use this folder. Failed replacement scans retain the previous listing and draft. Suggested files must match the successfully listed immediate folder contents; review missing candidates and explicitly add matches to the plan.</p>
+<p>Choose an accessible folder on the TLI host. Prepare organize or rename changes, review exact paths and collisions, then explicitly run the reviewed operation. Results can be partial; inspect them before retrying. Undo only covers its recorded operation and checks for later changes.</p>
+<p>AI suggestions are written advice. They do not create or approve an operation plan. Review folder in Free Space prepares the folder; choose Scan there to inspect it. Previous completed advice remains when its replacement fails. Changing selection or destinations requires a fresh move review. Moving files between subfolders does not establish freed disk space.</p>
+<h3 id="free-space">Free Space: scan, compare and cleanup review</h3>
+<p>Choose a drive, quick folder or exact path on the TLI host, then choose Scan. Quick overview inspects for up to 15 seconds; Deeper scan can run for up to five minutes. Both have entry, depth and resource limits. Follow real progress and coverage, then inspect the largest files, folder totals, File types or Map. The list views provide a keyboard-accessible alternative to the map.</p>
+<p>Stop scan requests cancellation; leaving the page does not. Failed replacements preserve previous results and their observation time. Permission failures and scan limits remain visible. Large-file search, Duplicate search, Common folders and Saved comparisons start only when requested. A saved comparison is not a fresh check of the drive.</p>
+<p>Select up to 100 individual files for an exact-path cleanup review. Choose a duplicate copy to keep before selecting others; protected paths remain blocked. Moving reviewed files to Trash is explicit; file sizes do not prove how much space was freed because Trash may still occupy storage. Trash recovery uses the operating system and is separate from Organize's recorded Undo. If an outcome is uncertain, check its existing receipt instead of sending the move again. Prepare a question about a scan reviews what will be shared and does not send Chat automatically.</p>
+
+
+    <h2 id="devices">Printers &amp; scanners</h2>
+<p>Open Printers &amp; scanners directly from the desktop sidebar. Print &amp; scan and Printer status are two views of the same workspace.</p>
+<p>Refresh printers reads the host inventory. Printer settings opens the host operating system's settings. Open scanner app opens its scanning application. Send test page explicitly submits a job; it does not confirm that paper printed. Missing supply, queue or device information remains unknown.</p>
+<h3>Print &amp; Scan</h3>
+<p>Choose a printer or scanner available on the host and the document or scan options. Selecting a printer from inventory opens Print &amp; Scan after its selection handoff completes. A completed scan provides a downloadable file. A failed replacement retains the previous download until a new scan is successfully retrieved.</p>
+<p>Supported operations depend on host OS facilities, installed drivers and the device. A browser on another computer controls the TLI host's workflow, not that browser device's printer.</p>
+<h3 id="usb-drives">USB drives</h3>
+<p>USB drives has its own desktop sidebar entry. Open a selected location in Files or Free Space to prepare it, then explicitly choose Scan. On a phone, use More to reach USB drives.</p>
+
+
+    <h2 id="games">Game Optimizer</h2>
+<p><strong>Choose game → Choose goal → Analyze this PC → Recommendations.</strong> Choose smoother gameplay, higher FPS or better visuals, along with your resolution and frame-rate target. Analyze this PC reads the TLI host’s hardware and supported settings. Check the computer name: a phone browser does not analyze the phone, and the computer running inference can be different.</p>
+<p>Review and correct CPU, GPU, RAM, playing resolution and target FPS. The existing readers support Cyberpunk 2077, The Witcher 3 and Red Dead Redemption 2. Review current quality values, correct values you know, and leave unavailable ones Unknown. For another game, enter named quality settings from its menu and their known values. User-named controls and their options remain unverified; changing games does not reuse the previous game's readings.</p>
+<p>Get settings plan uses the selected available Integrated or LM Studio model to choose up to three bounded setting trials. Each shows the current value and its source, suggested value, scope, reason and tradeoff. Unknown values stay unknown. When there is no useful supported trial, add the missing context or what you tried; a plan is not guaranteed. General guidance without AI is labeled separately.</p>
+<p>Ask a follow-up about the same game and explain what changed or what you measured. Choose whether to include its previous completed advice and whether to try other settings. Prior completed advice remains available after a failed or interrupted request. Retry deliberately after reviewing the selected provider and current inputs.</p>
+<p>Apply one suggestion yourself, compare the same scene using your own FPS or frame-time display, and restore the previous value if it is worse. Desired FPS is a goal; achievable FPS, improvement and a causal bottleneck remain unmeasured by this advice workflow. It does not change settings, close processes, use web lookup or create a new peer-inference route.</p>
+<h3 id="performance">Help → App performance check</h3>
+<p>Choose a running process on the computer hosting TLI, describe the symptom, then explicitly start a 30-second observation. The process ID and creation time bind that selection to one launch; a process may represent only part of an application. Exiting or reusing the process ID never silently retargets the observation.</p>
+<p>Review CPU and memory readings with their duration, valid samples and missing fields. Stop produces a partial result. Failed replacement work retains the previous result. These observations do not measure FPS, dropped frames, GPU load or thermal throttling and do not prove a causal bottleneck.</p>
+<p>Save a useful observation explicitly to diagnostic history. You can then review a Chat handoff or add its report link to Troubleshooting. Comparing saved observations includes host and workload caveats; application differences require matching host and known executable identity. Opening a report never runs another observation.</p>
+<h3 id="routines">Routines</h3>
+<p>Start with a supported device and a useful starter, or create up to 20 steps yourself. Choose devices by friendly name and inspect exact device and relay details before saving or running. Saving changes no device state. If no supported devices are registered, use Set up smart devices.</p>
+<p>Edit prepares the saved routine for a revision-checked update. Duplicate creates a separate editable draft. Archive hides a routine from the active list and blocks runs; Show archived and Restore bring it back. Favorites appear on Home in this browser and always open a current-target review before execution. Conflicting edits or changed devices require a fresh review; running routines cannot be edited.</p>
+<p>Review all current targets and acknowledge the complete plan before Run reviewed routine. Inspect per-step results and saved receipts for partial or uncertain outcomes; do not assume a failed connection means no device changed. There is no automatic retry or automatic schedule. Native Companion continues to use its existing scenes; desktop routine synchronization requires a separate Companion release. Native app distribution is unchanged by this release.</p>
+<h3 id="more">More → Installed apps and Advanced tools</h3>
+<p>Installed apps opens packages already installed on the host. Builder, Scripts, raw Utilities and Hub package management remain under Advanced tools and can be pinned. Existing projects, registries, apps and app storage stay available. Package management replaces the prominent Hub storefront; it does not add a public marketplace.</p>
+
+    <h2 id="problems">Help → Fix a problem</h2>
+<p>Follow a problem through <strong>Describe → Choose computer → Review a check → Run → Review evidence → Record what helped</strong>. Opening a case, choosing a symptom or reviewing a suggested check does not run a diagnostic or send a Chat request.</p>
+<p>Review the executing host, measured target, scope and any internet contact before Run. System and network checks measure the TLI host. A device check measures reachability from that host; it is not a remote CPU or application test. Unavailable capabilities remain unavailable.</p>
+<p>A completed check saves a diagnostic report. Reviewing its link, adding it to a problem draft and saving the problem are separate actions. If a problem save fails, the report and draft remain available and the check is not repeated. A conflict requires deliberate review. Marking a problem Resolved records your conclusion; saving a confirmed historical fix is another explicit action.</p>
+<p><strong>Continue with TLI</strong> reviews the case revision, selected steps and evidence before asking Chat. <strong>Reusable guides</strong> prepare editable, unsaved planned steps; they do not carry a computer, evidence or completed outcome. Guide files contain unencrypted text, so review them before export or import.</p>
+<p>Saved reports offer an explicit review before repeating the same supported check. Compare results with their scope, coverage and observation times. Reviewed case exports let you select evidence and redactions before downloading HTML, text or JSON. These are historical, unencrypted copies, separate from encrypted saved-work backups.</p>
+
+
+    <h2 id="mesh">Computers</h2>
+<p>The roster shows separately identified TLI computers, reported capabilities and observation times. A repeated name is not proof that two records are the same computer. Model files reported by a peer do not prove a complete installation or running AI.</p>
+<p>Use the existing connection controls to connect another TLI computer. Network reachability, discovery configuration and firewall access matter. Administration remains secondary. A host, member or standalone role describes the mesh configuration, not universal control over every tool.</p>
+<p><strong>Connect phone</strong> opens native Phone Companion setup. Under Browser connection, <strong>Browser satellite</strong> creates a different browser invitation. Its QR does not pair the native app.</p>
+
+
+    <h2 id="tli-chat">Computers → Messages &amp; files</h2>
+<p>Choose a recipient and check its connection, then send a message or file. These are messages between users, not AI replies. Review message and transfer status before a deliberate retry after a failure.</p>
+<p>Local connections use reachable TLI peers. Optional cross-network configuration is separate and may use an external relay. Backgrounding or losing Wi-Fi does not authorize automatic replay of an action.</p>
+
+
+    <h2 id="tools">More → Advanced tools → Utilities &amp; Scripts</h2>
+<p>Utilities starts with the question a diagnostic can answer. Choose the tool, inspect its target and labeled parameters, then run it. Review measured output before optionally asking AI for an explanation.</p>
+<p>Connectivity checks to public addresses contact the internet. The LM Studio model-list check reads model information; it does not prove generation. Custom scripts run code on the host and are not an OS security sandbox.</p>
+<p>Scripts generates a draft for your described task and target shell. Review, copy or download it. Generation does not execute it, and a backup script is not a completed backup.</p>
+<h3>Builder</h3>
+<p>Open the exact project folder, review its permissions, then choose the task mode. Inspect proposals and diffs before applying them. Applied changes, command execution and snapshot receipts describe different outcomes. Commands run with host access. Preserve unfinished drafts and use only a snapshot's recorded rollback scope.</p>
+<h3>Package management (TLI Hub)</h3>
+<p>Read the package source and effect. Install stores a package; a theme action changes appearance, a prompt action changes the prompt, and Run script on host executes code. A package listing is not vetting. Share on this host does not publish to a public store.</p>
+
+
+    <h2 id="settings">Settings</h2>
+<p>Settings groups General, AI &amp; chat, Security &amp; connections, Saved data &amp; backups, and App &amp; troubleshooting. Search stable setting names. Each section identifies whether it applies to this browser, the current account or the shared host.</p>
+<p>Appearance choices save in this browser. AI routing, host identity and access controls use their displayed save actions. Phone Companion links to its dedicated page, where running settings, saved startup and effective next startup remain distinct. Saving startup choices does not restart TLI.</p>
+<p><strong>Classic or Modern interface:</strong> use <strong>View</strong> in the header or <strong>Settings → General → Appearance</strong>. Classic restores the compact navigation rail, card layouts, chat bubbles and long-form Settings, using the same current features and protections. Modern remains the default. Switching keeps your current workspace and drafts; it does not roll back TLI or its data. Choose colors separately below the interface cards; <strong>Classic Mint</strong> is the early palette and works with either interface.</p>
+<p><strong>Local MCP connections</strong> lives under Security &amp; connections and requires an unlocked owner-PIN browser session using HTTPS or localhost. The optional client connects to an existing literal-loopback HTTP(S) MCP endpoint on a different port on this host. Request the catalogue, review untrusted tool descriptions and exact arguments, then explicitly invoke one tool. A listed tool's effects are not independently verified, and no tool is automatically supplied to Chat. The separate read-only bridge grants selected host metadata to a local client for a limited time; its credential cannot control devices or read Vault and notes.</p>
+<h3>Check, create and verify</h3>
+<p><strong>Check saved data</strong> reads supported Notes &amp; fixes, conversations and diagnostic history; it does not create or verify a backup. <strong>Create backup</strong> makes the displayed password-protected archive. <strong>Verify backup</strong> checks a temporary copy without restoring or merging into current data.</p>
+<p><strong>Recover into a separate copy</strong> is a separate reviewed action. Choose the archive, its password and a new host folder under an existing parent. Review the source account, export time, counts, destination and mapping to the copy's local owner before creating it. Existing folders are never replaced. The new folder contains encrypted data and a receipt, not an installed application; TLI does not switch to it. PIN, identity, Vault, Companion credentials, models and attached files are excluded. Keep the portable archive and its password; Windows keys in the copy belong to the OS account that created it. Python/ZIP installations support this checkpoint; frozen standalone recovery is unavailable. Closing the page cannot guarantee cancellation after a create request was sent. If the connection fails, check the destination before preparing another attempt.</p>
+<p>Review scope before creating an archive. Vault content, models, credentials and whole-installation recovery are excluded. Legacy browser JSON export is a separate, unencrypted format. There is no Restore button in this workflow.</p>
+
+
+    <h2 id="ai-providers">AI Providers</h2>
+<p>TLI retains bundled inference, configured LM Studio and connected-computer routing. Review the source and actual readiness shown in AI &amp; chat. Model files, selected configuration and confirmed running health are separate.</p>
+<p>The model library checks resources on the inference host, not the browser or phone. Review estimated requirements and compatibility reasons. Unknown probes do not mean compatible. Downloads and imports install files without selecting them. Vision requires the supported model/runtime and all required components.</p>
+<p>Bundled AI can work offline after installation. Downloads, updates, optional online search, configured providers and relays can contact outside services. Changing providers is not permission to send unsupported private context through a different route.</p>
+
+
+    <h2 id="vault-extension">Vault Browser Extension</h2>
+    <p><strong>Legacy integration — not exposed in the current Vault interface.</strong> This release preserves existing saved-login stores and extension endpoints, but it does not provide Logins or Extension tabs, install an extension, or add autofill setup controls.</p>
+    <p>Extension installation, origin matching, autofill and credential handling have not been verified in this Vault rebuild. This section is retained for older links; it is not a current setup guide.</p>
+    <div class="info-box">
+      <p>Previously configured integrations may still use their existing API key while their account has Vault unlocked. An API key is a credential; do not paste it into chat or share it. The encrypted-file export does not include saved logins or extension configuration. Preserve the original installation and matching metadata.</p>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  LAN DISCOVERY                                           -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="lan-discovery">LAN Discovery</h2>
+<p>Enabled discovery helps reachable TLI peers on a compatible LAN find each other. It depends on broadcast reachability and host/firewall configuration. It does not inventory every computer or grant control over unregistered devices.</p>
+<p>If a peer is missing, check both TLI installations, displayed addresses and current network settings. Native Phone Companion pairing and Browser satellite invitations are separate from computer discovery.</p>
+
+
+    <h2 id="security">Security &amp; PIN</h2>
+    <p>TLI is designed for trusted home LAN environments. It is not intended to be exposed to the public internet.</p>
+
+    <h3>Key Security Properties</h3>
+    <ul>
+      <li>Local data is stored on the TLI host. Enabled online search, updates, downloads and configured external connections can send requests outside the LAN; review those settings for your setup.</li>
+      <li>Vault contents use <strong>AES-256-GCM</strong> with <strong>PBKDF2-SHA256</strong> key derivation (200,000 iterations and a 16-byte encryption salt). Password verification uses a separate salt. Unexpired unlock keys may be stored encrypted with a machine-local key.</li>
+      <li>Sessions are cookie-based (<code>httponly</code>, <code>samesite=strict</code>). Valid for 24 hours, revoked on PIN change/removal.</li>
+      <li>The PIN hash is stored, never the PIN itself.</li>
+      <li>Notes &amp; fixes and conversations follow the authenticated account. When PIN protection is disabled, local access shares one owner.</li>
+      <li>HTTPS is available through reviewed startup settings. It must be active with a usable certificate before native phone pairing; a saved choice alone does not change the current connection.</li>
+      <li>All API responses include security headers: <code>X-Content-Type-Options</code>, <code>X-Frame-Options: DENY</code>, <code>Content-Security-Policy</code>, <code>Permissions-Policy</code>.</li>
+    </ul>
+
+    <h3>Recommended Practices</h3>
+    <ul>
+      <li>Set an access PIN if anyone else is on your LAN or WiFi.</li>
+      <li>Use a long, unique Vault passphrase. Keep the matching Vault data and metadata; an encrypted-file export alone is not a complete recovery backup.</li>
+      <li>Do not port-forward TLI to the internet (port 8000 should not be accessible outside your home network).</li>
+      <li>If a legacy Vault Extension key may be exposed, lock Vault and stop using that integration until its access is reviewed. The current interface does not provide extension key-management controls.</li>
+    </ul>
+
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <!--  TROUBLESHOOTING                                         -->
+    <!-- ══════════════════════════════════════════════════════════ -->
+    <h2 id="troubleshoot">Troubleshooting</h2>
+
+    <h3>TLI won't open after install</h3>
+    <ul>
+      <li>The backend may still be starting. Wait 10 seconds and refresh.</li>
+      <li>Check if <code>tli_backend.exe</code> is running in Task Manager.</li>
+      <li>If it crashed, navigate to <code>%AppData%\Local\TheLANIntelligence\</code> and run <code>start_tli.bat</code> manually to see error output.</li>
+    </ul>
+
+    <h3>Can't access TLI from another device on the LAN</h3>
+    <ul>
+      <li>Confirm TLI is running on the host machine (open <code>localhost:8000</code> on the host first).</li>
+      <li>Check that Windows Firewall isn't blocking port 8000. Allow it in: Control Panel → Windows Defender Firewall → Allow an app.</li>
+      <li>Make sure both devices are on the same network (same router/subnet). WiFi and wired devices on the same router are usually on the same subnet.</li>
+      <li>Use the machine's actual IP (<code>ipconfig</code> in terminal), not <code>localhost</code>, from the other device.</li>
+    </ul>
+
+    <h3>AI chat returns "No available AI provider"</h3>
+    <ul>
+      <li>The bundled AI may still be loading — first start can take 30–60 seconds. Wait and try again.</li>
+      <li>If selected model files are unavailable, open the model library to review installation and compatibility. An installed model is not necessarily running.</li>
+      <li>Check Settings → AI Model for runtime status and any error messages.</li>
+      <li>If using LM Studio, verify it's running and the URL in Settings is correct.</li>
+    </ul>
+
+    <h3>AI gives wrong date or seems unaware of the current time</h3>
+    <p>The bundled AI is context-aware — it receives the current date, time, and node info with every message. Check the supplied context and host clock. Runtime readiness does not guarantee accurate answers; restarting is not proof that an answer will improve.</p>
+
+    <h3>Lock screen won't dismiss / PIN not working</h3>
+    <ul>
+      <li>Make sure Caps Lock is off — the PIN is case-sensitive.</li>
+      <li>Use <strong>Forgot PIN?</strong> for recovery guidance and <strong>Recheck access status</strong>. Preserve existing files before restoring a matching backup. Windows-protected keys may require the original account and computer; do not run setup over unavailable security files.</li>
+      <li>Hard-refresh the browser first: <code>Ctrl+Shift+R</code>. A cached version of the app can sometimes get stuck.</li>
+    </ul>
+
+    <h3>Vault says "Vault locked" right after unlocking</h3>
+    <p>Vault access expires 30 minutes after a successful unlock, and another signed-in session for the same account can lock it sooner. Choose <strong>Check status</strong> to see the current state. If TLI access itself has expired, unlock TLI first, then enter the Vault passphrase. A failed status check means availability is unknown; it does not mean your Vault is empty or needs setup.</p>
+
+    <h3>Mesh node not appearing in directory</h3>
+    <ul>
+      <li>Ensure both nodes are on the same LAN subnet.</li>
+      <li>UDP port 47474 must not be blocked by either machine's firewall (auto-discovery uses this port).</li>
+      <li>Wait up to 30 seconds after the second node starts — that's the beacon interval.</li>
+      <li>You can also join manually: enter the other node's IP:8000 in the Mesh panel.</li>
+    </ul>
+
+    <h3>Duplicate node entries in Mesh panel</h3>
+    <p>This can happen if TLI was reinstalled on the same machine, generating a new node ID. TLI preserves separate identities even when their names match. Inspect identity and observation time before treating a record as obsolete; a shared name alone is not a reason to remove it.</p>
+
+    <h3>Vault Extension not autofilling</h3>
+    <p>The legacy extension is not configured or verified by this release. There are no Extension or Logins tabs in the current Vault interface. See <a href="#vault-extension">legacy integration status</a>; do not reset Vault to troubleshoot autofill.</p>
+
+    <h3>Games panel shows "No game detected"</h3>
+    <p>The game scanner reads the foreground window process every 2.5 seconds. The game must be running and in the foreground (not minimized). For launchers that spawn indirect processes, use <strong>Add Game Manually</strong> with the full .exe path.</p>
+
+    <h3>Scripts panel warning banner appears unexpectedly</h3>
+    <p>TLI's danger scanner flags 15 patterns including disk formatting, registry deletion, and user account commands. If your legitimate script triggers a false positive, review it carefully before running — the warning is informational, not a block.</p>
+
+    <div style="margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border);">
+      <p style="color: var(--text-muted); font-size: 12px;">
+        TLI &nbsp;·&nbsp; Your private home console. &nbsp;·&nbsp;
+        <a href="/">Back to console</a>
+      </p>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,46 @@
+{
+  "name": "thelanintelligence",
+  "productName": "TheLANIntelligence",
+  "version": "0.9.1",
+  "description": "TheLANIntelligence — Local-first AI console (LAN-only, no cloud).",
+  "main": "main.js",
+  "author": "Legato",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+  "appId": "com.legato.tli",
+  "productName": "TheLANIntelligence",
+  "asar": true,
+  "files": [
+    "main.js"
+  ],
+  "extraResources": [
+    { "from": "bundle/backend", "to": "backend" },
+    { "from": "bundle/tli", "to": "tli" },
+    { "from": "bundle/splash", "to": "splash" }
+  ],
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ]
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "TheLANIntelligence"
+  }
+}
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TLI Vault — Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <span class="logo">TLI</span>
+      <h1>Vault Autofill Settings</h1>
+    </div>
+
+    <div class="card">
+      <h2>TLI Instance URL</h2>
+      <p class="hint">The address of your TLI installation on your local network (e.g. <code>http://fox.local:8000</code> or <code>http://192.168.1.10:8000</code>).</p>
+      <input type="text" id="tli-url" placeholder="http://fox.local:8000" spellcheck="false" autocomplete="off">
+    </div>
+
+    <div class="card">
+      <h2>API Key</h2>
+      <p class="hint">Generate this key in TLI → Vault → Extension Settings, then paste it here. The key is stored locally in your browser and never sent anywhere except your TLI instance.</p>
+      <div class="key-row">
+        <input type="password" id="tli-api-key" placeholder="Paste your TLI Vault API key" autocomplete="off">
+        <button id="toggle-key" type="button" title="Show/hide">&#128065;</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="save-btn" class="btn-primary">Save Settings</button>
+      <button id="test-btn" class="btn-secondary">Test Connection</button>
+    </div>
+
+    <div id="result" class="result hidden"></div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "version":      "1.3.5-beta",
+  "released":     "2026-04-19",
+  "notes":        "v1.3.5 — Drive-aware AI cleanup, Devices panel auto-loads USB storage, AI model save-to picker, system file delete protection, casual language understanding, live feed flood guard, TLI Chat node dedup, ActionCard scan-path navigation. Report issues to thelanintelligence@gmail.com.",
+  "download_url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.3.5-beta/TLI_dist_1.3.5-beta.zip",
+  "sha256":       "f644d5639fd6a0c5e907f6e2daaba97720e73fc38f0f47785906467b2e3a9c6b",
+  "frontend_only": true
+}
