@@ -139,12 +139,14 @@ def test_peer_only_router_exposes_no_host_surfaces_and_rejects_unsigned_input(pe
     calls = []
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(make_peer_router(resource_loader=lambda **kw: calls.append(kw)))
-    assert {route.path for route in app.routes} == {"/agent/peer/inference", "/agent/peer/inference/stream"}
+    assert set(app.openapi()["paths"]) == {"/agent/peer/inference", "/agent/peer/inference/stream"}
     with TestClient(app, base_url="https://192.168.2.10:8443") as client:
         assert client.get("/agent/peer/inference").status_code == 401
         assert client.post("/agent/peer/inference/stream", json=payload()).status_code == 401
-        assert client.get("/api/ai/lan/peers").status_code == 404
-        assert client.post("/mesh/trust/approve", json={}).status_code == 404
+        for path in ("/", "/docs", "/redoc", "/openapi.json", "/api/ai/lan/peers", "/api/ai/chat",
+                     "/vault/status", "/open_reveal", "/mesh/trust/approve"):
+            assert client.get(path).status_code == 404
+            assert client.post(path, json={}).status_code == 404
     assert calls == []
 
 

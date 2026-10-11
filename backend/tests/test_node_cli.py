@@ -184,8 +184,14 @@ def test_trust_requires_separate_fingerprints_and_revokes_persistently(state, sa
 
 def test_runtime_has_only_signed_inference_routes_and_does_not_load_host(state):
     patch = "\n".join([
-        "import uvicorn, json", "def inspect(app, **kw):",
-        "    assert {r.path for r in app.routes} == {'/agent/peer/inference', '/agent/peer/inference/stream'}",
+        "import uvicorn, json", "from fastapi.testclient import TestClient", "def inspect(app, **kw):",
+        "    assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream'}",
+        "    with TestClient(app, base_url='https://192.168.50.9:8444') as client:",
+        "        assert client.get('/agent/peer/inference').status_code == 401",
+        "        assert client.post('/agent/peer/inference/stream', json={}).status_code == 401",
+        "        for path in ('/', '/docs', '/redoc', '/openapi.json', '/api/ai/chat', '/vault/status', '/open_reveal', '/mesh/trust/approve'):",
+        "            assert client.get(path).status_code == 404",
+        "            assert client.post(path, json={}).status_code == 404",
         "    assert kw['host'] == '192.168.50.9' and kw['port'] == 8444",
         "    assert kw['proxy_headers'] is False and kw['access_log'] is False",
         "    assert kw['ssl_certfile'] and kw['ssl_keyfile']",

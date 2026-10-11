@@ -7,7 +7,6 @@ import http.client
 import json
 from pathlib import Path
 import secrets
-import shutil
 import site
 import socket
 import ssl
@@ -15,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import venv
 
 import pytest
 from cryptography import x509
@@ -388,11 +388,9 @@ def test_concurrent_first_setup_and_launch_cannot_replace_installation_identity(
 @pytest.mark.parametrize('record_source', ['desktop', 'helper'])
 def test_windows_hidden_launcher_records_real_interpreter_and_gracefully_stops_owned_child(host, record_source):
     root = host['root']
-    installed = Path(sys.executable).parent
-    scripts = root / 'backend/.venv/Scripts'; scripts.mkdir(parents=True)
-    for name in ('python.exe', 'pythonw.exe'):
-        shutil.copyfile(installed / name, scripts / name)
-    shutil.copyfile(installed.parent / 'pyvenv.cfg', scripts.parent / 'pyvenv.cfg')
+    # Build actual redirectors/configuration whether pytest itself runs under
+    # a base interpreter (as in CI) or an existing virtual environment.
+    venv.EnvBuilder(with_pip=False).create(root / 'backend/.venv')
     # The isolated redirector resolves test dependencies read-only from the
     # existing environment; no dependency installs or real app import occur.
     source_root = str(Path(__file__).resolve().parents[1])

@@ -6,7 +6,7 @@ The browser preview renders the same screens with clearly labeled sample data. R
 
 ## Develop and check
 
-Use Node **22.13+** (the repository host's system Node 20.11 is too old), npm, and Expo development builds. Expo SDK 57 targets React Native 0.86.3, iOS 16.4+ and Android 7+. iOS native compilation requires Xcode 26.4+ on macOS or EAS; local Android compilation needs the Android SDK and supported JDK.
+Use Node **22.13+**, npm, and Expo development builds. Expo SDK 57 targets React Native 0.86.3, iOS 16.4+ and Android 7+. iOS native compilation requires Xcode 26.4+ on macOS or EAS; local Android compilation needs the Android SDK and supported JDK.
 
 ```powershell
 cd mobile

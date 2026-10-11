@@ -1,5 +1,5 @@
 # TLI Build Script
-# Run from J:\TheLegatoIntelligence\ in PowerShell (no admin needed)
+# Legacy native builder; run from the repository root in PowerShell (no admin needed).
 # Usage: .\build.ps1
 
 $ErrorActionPreference = "Stop"

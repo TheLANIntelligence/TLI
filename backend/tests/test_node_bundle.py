@@ -76,6 +76,7 @@ from pathlib import Path
 from types import SimpleNamespace
 sys.path.insert(0, str(Path('backend').resolve()))
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 import tli_state as S
 import lan_inference as L
 from peer_inference_routes import make_peer_router
@@ -84,7 +85,13 @@ L._local_json = lambda *args, **kwargs: {'models': []}
 assert L._resources(include_bundled=False) == []
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(make_peer_router(resource_loader=lambda **kwargs: L._resources(include_bundled=False, **kwargs)))
-assert {route.path for route in app.routes} == {'/agent/peer/inference', '/agent/peer/inference/stream'}
+assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream'}
+with TestClient(app, base_url='https://192.168.2.10:8443') as client:
+    assert client.get('/agent/peer/inference').status_code == 401
+    assert client.post('/agent/peer/inference/stream', json={}).status_code == 401
+    for path in ('/', '/docs', '/redoc', '/openapi.json', '/api/ai/chat', '/vault/status', '/open_reveal', '/mesh/trust/approve'):
+        assert client.get(path).status_code == 404
+        assert client.post(path, json={}).status_code == 404
 assert not {'main', 'ai.ai_manager', 'routers.system_routes', 'vault_security', 'companion_auth'} & set(sys.modules)
 assert not Path(S.CONVERSATIONS_FILE).exists()
 print(json.dumps({'isolated_compute_only': True}))

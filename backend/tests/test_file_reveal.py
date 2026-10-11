@@ -87,9 +87,9 @@ def test_file_manager_launch_error_is_visible(authed_client, tmp_path, monkeypat
     assert "Could not open the host file manager" in result.json()["detail"]
 
 
-def test_real_app_uses_authenticated_reveal_route(app, client, tmp_path, monkeypatch, launches):
-    route = next(route for route in app.routes if getattr(route, "path", None) == "/open_reveal")
-    assert route.endpoint is file_routes.open_reveal
+def test_real_app_uses_authenticated_reveal_route(client, tmp_path, monkeypatch, launches):
+    # Check effective request dispatch: included routers need not be flattened
+    # into app.routes, and a later legacy alias must never bypass the gate.
     monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
 
     result = client.post("/open_reveal", json={"path": str(tmp_path)})

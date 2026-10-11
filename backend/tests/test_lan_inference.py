@@ -295,7 +295,10 @@ def test_asgi_disconnect_releases_primed_worker_without_gc(peers, monkeypatch, f
             raise OSError("synthetic browser disconnected")
     async def run():
         with pytest.raises(ClientDisconnect):
-            await response({"asgi": {"spec_version": "2.4"}}, receive, send)
+            await response({"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
+                            "http_version": "1.1", "method": "POST", "scheme": "https",
+                            "path": "/agent/peer/inference/stream", "query_string": b"",
+                            "root_path": "", "headers": []}, receive, send)
         assert not L._SLOT.locked()
     asyncio.run(run())
     # No explicit aclose, gc.collect or test fixture cleanup may be required.
