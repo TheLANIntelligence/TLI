@@ -13,6 +13,58 @@ spec.loader.exec_module(verifier)
 VERSION = "1.4.0-beta"
 
 
+def test_failed_child_reports_bounded_output_tail():
+    from subprocess import CompletedProcess
+    result = CompletedProcess(["synthetic-child"], 1, stdout="prefix" * 4000, stderr="specific child failure")
+    with pytest.raises(verifier.PackageError) as caught:
+        verifier.require_process(result, "Application check failed")
+    message = str(caught.value)
+    assert message.startswith("Application check failed")
+    assert message.endswith("specific child failure")
+    assert len(message) < 12200
+
+
+def test_successful_child_needs_no_failure_output():
+    from subprocess import CompletedProcess
+    verifier.require_process(CompletedProcess(["synthetic-child"], 0), "not a failure")
+
+
+def test_macos_stdlib_metadata_is_warmed_before_application_guard(monkeypatch):
+    import platform
+    import subprocess
+    import sys
+    from types import SimpleNamespace
+    # Load a fresh stdlib module so this exercises CPython's real lazy uname
+    # processor lookup and platform cache without disturbing the test host.
+    spec = importlib.util.spec_from_file_location("isolated_platform", platform.__file__)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    fresh.sys = SimpleNamespace(platform="darwin", executable=sys.executable)
+    uname = fresh.uname_result("Darwin", "synthetic", "24.0", "synthetic version", "arm64")
+    monkeypatch.setattr(fresh, "uname", lambda: uname)
+    monkeypatch.setattr(fresh, "mac_ver", lambda: ("15.0", ("", "", ""), "arm64"))
+    monkeypatch.setattr(verifier, "host_platform", fresh)
+    def blocked(*args, **kwargs):
+        raise RuntimeError("Application process guard")
+    monkeypatch.setattr(subprocess, "check_output", blocked)
+    with pytest.raises(RuntimeError, match="Application process guard"):
+        fresh.platform()
+    probes = []
+    def metadata_command(command, **kwargs):
+        probes.append(command)
+        if command == ["uname", "-p"]:
+            return "arm\n"
+        assert command[:2] == ["file", "-b"]
+        return b"Mach-O 64-bit executable arm64\n"
+    monkeypatch.setattr(subprocess, "check_output", metadata_command)
+    warmed = verifier.host_metadata()
+    assert warmed["platform"].startswith("macOS-15.0")
+    assert probes and probes[0] == ["uname", "-p"]
+    monkeypatch.setattr(subprocess, "check_output", blocked)
+    assert fresh.platform() == warmed["platform"]
+    assert fresh.processor() == "arm"
+
+
 def fixture_files(target):
     files = {name: b"fixture\n" for name in verifier.COMMON_ROOT | verifier.PLATFORM_ROOT[target] | verifier.REQUIRED_SOURCE}
     files["backend/tli_state.py"] = f'TLI_VERSION = "{VERSION}"\n'.encode()

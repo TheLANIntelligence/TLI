@@ -59,7 +59,12 @@ jobs:
         if: always()
         with:
           name: verification-${{ matrix.platform }}
-          path: build_work/package-verification/**/report.json
+          path: |
+            build_work/package-verification/*/report.json
+            build_work/package-verification/*/application.json
+            build_work/package-verification/*/application.log
+            build_work/package-verification/*/setup.log
+            build_work/package-verification/*/runtime-*.txt
           if-no-files-found: warn
           retention-days: 30
 
@@ -90,6 +95,11 @@ jobs:
         if: always()
         with:
           name: verification-macos-intel
-          path: build_work/package-verification/**/report.json
+          path: |
+            build_work/package-verification/*/report.json
+            build_work/package-verification/*/application.json
+            build_work/package-verification/*/application.log
+            build_work/package-verification/*/setup.log
+            build_work/package-verification/*/runtime-*.txt
           if-no-files-found: warn
           retention-days: 30

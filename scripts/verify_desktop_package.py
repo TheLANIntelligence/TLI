@@ -2,8 +2,9 @@
 
 The application import and ASGI requests run in a separate process with network,
 process creation, discovery, browser opening and inference disabled. Only the
-packaged native runtime's --version and --help commands execute outside that
-guard. No model is downloaded or loaded, and no live TLI installation is used.
+packaged native runtime's --version and --help commands and standard-library host
+metadata probes execute outside that guard. No model is downloaded or loaded,
+and no live TLI installation is used.
 """
 from __future__ import annotations
 
@@ -70,6 +71,13 @@ class PackageError(ValueError):
 def require(condition, message):
     if not condition:
         raise PackageError(message)
+
+
+def require_process(result, message):
+    """Keep failed synthetic-child diagnostics visible even without artifacts."""
+    if result.returncode != 0:
+        output = (result.stdout or "") + "\n" + (result.stderr or "")
+        raise PackageError(message + "\n--- child output (last 12000 characters) ---\n" + output[-12000:])
 
 
 def member_path(name):
@@ -224,6 +232,14 @@ def clean_environment(installation=None):
     return env
 
 
+def host_metadata():
+    # CPython platform() uses uname -p and file on macOS. Populate its own cache
+    # before forbidding application subprocesses, without patching the guard or
+    # supplying fabricated platform results to the real diagnostics endpoint.
+    return {"platform": host_platform.platform(),
+            "scope": "Python standard-library host metadata captured before application isolation"}
+
+
 def child_smoke(installation, expected_version, report_file):
     require(installation.is_relative_to((ROOT / "build_work").resolve()) and installation.is_dir()
             and installation.name == "installation", "Smoke installation must be a fresh build_work extraction")
@@ -236,6 +252,7 @@ def child_smoke(installation, expected_version, report_file):
     os.environ.update(environment)
     os.chdir(installation)
     sys.path.insert(0, str(installation / "backend"))
+    metadata = host_metadata()
     attempts = []
     def blocked(*args, **kwargs):
         attempts.append("blocked live effect")
@@ -307,6 +324,7 @@ def child_smoke(installation, expected_version, report_file):
         report = {"version": state.TLI_VERSION, "source_id": release["source_id"],
                   "capabilities": sorted(release["capabilities"]), "static_assets_verified": len(assets),
                   "selected_runtime": runtime, "live_effect_attempts": len(attempts),
+                  "host_metadata_probe": metadata,
                   "scope": "inert import, ASGI read routes and exact extracted static bytes; no startup lifespan"}
         report_file.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
@@ -349,14 +367,15 @@ def verify(archive, target, expected_version, output_dir=None, check_setup=False
                                 env=environment, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                 encoding="utf-8", errors="replace", timeout=900, **flags)
         (work / "setup.log").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-        require(result.returncode == 0, "Packaged setup-only launcher failed; inspect " + str(work / "setup.log"))
+        require_process(result, "Packaged setup-only launcher failed; inspect " + str(work / "setup.log"))
         require(Path(interpreter).is_file(), "Setup-only launcher did not create its installation's Python environment")
     result = subprocess.run([interpreter, "-I", "-B", str(Path(__file__).resolve()), "--_smoke-child",
                              str(installation), "--expected-version", expected_version, "--_report", str(report_file)],
                             env=clean_environment(installation), cwd=installation,
                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, **flags)
     (work / "application.log").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-    require(result.returncode == 0 and report_file.is_file(), "Extracted application smoke failed; inspect " + str(work / "application.log"))
+    require_process(result, "Extracted application smoke failed; inspect " + str(work / "application.log"))
+    require(report_file.is_file(), "Extracted application smoke did not write its report; inspect " + str(work / "application.log"))
     application = json.loads(report_file.read_text("utf-8"))
     expected_runtime = "backend/ai/runtime/llama_server.exe"
     if target == "macos":
@@ -372,7 +391,7 @@ def verify(archive, target, expected_version, output_dir=None, check_setup=False
                                 encoding="utf-8", errors="replace", timeout=30, **flags)
         output = result.stdout + "\n" + result.stderr
         (work / ("runtime-" + argument[2:] + ".txt")).write_text(output, encoding="utf-8")
-        require(result.returncode == 0, "Packaged runtime inspection failed: " + argument)
+        require_process(result, "Packaged runtime inspection failed: " + argument)
         outputs[argument] = output
     build = re.search(r"\bversion:\s*b?(\d+)\b", outputs["--version"], re.I)
     require(build is not None and build[1] == "7896", "Packaged runtime does not match pinned build b7896")
