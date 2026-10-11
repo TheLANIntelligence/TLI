@@ -41,8 +41,10 @@ def test_real_powershell_has_no_console_and_still_returns_json():
     script = '''Add-Type -Name ConsoleProbe -Namespace TliTests -MemberDefinition '[DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();'
 [pscustomobject]@{console = [TliTests.ConsoleProbe]::GetConsoleWindow().ToInt64(); value = "captured"} | ConvertTo-Json -Compress
 '''
+    # Cold PowerShell/.NET compilation can be slow on shared Windows runners.
+    # This asserts console allocation and captured output, not startup speed.
     result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-                            capture_output=True, text=True, timeout=20, **process_utils.hidden_process_kwargs())
+                            capture_output=True, text=True, timeout=60, **process_utils.hidden_process_kwargs())
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"console": 0, "value": "captured"}
 

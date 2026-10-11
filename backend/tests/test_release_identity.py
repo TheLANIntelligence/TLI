@@ -100,11 +100,11 @@ def test_linked_included_source_is_unknown_instead_of_silently_omitted(tmp_path,
 
 
 def test_missing_registered_routes_cannot_claim_a_feature(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     monkeypatch.setattr(identity, "_runtime", identity.ReleaseIdentity(source(tmp_path)))
-    routes = [SimpleNamespace(path="/api/intelligence/cases/context-review", methods={"POST"})]
-    assert identity.public_status(routes)["capabilities"] == ["case_report_review_v1"]
-    assert identity.public_status([])["capabilities"] == []
+    paths = {"/api/intelligence/cases/context-review": {"post": {}}}
+    assert identity.public_status(paths)["capabilities"] == ["case_report_review_v1"]
+    assert identity.public_status({})["capabilities"] == []
+    assert identity.public_status({"/api/intelligence/cases/context-review": {"get": {}}})["capabilities"] == []
 
 
 def test_status_is_a_copy_and_probe_is_bounded_by_cache(tmp_path, monkeypatch):
@@ -116,13 +116,12 @@ def test_status_is_a_copy_and_probe_is_bounded_by_cache(tmp_path, monkeypatch):
 
 
 def test_next_check_requires_both_review_and_existing_execution_routes(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     monkeypatch.setattr(identity, "_runtime", identity.ReleaseIdentity(source(tmp_path)))
-    routes = [SimpleNamespace(path="/api/intelligence/cases/next-check", methods={"POST"})]
-    assert "case_next_check_v1" not in identity.public_status(routes)["capabilities"]
-    routes.extend([SimpleNamespace(path="/api/intelligence/diagnostics/options", methods={"GET"}),
-                   SimpleNamespace(path="/api/intelligence/diagnostics", methods={"POST"})])
-    assert "case_next_check_v1" in identity.public_status(routes)["capabilities"]
+    paths = {"/api/intelligence/cases/next-check": {"post": {}}}
+    assert "case_next_check_v1" not in identity.public_status(paths)["capabilities"]
+    paths.update({"/api/intelligence/diagnostics/options": {"get": {}},
+                  "/api/intelligence/diagnostics": {"post": {}}})
+    assert "case_next_check_v1" in identity.public_status(paths)["capabilities"]
 
 
 def test_frozen_identity_binds_executable_and_browser_without_source(tmp_path):
@@ -136,13 +135,12 @@ def test_frozen_identity_binds_executable_and_browser_without_source(tmp_path):
 
 
 def test_file_transfer_requires_local_controls_and_peer_ingress(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     monkeypatch.setattr(identity, "_runtime", identity.ReleaseIdentity(source(tmp_path)))
     required = identity.REQUIRED_ROUTES["trusted_file_transfer_v1"]
-    routes = [SimpleNamespace(path=path, methods={method}) for method, path in required]
-    assert "trusted_file_transfer_v1" in identity.public_status(routes)["capabilities"]
-    for missing in range(len(routes)):
-        partial = routes[:missing] + routes[missing + 1:]
+    paths = {path: {method.lower(): {}} for method, path in required}
+    assert "trusted_file_transfer_v1" in identity.public_status(paths)["capabilities"]
+    for _, missing in required:
+        partial = {path: operations for path, operations in paths.items() if path != missing}
         assert "trusted_file_transfer_v1" not in identity.public_status(partial)["capabilities"]
 
 
@@ -154,4 +152,25 @@ def test_existing_version_endpoint_adds_release_without_changing_fields(client, 
     value = result.json()
     assert all(key in value for key in ("ok", "build_id", "build_utc", "python", "platform"))
     assert value["release"]["compatibility"]["state"] == "matched"
+    assert value["release"]["capabilities"] == identity.CAPABILITIES
     assert str(tmp_path) not in json.dumps(value)
+
+
+def test_nested_included_routers_keep_effective_paths_and_methods(tmp_path, monkeypatch):
+    from fastapi import APIRouter, FastAPI
+    from fastapi.testclient import TestClient
+    monkeypatch.setattr(identity, "_runtime", identity.ReleaseIdentity(source(tmp_path)))
+    app = FastAPI()
+    outer = APIRouter(prefix="/api/intelligence")
+    inner = APIRouter(prefix="/cases")
+
+    @inner.post("/context-review")
+    def review():
+        return {"ok": True}
+
+    outer.include_router(inner)
+    app.include_router(outer)
+    client = TestClient(app)
+    assert client.post("/api/intelligence/cases/context-review").json() == {"ok": True}
+    assert client.get("/api/intelligence/cases/context-review").status_code == 405
+    assert identity.public_status(app.openapi()["paths"])["capabilities"] == ["case_report_review_v1"]

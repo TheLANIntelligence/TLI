@@ -140,7 +140,8 @@ def test_host_launchers_and_named_public_guides_ship_without_unlisted_documents(
     assert snapshot.PUBLIC_GUIDES == packager.PUBLIC_GUIDES
     included = ["TLI_Setup.bat", "TLI_Setup.ps1", "TLI_Diagnostics.bat",
                 "TLI.exe", "build_launcher.ps1", "desktop/TliLauncher.cs", "desktop/tli.ico",
-                "docs/TLI_HOST_START.md", "docs/HOST_START.md", "docs/TLI_SMART_HUB_REFINEMENT.md"]
+                "docs/TLI_HOST_START.md", "docs/HOST_START.md", "docs/TLI_SMART_HUB_REFINEMENT.md",
+                "docs/RELEASE_1.4.0_BETA.md"]
     for name in included:
         write(tmp_path, name, "public source")
     for name in ["docs/private.md", "docs/credentials.json", "docs/archive/TLI_HOST_START.md",

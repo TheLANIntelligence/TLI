@@ -123,6 +123,47 @@
     } finally { _verifyRequest = null; _submitting = false; if (submit) submit.disabled = !!_locking; }
   }
 
+  async function _verifyForSetup(pin) {
+    if (_submitting || _locking) throw new Error('Another access request is in progress. Wait for it to finish and try again.');
+    if (typeof pin !== 'string' || !pin) throw new Error('Enter your saved PIN to continue.');
+    ++_generation;
+    const verificationGeneration = ++_verificationGeneration;
+    const submit = document.getElementById('tli-lock-submit');
+    _submitting = true; if (submit) submit.disabled = true;
+    try {
+      // Share the normal verification barrier so an explicit browser lock
+      // waits for this response's cookie before revoking the session.
+      _verifyRequest = fetch('/system/pin/verify', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin }),
+      });
+      let response;
+      try { response = await _verifyRequest; }
+      catch { throw new Error('Could not reach TLI to verify your saved PIN. Check the connection and try again.'); }
+      const result = await response.json().catch(() => null);
+      if (verificationGeneration !== _verificationGeneration) throw new Error('PIN verification was cancelled because browser access was locked. Unlock TLI to continue setup.');
+      if (!response.ok || result?.ok !== true) {
+        const message = typeof result?.detail === 'string' ? result.detail : response.ok
+          ? 'TLI did not confirm your PIN. Enter your saved PIN and try again.'
+          : `Your saved PIN could not be verified (${response.status}). Try again.`;
+        _setUnlocked(false);
+        if (response.status === 401 || response.status === 503) _accessUnavailable(message);
+        throw new Error(message);
+      }
+      _setUnlocked(true);
+      const error = _lockError(); if (error) error.textContent = '';
+      document.querySelectorAll('.tli-pin-nudge').forEach(nudge => nudge.remove());
+      _hideLock();
+      return true;
+    } catch (error) {
+      if (verificationGeneration === _verificationGeneration) _setUnlocked(false);
+      throw error;
+    } finally {
+      _verifyRequest = null; _submitting = false;
+      if (submit) submit.disabled = !!_locking;
+    }
+  }
+
   function _lock() {
     if (_locking) return _locking;
     _verificationGeneration++;
@@ -236,5 +277,5 @@
   });
 
   // Expose for settings panel
-  window.TLIPinLock = { checkAndLock: _checkAndLock, lock: _lock, showRecovery: _accessUnavailable };
+  window.TLIPinLock = { checkAndLock: _checkAndLock, lock: _lock, showRecovery: _accessUnavailable, verifyForSetup: _verifyForSetup };
 })();

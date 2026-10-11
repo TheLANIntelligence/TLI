@@ -34,7 +34,8 @@ BACKEND_FILES = {"requirements.txt", "requirements-test.txt", "pytest.ini", "tli
 PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
-                "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md"}
+                "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",
+                "RELEASE_1.4.0_BETA.md"}
 MOBILE_FILES = {"package.json", "package-lock.json", "app.config.ts", "tsconfig.json", "expo-env.d.ts", "eas.json", ".easignore", ".gitignore", "README.md"}
 MOBILE_DIRS = {"app", "src", "modules", "assets", "tests", "scripts"}
 SOURCE_EXTENSIONS = {".py", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".html", ".css", ".svg", ".png", ".ico", ".jpg", ".jpeg", ".webp", ".woff", ".woff2", ".ttf", ".mp3", ".swift", ".kt", ".java", ".gradle", ".podspec", ".xml", ".md", ".yml", ".yaml"}

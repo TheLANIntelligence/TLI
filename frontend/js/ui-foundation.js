@@ -253,7 +253,8 @@
     }
   }
   function accessibleOverlays() {
-    const selector = 'dialog, .modal-overlay, #tli-cmd-overlay, #tli-more-drawer, #tli-lock-screen, #tli-onboard, #chat-history-drawer';
+    // Onboarding owns its focus and yields to PIN entry while access is locked.
+    const selector = 'dialog, .modal-overlay, #tli-cmd-overlay, #tli-more-drawer, #tli-lock-screen, #chat-history-drawer';
     const states = new Map(); let lastFocus = document.activeElement;
     document.addEventListener('focusin', e => { lastFocus = e.target; });
     const visible = e => e.isConnected && !e.hidden && !e.classList.contains('hidden') && e.getAttribute('aria-hidden') !== 'true' && (e.tagName !== 'DIALOG' || e.open) && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';

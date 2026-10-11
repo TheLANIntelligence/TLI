@@ -1,833 +1,172 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>TheLANIntelligence — Download the Beta</title>
-  <meta name="description" content="Download TheLANIntelligence for Windows or install on macOS. Local AI, smart home control, encrypted vault, and mesh networking on your own hardware." />
-  <meta property="og:title" content="TheLANIntelligence — Download the Beta" />
-  <meta property="og:description" content="Local-first AI for your home network. Download the Windows beta or follow the Mac installation guide. No access request required." />
-  <meta property="og:type" content="website" />
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg:         #f1f5f9;
-      --bg1:        #e2f3ec;
-      --bg2:        #ffffff;
-      --border:     rgba(0,0,0,0.08);
-      --border-hi:  rgba(5,150,105,0.25);
-      --text:       #020617;
-      --muted:      #475569;
-      --soft:       #64748b;
-      --accent:     #059669;
-      --accent-rgb: 5,150,105;
-      --accent-dim: rgba(5,150,105,0.10);
-      --blue:       #0ea5e9;
-      --purple:     #8b5cf6;
-    }
-
-    html { scroll-behavior: smooth; scroll-padding-top: 110px; -webkit-font-smoothing: antialiased; }
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
-      font-size: 16px; line-height: 1.6;
-      overflow-x: hidden;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    .container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
-
-    .fade-up {
-      transition: opacity 0.6s cubic-bezier(.16,1,.3,1), transform 0.6s cubic-bezier(.16,1,.3,1);
-    }
-    .reveal-ready .fade-up { opacity: 0; transform: translateY(24px); }
-    .reveal-ready .fade-up.visible { opacity: 1; transform: none; }
-    .fade-up.d1 { transition-delay: .07s; }
-    .fade-up.d2 { transition-delay: .14s; }
-    .fade-up.d3 { transition-delay: .21s; }
-    .fade-up.d4 { transition-delay: .28s; }
-    .fade-up.d5 { transition-delay: .35s; }
-    .fade-up.d6 { transition-delay: .42s; }
-
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
-    @keyframes pulse-ring {
-      0% { transform: scale(1); opacity: .5; }
-      100% { transform: scale(1.9); opacity: 0; }
-    }
-
-    /* ── Beta bar ─────────────────────────────────────────────── */
-    .beta-bar {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 400;
-      background: var(--accent);
-      color: #050d09; font-size: 12.5px; font-weight: 600;
-      text-align: center; padding: 7px 16px; letter-spacing: .01em;
-    }
-    .beta-bar a { color: #050d09; text-decoration: underline; opacity: .75; }
-    .beta-bar a:hover { opacity: 1; }
-
-    /* ── Nav ──────────────────────────────────────────────────── */
-    nav {
-      position: fixed; top: 33px; left: 0; right: 0; z-index: 300;
-      height: 56px; display: flex; align-items: center;
-      background: rgba(241,245,249,0.94);
-      backdrop-filter: blur(18px) saturate(1.4);
-      border-bottom: 1px solid var(--border);
-    }
-    .nav-inner {
-      width: 100%; max-width: 1100px; margin: 0 auto; padding: 0 28px;
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .nav-logo {
-      display: flex; align-items: center; gap: 10px;
-      font-size: 14px; font-weight: 700; color: var(--text);
-    }
-    .nav-logo-mark {
-      width: 28px; height: 28px; border-radius: 7px;
-      background: var(--accent-dim); border: 1px solid var(--border-hi);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 10px; font-weight: 800; color: var(--accent);
-    }
-    .nav-links { display: flex; align-items: center; gap: 32px; list-style: none; }
-    .nav-links a { font-size: 13.5px; color: var(--soft); transition: color .15s; }
-    .nav-links a:hover { color: var(--text); }
-    .nav-beta {
-      padding: 3px 10px; border-radius: 20px;
-      background: var(--accent-dim); border: 1px solid var(--border-hi);
-      font-size: 11px; font-weight: 700; color: var(--accent);
-      letter-spacing: .06em; text-transform: uppercase;
-    }
-    .nav-cta {
-      padding: 7px 16px; border-radius: 8px;
-      background: var(--accent); color: #050d09 !important;
-      font-size: 13.5px; font-weight: 700;
-      transition: opacity .15s, box-shadow .2s;
-    }
-    .nav-cta:hover { opacity: .9; box-shadow: 0 0 20px rgba(var(--accent-rgb),.3); }
-    @media (max-width: 820px) {
-      .nav-beta { display: none; }
-      .nav-links { gap: 18px; }
-    }
-    @media (max-width: 620px) {
-      .nav-inner { padding: 0 16px; }
-      .nav-links { display: none; }
-      .nav-logo { font-size: 12px; gap: 6px; }
-      .nav-cta { padding: 7px 12px; }
-    }
-
-    /* ── Hero ─────────────────────────────────────────────────── */
-    .hero {
-      position: relative; min-height: 100vh;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: center;
-      text-align: center;
-      padding: 135px 28px 76px;
-      overflow: hidden;
-    }
-    .hero-glow {
-      position: absolute; inset: 0; pointer-events: none;
-      background:
-        radial-gradient(ellipse 900px 550px at 50% 40%, rgba(var(--accent-rgb),.07), transparent 65%),
-        radial-gradient(ellipse 600px 400px at 10% 70%, rgba(14,165,233,.04), transparent 60%),
-        radial-gradient(ellipse 500px 350px at 90% 20%, rgba(139,92,246,.04), transparent 60%);
-    }
-    #hero-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    .hero-content { position: relative; z-index: 2; max-width: 740px; }
-
-    .hero-eyebrow {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 5px 14px; border-radius: 20px; margin-bottom: 28px;
-      background: var(--accent-dim); border: 1px solid rgba(var(--accent-rgb),.25);
-      font-size: 12px; font-weight: 600; color: var(--accent);
-      letter-spacing: .06em; text-transform: uppercase;
-    }
-    .eyebrow-dot {
-      width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
-      box-shadow: 0 0 8px var(--accent);
-      animation: blink 2.4s ease-in-out infinite;
-    }
-    .hero-headline {
-      font-size: clamp(46px, 7vw, 86px);
-      font-weight: 800; line-height: 1.04; letter-spacing: -.03em;
-      color: var(--text); margin-bottom: 22px;
-    }
-    .hero-headline em {
-      font-style: normal;
-      background: linear-gradient(135deg, var(--accent) 0%, #60a5fa 100%);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-    }
-    .hero-sub {
-      font-size: clamp(16px, 2.2vw, 18.5px); color: var(--soft);
-      max-width: 540px; margin: 0 auto 44px; line-height: 1.7;
-    }
-
-    /* ── Downloads ───────────────────────────────────────────── */
-    .download-actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
-    .download-button {
-      display: inline-flex; justify-content: center; align-items: center;
-      padding: 14px 24px; border-radius: 10px; border: 1px solid var(--accent);
-      background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
-      transition: background .15s, box-shadow .15s;
-    }
-    .download-button:hover { background: #047857; box-shadow: 0 4px 20px rgba(var(--accent-rgb),.18); }
-    .download-button.secondary { background: var(--bg2); color: var(--accent); border-color: var(--border-hi); }
-    .download-button.secondary:hover { background: var(--bg1); }
-    a:focus-visible, button:focus-visible, input:focus-visible { outline: 3px solid var(--blue); outline-offset: 4px; }
-    .download-note { font-size: 13px; color: var(--muted); text-align: center; margin: 16px auto 24px; }
-    .hero-download-note { margin-bottom: 40px; }
-    .downloads { padding: 100px 0; border-top: 1px solid var(--border); background: var(--bg1); }
-    .downloads .section-sub { margin-bottom: 30px; }
-    .windows-steps { margin-top: 40px; }
-    .install-help { max-width: 820px; margin: 24px auto 0; font-size: 13px; color: var(--muted); }
-    .install-help summary { cursor: pointer; font-weight: 700; color: var(--text); }
-    .install-help p { margin-top: 12px; }
-    .install-help a, .download-note a { text-decoration: underline; }
-    @media (max-width: 480px) {
-      .download-actions { flex-direction: column; }
-      .download-button { width: 100%; }
-    }
-
-    /* ── Inline form ─────────────────────────────────────────── */
-    .hero-form-wrap { max-width: 480px; margin: 0 auto 18px; }
-    .waitlist-form {
-      display: flex; border-radius: 12px;
-      border: 1px solid var(--border-hi); background: var(--bg2);
-      box-shadow: 0 4px 28px rgba(var(--accent-rgb),.09); overflow: hidden;
-    }
-    .waitlist-form input[type="email"] {
-      flex: 1; min-width: 0; padding: 14px 18px; font-size: 15px;
-      color: var(--text); background: transparent; border: none; outline: none; font-family: inherit;
-    }
-    .waitlist-form input::placeholder { color: var(--soft); }
-    .waitlist-form input[type="email"]:focus-visible { outline: 3px solid var(--blue); outline-offset: -4px; }
-    .waitlist-form button {
-      padding: 14px 22px; background: var(--accent); color: #050d09;
-      font-size: 14px; font-weight: 700; border: none; cursor: pointer;
-      font-family: inherit; white-space: nowrap; transition: opacity .15s;
-    }
-    .waitlist-form button:hover { opacity: .88; }
-    @media (max-width: 480px) {
-      .waitlist-form { flex-direction: column; }
-    }
-    .waitlist-note { font-size: 12.5px; color: var(--soft); margin-bottom: 52px; }
-    .waitlist-success {
-      display: none; padding: 14px 22px; border-radius: 10px;
-      background: var(--accent-dim); border: 1px solid var(--border-hi);
-      color: var(--accent); font-size: 14px; font-weight: 600;
-      margin-bottom: 52px;
-    }
-
-    /* ── Trust strip ─────────────────────────────────────────── */
-    .hero-trust {
-      display: flex; align-items: center; justify-content: center;
-      gap: 28px; flex-wrap: wrap;
-    }
-    .hero-trust-item {
-      display: flex; align-items: center; gap: 6px;
-      font-size: 13px; color: var(--muted);
-    }
-    .hero-trust-item svg { color: var(--accent); }
-
-    /* ── Differentiators ─────────────────────────────────────── */
-    .diff {
-      padding: 80px 0; border-top: 1px solid var(--border);
-      background: var(--bg1);
-    }
-    .diff-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-      gap: 0;
-    }
-    .diff-item {
-      padding: 36px 32px; border-right: 1px solid var(--border);
-      text-align: center;
-    }
-    .diff-item:last-child { border-right: none; }
-    .diff-num {
-      font-size: 42px; font-weight: 800; color: var(--accent);
-      letter-spacing: -.03em; line-height: 1;
-      margin-bottom: 8px;
-    }
-    .diff-label { font-size: 14px; color: var(--soft); line-height: 1.5; }
-
-    /* ── Modules ─────────────────────────────────────────────── */
-    .modules { padding: 100px 0; }
-    .section-label {
-      text-align: center; font-size: 12px; font-weight: 700;
-      letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
-      margin-bottom: 14px;
-    }
-    .section-title {
-      text-align: center; font-size: clamp(28px, 4vw, 42px);
-      font-weight: 800; letter-spacing: -.02em; color: var(--text);
-      margin-bottom: 12px;
-    }
-    .section-sub {
-      text-align: center; font-size: 16px; color: var(--soft);
-      max-width: 500px; margin: 0 auto 64px;
-    }
-    .modules-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 20px;
-    }
-    @media (max-width: 768px) { .modules-grid { grid-template-columns: 1fr; } }
-    @media (min-width: 769px) and (max-width: 1024px) { .modules-grid { grid-template-columns: repeat(2, 1fr); } }
-
-    .module-card {
-      background: var(--bg2); border: 1px solid var(--border);
-      border-radius: 16px; padding: 28px;
-      transition: border-color .2s, box-shadow .2s, transform .2s;
-    }
-    .module-card:hover {
-      border-color: var(--border-hi);
-      box-shadow: 0 6px 24px rgba(var(--accent-rgb),.08);
-      transform: translateY(-2px);
-    }
-    .module-icon { font-size: 26px; margin-bottom: 14px; }
-    .module-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 7px; }
-    .module-desc { font-size: 13.5px; color: var(--soft); line-height: 1.6; }
-    .module-tag {
-      display: inline-block; margin-top: 12px;
-      padding: 2px 8px; border-radius: 5px;
-      background: var(--accent-dim); border: 1px solid var(--border-hi);
-      font-size: 11px; font-weight: 700; color: var(--accent);
-      letter-spacing: .04em; text-transform: uppercase;
-    }
-
-
-    /* ── macOS Install ───────────────────────────────────────── */
-    .mac-install {
-      padding: 100px 0; border-top: 1px solid var(--border);
-    }
-    .mac-cmd-wrap {
-      max-width: 680px; margin: 48px auto 56px;
-    }
-    .mac-cmd-block {
-      display: flex; align-items: center; justify-content: space-between;
-      background: #0d1117; border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 12px; padding: 18px 20px 18px 24px;
-      gap: 16px;
-    }
-    .mac-cmd-text {
-      font-family: "SF Mono", "Fira Code", "Cascadia Code", "Consolas", monospace;
-      font-size: 14.5px; color: #a3e6c8; letter-spacing: .01em;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .mac-cmd-text .cmd-dim { color: rgba(163,230,200,.4); }
-    .mac-cmd-copy {
-      flex-shrink: 0;
-      padding: 8px 16px; border-radius: 7px;
-      background: var(--accent); color: #050d09;
-      font-size: 12.5px; font-weight: 700; border: none; cursor: pointer;
-      font-family: inherit; transition: opacity .15s, background .2s;
-      white-space: nowrap;
-    }
-    .mac-cmd-copy:hover { opacity: .88; }
-    .mac-cmd-copy.copied {
-      background: #16a34a; color: #fff;
-    }
-    .mac-cmd-hint {
-      text-align: center; font-size: 12.5px; color: var(--soft); margin-top: 12px;
-    }
-    .mac-steps {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
-      max-width: 820px; margin: 0 auto;
-    }
-    @media (max-width: 680px) { .mac-steps { grid-template-columns: 1fr; } }
-    .mac-step {
-      background: var(--bg2); border: 1px solid var(--border);
-      border-radius: 16px; padding: 28px 24px;
-      position: relative; overflow: hidden;
-    }
-    .mac-step::before {
-      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
-      background: linear-gradient(90deg, var(--accent), transparent);
-    }
-    .mac-step-num {
-      font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase;
-      color: var(--accent); margin-bottom: 14px;
-    }
-    .mac-step-title {
-      font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 8px;
-    }
-    .mac-step-desc {
-      font-size: 13px; color: var(--soft); line-height: 1.6;
-    }
-    .mac-kbd {
-      display: inline-block;
-      padding: 1px 6px; border-radius: 4px;
-      background: var(--bg); border: 1px solid var(--border);
-      font-family: "SF Mono", monospace; font-size: 12px; color: var(--text);
-      vertical-align: middle; white-space: nowrap;
-    }
-
-    /* ── Beta promise ────────────────────────────────────────── */
-    .promise { padding: 100px 0; background: var(--bg1); border-top: 1px solid var(--border); }
-    .promise-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 32px; margin-top: 56px;
-    }
-    .promise-card {
-      background: var(--bg2); border: 1px solid var(--border);
-      border-radius: 16px; padding: 32px; text-align: center;
-    }
-    .promise-icon { font-size: 32px; margin-bottom: 14px; }
-    .promise-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
-    .promise-desc { font-size: 13.5px; color: var(--soft); line-height: 1.6; }
-
-    /* ── Bottom CTA ──────────────────────────────────────────── */
-    .bottom-cta {
-      padding: 100px 28px;
-      text-align: center;
-    }
-    .bottom-cta h2 {
-      font-size: clamp(30px, 4vw, 48px); font-weight: 800;
-      letter-spacing: -.02em; color: var(--text); margin-bottom: 16px;
-    }
-    .bottom-cta p { font-size: 17px; color: var(--soft); margin-bottom: 40px; }
-
-    /* ── Footer ──────────────────────────────────────────────── */
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 32px 28px; text-align: center;
-      font-size: 13px; color: var(--soft);
-    }
-    footer span { color: var(--accent); }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f6f9f4">
+  <title>TheLANIntelligence — Your AI. Your world. Your terms.</title>
+  <meta name="description" content="Meet the next chapter of TheLANIntelligence. A personal AI workspace to think, write, create, and connect useful tools. Explore TLI 1.4.0-beta and download the current desktop experience for Windows or macOS.">
+  <link rel="canonical" href="https://thelanintelligence.com/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="TheLANIntelligence — Your AI. Your world. Your terms.">
+  <meta property="og:description" content="An idea became a whole world. Explore the next chapter of TLI: your personal AI workspace, on your own hardware.">
+  <meta property="og:url" content="https://thelanintelligence.com/">
+  <meta property="og:image" content="https://thelanintelligence.com/assets/social-card.png?v=emerald-light-1">
+  <meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="/assets/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/css/site.css?v=emerald-motion-1">
+  <script type="module" src="/js/site.js?v=1.4.0-beta-1"></script>
 </head>
 <body>
-
-<!-- ── Beta bar ───────────────────────────────────────────────────── -->
-<div class="beta-bar">
-  TLI beta is available. <a href="#download">Download now.</a>
-</div>
-
-<!-- ── Nav ───────────────────────────────────────────────────────── -->
-<nav>
-  <div class="nav-inner">
-    <div class="nav-logo">
-      <div class="nav-logo-mark">TLI</div>
-      TheLANIntelligence
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header">
+  <a class="brand" href="/" aria-label="TheLANIntelligence home"><span class="brand-mark" aria-hidden="true">TLI</span><span>TheLANIntelligence</span></a>
+  <nav class="nav-links" id="site-nav" aria-label="Main navigation"><a href="#experience">Experience</a><a href="#evolution">Then &amp; now</a><a href="#appearance">Make it yours</a></nav>
+  <a class="nav-action" href="/download/">Get TLI <span aria-hidden="true">↗</span></a>
+  <button class="menu-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="site-nav"><span></span><span></span></button>
+</header>
+<main id="main">
+  <section class="hero" aria-labelledby="hero-heading">
+    <div class="hero-field" aria-hidden="true"><div class="orbit orbit-one"></div><div class="orbit orbit-two"></div><div class="orbit orbit-three"></div><div class="field-dot"></div></div>
+    <button class="motion-toggle" type="button" aria-pressed="false" aria-label="Pause background motion"><span class="motion-toggle-icon" aria-hidden="true">Ⅱ</span><span class="motion-toggle-label">Pause motion</span></button>
+    <div class="container hero-copy">
+      <div class="preview-pill"><span class="status-dot"></span>The next chapter <span class="pill-divider"></span> 1.4.0-beta is here</div>
+      <h1 id="hero-heading"><span>Your AI. Your world.</span><span class="hero-final">Your terms.</span></h1>
+      <p class="hero-description">A place to think. The tools to create.<br>Your own intelligence, running on your own hardware.</p>
+      <div class="hero-actions"><a class="button button-primary" href="#experience">Explore the experience <span aria-hidden="true">↓</span></a><a class="button button-secondary" href="/download/">Download public beta <span aria-hidden="true">↗</span></a></div>
+      <p class="release-note">The new desktop experience is here. <strong>1.4.0-beta</strong> for Windows and macOS.</p>
     </div>
-    <ul class="nav-links">
-      <li><a href="#modules">Features</a></li>
-      <li><a href="#download">Windows</a></li>
-      <li><a href="#macos">macOS</a></li>
-    </ul>
-    <div style="display:flex;align-items:center;gap:12px;">
-      <span class="nav-beta">Beta</span>
-      <a href="#download" class="nav-cta">Download</a>
+    <div class="container hero-product-wrap">
+      <div class="product-frame hero-product">
+        <div class="frame-toolbar"><span class="frame-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>Your space. To do more.</span><span class="frame-label">EXAMPLE WORKSPACE</span></div>
+        <img class="hero-screen" src="/assets/product/ask-emerald-light.webp" srcset="/assets/product/ask-emerald-light-960.webp 960w, /assets/product/ask-emerald-light.webp 1440w" sizes="(max-width: 700px) 94vw, 90vw" width="1440" height="1000" alt="The current Ask TLI workspace in Emerald Light, with writing, planning, ideas, learning, and coding starters." fetchpriority="high">
+      </div>
+      <div class="product-caption"><span><span class="status-dot"></span> Real TLI interface · illustrative data</span><span>1.4.0-beta / October 2026</span></div>
     </div>
-  </div>
-</nav>
+  </section>
 
-<!-- ── Hero ──────────────────────────────────────────────────────── -->
-<section class="hero">
-  <div class="hero-glow"></div>
-  <canvas id="hero-canvas"></canvas>
-  <div class="hero-content">
+  <div class="capability-strip container" aria-label="TLI capabilities"><span>THINK FREELY</span><i aria-hidden="true">✳</i><span>CREATE SOMETHING</span><i aria-hidden="true">✳</i><span>CONNECT YOUR WORLD</span><i aria-hidden="true">✳</i><span>KEEP IT YOURS</span></div>
 
-    <div class="hero-eyebrow fade-up">
-      <span class="eyebrow-dot"></span>
-      Available now · <span data-release-version>v1.3.5-beta</span>
-    </div>
-
-    <h1 class="hero-headline fade-up d1">
-      Your home.<br>Your data.<br><em>Your AI.</em>
-    </h1>
-
-    <p class="hero-sub fade-up d2">
-      TheLANIntelligence is a local console for your home network — offline AI,
-      multi-vendor smart home control, encrypted vault, and mesh networking.
-      Everything runs on your hardware. Nothing leaves your network.
-    </p>
-
-    <div class="download-actions fade-up d3">
-      <a class="download-button" data-windows-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.3.5-beta/TLI_dist_1.3.5-beta.zip">Download for Windows</a>
-      <a class="download-button secondary" href="#macos">Install on Mac</a>
-    </div>
-    <p class="download-note hero-download-note fade-up d3">Free beta. No access request required.<br>Windows ZIP · <a href="#download">Installation instructions</a></p>
-
-    <div class="hero-trust fade-up d4">
-      <div class="hero-trust-item">
-        <svg width="14" height="14" fill="none" viewBox="0 0 16 16"><path d="M8 1l1.8 3.6L14 5.5l-3 2.9.7 4.1L8 10.5l-3.7 1.9.7-4.1L2 5.5l4.2-.9L8 1z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-        No cloud required
-      </div>
-      <div class="hero-trust-item">
-        <svg width="14" height="14" fill="none" viewBox="0 0 16 16"><path d="M8 2C5.2 2 3 4.2 3 7v1H2v6h12V8h-1V7c0-2.8-2.2-5-5-5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>
-        AES-256 encrypted
-      </div>
-      <div class="hero-trust-item">
-        <svg width="14" height="14" fill="none" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M5 8l2 2 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Windows · macOS · Linux
-      </div>
-      <div class="hero-trust-item">
-        <svg width="14" height="14" fill="none" viewBox="0 0 16 16"><path d="M2 8c0-3.3 2.7-6 6-6s6 2.7 6 6-2.7 6-6 6-6-2.7-6-6z" stroke="currentColor" stroke-width="1.4"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
-        Free during beta
-      </div>
-    </div>
-
-  </div>
-</section>
-
-<!-- ── Differentiators ────────────────────────────────────────────── -->
-<div class="diff">
-  <div class="container">
-    <div class="diff-grid">
-      <div class="diff-item fade-up">
-        <div class="diff-num">9</div>
-        <div class="diff-label">Integrated modules.<br>One install, no extras.</div>
-      </div>
-      <div class="diff-item fade-up d1">
-        <div class="diff-num">0</div>
-        <div class="diff-label">Cloud accounts required.<br>Zero external dependencies.</div>
-      </div>
-      <div class="diff-item fade-up d2">
-        <div class="diff-num">100%</div>
-        <div class="diff-label">Local. Your data never<br>leaves your network.</div>
-      </div>
-      <div class="diff-item fade-up d3" style="border-right:none;">
-        <div class="diff-num">Free</div>
-        <div class="diff-label">During beta. Every feature,<br>no limits, no keys.</div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ── Modules ────────────────────────────────────────────────────── -->
-<section class="modules" id="modules">
-  <div class="container">
-    <p class="section-label fade-up">What's inside</p>
-    <h2 class="section-title fade-up d1">Nine modules. One install.</h2>
-    <p class="section-sub fade-up d2">Every module ships in the beta. All unlocked. No upsells.</p>
-    <div class="modules-grid">
-      <div class="module-card fade-up">
-        <div class="module-icon">🤖</div>
-        <div class="module-title">Offline AI Chat</div>
-        <div class="module-desc">Runs a local language model on your hardware. No API keys, no cloud, no data leaving your network. Mesh-routed so every node can talk to it.</div>
-        <span class="module-tag">Local model</span>
-      </div>
-      <div class="module-card fade-up d1">
-        <div class="module-icon">🏠</div>
-        <div class="module-title">Multi-Vendor Home Automation</div>
-        <div class="module-desc">Control Shelly, Philips Hue, Sonoff, Tasmota, WLED, and more — all from one interface. No third-party hubs, no cloud dependency.</div>
-        <span class="module-tag">9 vendors</span>
-      </div>
-      <div class="module-card fade-up d2">
-        <div class="module-icon">🔐</div>
-        <div class="module-title">Encrypted Vault</div>
-        <div class="module-desc">AES-256 encrypted storage for passwords, files, and secrets. Browser extension autofills credentials on any site — all routed through your LAN.</div>
-        <span class="module-tag">AES-256-GCM</span>
-      </div>
-      <div class="module-card fade-up d3">
-        <div class="module-icon">🌐</div>
-        <div class="module-title">LAN Mesh Network</div>
-        <div class="module-desc">Link every machine on your network. Shared AI context, device control, and real-time encrypted chat across every node — including phones.</div>
-        <span class="module-tag">Peer-to-peer</span>
-      </div>
-      <div class="module-card fade-up d4">
-        <div class="module-icon">⚡</div>
-        <div class="module-title">Automations</div>
-        <div class="module-desc">Schedule by time, trigger by device state, sunrise/sunset, or sensor readings. Runs entirely locally — no internet required for any automation to fire.</div>
-        <span class="module-tag">5 trigger types</span>
-      </div>
-      <div class="module-card fade-up d5">
-        <div class="module-icon">📱</div>
-        <div class="module-title">Phone Companion</div>
-        <div class="module-desc">Installable PWA for iOS and Android. Control devices, chat, access your vault, and run scenes — over your LAN, no app store needed.</div>
-        <span class="module-tag">PWA</span>
-      </div>
-      <div class="module-card fade-up">
-        <div class="module-icon">🧩</div>
-        <div class="module-title">Browser Extension</div>
-        <div class="module-desc">Chrome and Edge extension with inline fill icon on every password field. Ctrl+Shift+L shortcut, save-on-submit prompt. All credentials stay on your LAN.</div>
-        <span class="module-tag">Chrome · Edge</span>
-      </div>
-      <div class="module-card fade-up d1">
-        <div class="module-icon">📁</div>
-        <div class="module-title">AI File Manager</div>
-        <div class="module-desc">AI-suggested file organisation and bulk rename. Disk visualizer shows what's eating space with an interactive treemap.</div>
-        <span class="module-tag">Local AI</span>
-      </div>
-      <div class="module-card fade-up d2">
-        <div class="module-icon">💬</div>
-        <div class="module-title">LAN Chat</div>
-        <div class="module-desc">Real-time encrypted messaging between all nodes on your mesh. No accounts, no servers, no internet — just your machines talking to each other.</div>
-        <span class="module-tag">Encrypted</span>
-      </div>
-    </div>
-  </div>
-</section>
-
-
-<!-- ── Windows Download ────────────────────────────────────────────── -->
-<section class="downloads" id="download">
-  <div class="container">
-    <p class="section-label fade-up">Windows download</p>
-    <h2 class="section-title fade-up d1">Get TLI on your Windows PC</h2>
-    <p class="section-sub fade-up d2">Download the beta ZIP, extract it, and start TLI. Your browser becomes your local workspace.</p>
-    <div class="download-actions fade-up d2">
-      <a class="download-button" data-windows-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.3.5-beta/TLI_dist_1.3.5-beta.zip">Download for Windows</a>
-      <a class="download-button secondary" href="#macos">macOS instructions</a>
-    </div>
-    <p class="download-note fade-up d2"><span data-release-version>v1.3.5-beta</span> · ZIP package · Free during beta<br><a href="https://github.com/TheLANIntelligence/TLI/releases">Release notes and previous versions</a></p>
-    <div class="mac-steps windows-steps">
-      <div class="mac-step fade-up">
-        <div class="mac-step-num">Step 1</div>
-        <h3 class="mac-step-title">Download the ZIP</h3>
-        <p class="mac-step-desc">Click <strong>Download for Windows</strong> and save the ZIP to your PC. No email or access approval is needed.</p>
-      </div>
-      <div class="mac-step fade-up d1">
-        <div class="mac-step-num">Step 2</div>
-        <h3 class="mac-step-title">Extract all files</h3>
-        <p class="mac-step-desc">Right-click the downloaded ZIP and choose <strong>Extract All…</strong>. Pick a folder you want to keep, then open the extracted folder. Don't run TLI from inside the ZIP.</p>
-      </div>
-      <div class="mac-step fade-up d2">
-        <div class="mac-step-num">Step 3</div>
-        <h3 class="mac-step-title">Start TLI</h3>
-        <p class="mac-step-desc">Double-click <strong>TLI_Start.bat</strong>. Follow any setup prompts and keep its window open while using TLI. Finish setup in the browser window that opens.</p>
-      </div>
-    </div>
-    <details class="install-help">
-      <summary>First launch and troubleshooting</summary>
-      <p>The first launch needs an internet connection to install dependencies and may take a few minutes. TLI requires Python 3.10 or newer; the launcher attempts to install it if missing. If that step fails, install <a href="https://www.python.org/downloads/windows/">Python for Windows</a>, enable <strong>Add Python to PATH</strong>, and run <strong>TLI_Start.bat</strong> again.</p>
-      <p>If the browser doesn't open, wait for the launcher to finish, then visit <a href="http://localhost:8000">http://localhost:8000</a> on that PC. This beta uses port 8000; close other development servers using that port before starting TLI.</p>
-      <p>Need a hand? Email <a href="mailto:thelanintelligence@gmail.com">thelanintelligence@gmail.com</a>.</p>
-    </details>
-  </div>
-</section>
-
-<!-- ── macOS Install ───────────────────────────────────────────────── -->
-<section class="mac-install" id="macos">
-  <div class="container">
-    <p class="section-label fade-up">macOS</p>
-    <h2 class="section-title fade-up d1">Install on your Mac</h2>
-    <p class="section-sub fade-up d2">Use Terminal to download and set up TLI. Python 3.10 or newer is required.</p>
-
-    <div class="mac-cmd-wrap fade-up d2">
-      <div class="mac-cmd-block">
-        <span class="mac-cmd-text" id="mac-cmd-text">
-          <span class="cmd-dim">$ </span>curl -fsSL https://thelanintelligence.com/install_mac.sh | bash
-        </span>
-        <button class="mac-cmd-copy" id="mac-cmd-copy" onclick="copyMacCmd()">Copy</button>
-      </div>
-      <p class="mac-cmd-hint">Paste this into Terminal — it downloads, installs, and launches TLI automatically.</p>
-    </div>
-
-    <div class="mac-steps">
-      <div class="mac-step fade-up">
-        <div class="mac-step-num">Step 1</div>
-        <div class="mac-step-title">Open Terminal</div>
-        <div class="mac-step-desc">
-          Press <span class="mac-kbd">&#8984; Cmd</span> + <span class="mac-kbd">Space</span>,
-          type <strong>Terminal</strong>, and press <span class="mac-kbd">Return</span>.
-          A black or white window will open — that's Terminal.
+  <section class="section experience-section" id="experience" aria-labelledby="experience-heading">
+    <div class="container">
+      <div class="section-topline"><p class="eyebrow"><span>01</span> THE EXPERIENCE</p><span class="quiet-label">A little curiosity goes a long way.</span></div>
+      <div class="section-heading"><h2 id="experience-heading">Start with a thought.<br><span class="muted-heading">See where it goes.</span></h2><p>Write something. Work through an idea. Make a small app. TLI starts with conversation, and grows with what you want to do.</p></div>
+      <div class="tour-layout">
+        <div class="tour-chapters" role="tablist" aria-label="Product tour chapters" aria-orientation="vertical">
+          <button class="tour-chapter active" id="chapter-think" role="tab" aria-selected="true" aria-controls="tour-think" data-chapter="think"><span class="chapter-number">01</span><span><strong>Think with TLI</strong><small>A clearer thought. A better first draft.</small></span><span class="chapter-arrow" aria-hidden="true">↗</span></button>
+          <button class="tour-chapter" id="chapter-create" role="tab" aria-selected="false" aria-controls="tour-create" tabindex="-1" data-chapter="create"><span class="chapter-number">02</span><span><strong>Create with TLI</strong><small>From a brief to something you can try.</small></span><span class="chapter-arrow" aria-hidden="true">↗</span></button>
+          <button class="tour-chapter" id="chapter-connect" role="tab" aria-selected="false" aria-controls="tour-connect" tabindex="-1" data-chapter="connect"><span class="chapter-number">03</span><span><strong>Connect with TLI</strong><small>An action. And a visible outcome.</small></span><span class="chapter-arrow" aria-hidden="true">↗</span></button>
+          <p class="tour-disclaimer"><span aria-hidden="true">◈</span> Take a guided tour.<br>These are curated demonstrations, with example responses. No live AI or devices are connected.</p>
         </div>
-      </div>
-      <div class="mac-step fade-up d1">
-        <div class="mac-step-num">Step 2</div>
-        <div class="mac-step-title">Paste the command</div>
-        <div class="mac-step-desc">
-          Click <strong>Copy</strong> above, then click inside Terminal and press
-          <span class="mac-kbd">&#8984; Cmd</span> + <span class="mac-kbd">V</span> to paste.
-          You'll see the command appear.
-        </div>
-      </div>
-      <div class="mac-step fade-up d2">
-        <div class="mac-step-num">Step 3</div>
-        <div class="mac-step-title">Press Enter — done</div>
-        <div class="mac-step-desc">
-          Press <span class="mac-kbd">Return</span>. TLI downloads, installs to
-          <strong>~/TLI</strong>, and asks whether to launch. The first launch may take a few minutes.
+        <div class="tour-stage">
+          <div class="demo-toolbar"><span class="mini-mark">TLI</span><span id="tour-title">Ask TLI</span><span class="demo-badge">INTERACTIVE DEMO</span></div>
+          <div class="tour-panel" id="tour-think" role="tabpanel" aria-labelledby="chapter-think" tabindex="0">
+            <div class="demo-welcome"><p class="eyebrow">A LITTLE HELP TO GET STARTED</p><h3>What's on your mind?</h3><p>A question. A draft. An idea worth exploring.<br>Start wherever you are.</p></div>
+            <div class="example-options" aria-label="Choose an example"><button class="example-chip selected" data-think="write" aria-pressed="true">Help me write</button><button class="example-chip" data-think="plan" aria-pressed="false">Make a plan</button></div>
+            <div class="demo-user" id="think-prompt">Help me write a warm invitation for a relaxed dinner with friends this Saturday.</div>
+            <div class="demo-response" id="think-response" hidden><span class="response-mark" aria-hidden="true">TLI</span><div id="think-response-text"></div></div>
+            <button class="text-button demo-next" id="think-next">See an example reply <span aria-hidden="true">↗</span></button>
+            <p class="demo-footnote">Illustrative response. Actual answers depend on your model.</p>
+          </div>
+          <div class="tour-panel" id="tour-create" role="tabpanel" aria-labelledby="chapter-create" tabindex="0" hidden>
+            <div class="demo-welcome compact"><p class="eyebrow">YOUR IDEA, MADE TANGIBLE</p><h3>Make something useful.</h3><p>Describe a small browser app. Preview it.<br>Try it. Improve it.</p></div>
+            <div class="demo-user">Build a tip calculator for a night out.</div>
+            <button class="text-button demo-next" id="create-next">Open the sample preview <span aria-hidden="true">↗</span></button>
+            <div class="calculator" id="calculator" hidden>
+              <div class="calculator-heading"><span>THE DINNER SPLIT</span><span id="revision-label">REVISION 01</span></div>
+              <div class="calculator-fields"><label>Bill amount <span class="number-field"><span>$</span><input id="bill" type="number" min="0" max="99999" step="0.01" value="84" inputmode="decimal"></span></label><label>Tip <select id="tip"><option value="10">10%</option><option value="15">15%</option><option value="18" selected>18%</option><option value="20">20%</option><option value="25">25%</option></select></label><label id="people-field" hidden>People <input id="people" type="number" min="1" max="20" step="1" value="2" inputmode="numeric"></label></div>
+              <div class="calculator-result"><span id="total-label">Total, with tip</span><output id="calculator-total" aria-live="polite">$99.12</output></div>
+              <button class="text-button" id="improve-app">Try a revision: split the bill <span aria-hidden="true">↗</span></button>
+            </div>
+            <p class="demo-footnote">A handcrafted example of the workflow. TLI creates small HTML, CSS, and JavaScript apps; results need review and may need repairs.</p>
+          </div>
+          <div class="tour-panel" id="tour-connect" role="tabpanel" aria-labelledby="chapter-connect" tabindex="0" hidden>
+            <div class="demo-welcome compact"><p class="eyebrow">FROM ASKING TO KNOWING</p><h3>A little more connected.</h3><p>Control a supported, configured device.<br>See the acknowledgement and the checked state.</p></div>
+            <div class="lamp-scene" id="lamp-scene"><div class="lamp-halo" aria-hidden="true"></div><svg class="lamp-art" viewBox="0 0 200 170" aria-hidden="true"><ellipse class="lamp-pool" cx="100" cy="151" rx="70" ry="10"/><path d="M100 57v87M72 146h56" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path class="lamp-shade" d="M73 23h54l25 59H48z" stroke="currentColor" stroke-width="2"/><path d="M63 84h74" stroke="currentColor" stroke-width="2"/></svg><div><strong>Office Lamp</strong><span class="lamp-status" id="lamp-status">Example device · off</span></div></div>
+            <div class="demo-user">Turn on Office Lamp.</div>
+            <div class="command-receipt" id="command-receipt" aria-live="polite">Ready to walk through an example.</div>
+            <button class="text-button demo-next" id="connect-next">Send the example request <span aria-hidden="true">↗</span></button>
+            <p class="demo-footnote">Demonstration only. Nothing on your network is discovered or controlled.</p>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- ── Beta promise ────────────────────────────────────────────────── -->
-<section class="promise">
-  <div class="container">
-    <p class="section-label fade-up">Beta access</p>
-    <h2 class="section-title fade-up d1">What to expect</h2>
-    <div class="promise-grid">
-      <div class="promise-card fade-up">
-        <div class="promise-icon">🔓</div>
-        <div class="promise-title">Everything unlocked</div>
-        <div class="promise-desc">Every module, every feature. No keys, no tiers, no limits. This is the full build.</div>
+  <section class="section world-section" id="world" aria-labelledby="world-heading">
+    <div class="container">
+      <div class="section-topline"><p class="eyebrow"><span>02</span> YOUR CONNECTED WORLD</p><span class="quiet-label">Your hardware. A shared purpose.</span></div>
+      <div class="world-layout">
+        <div class="world-copy"><h2 id="world-heading">One place.<br><span class="muted-heading">More possibilities.</span></h2><p>Start on your computer. Add the connections that make sense for you. A supported device. Your phone. A model on another trusted computer.</p><p class="world-note">You choose what connects, and which model does the work.</p><div class="network-detail" aria-live="polite"><span class="eyebrow" id="network-label">THE STARTING POINT</span><h3 id="network-title">Your main computer</h3><p id="network-description">Your conversations and saved work stay with the TLI host. Run an installed local model here to use general AI without the internet.</p></div></div>
+        <div class="network-map" aria-label="Explore TLI connections">
+          <svg class="network-lines" viewBox="0 0 600 480" aria-hidden="true"><circle cx="300" cy="240" r="164"/><circle cx="300" cy="240" r="220"/><path d="M300 240L113 100M300 240L490 118M300 240L388 400"/><circle class="network-traveler" cx="207" cy="170" r="4"/><circle class="network-traveler" cx="395" cy="179" r="4"/><circle class="network-traveler" cx="344" cy="320" r="4"/></svg>
+          <span class="map-coordinate top-left" aria-hidden="true">LOCAL / CONNECTED</span><span class="map-coordinate bottom-right" aria-hidden="true">SELECT A CONNECTION ↗</span>
+          <button class="network-node node-host selected" data-network="host" aria-pressed="true"><span class="node-symbol main-symbol">TLI</span><strong>Your computer</strong><small>The place it starts</small></button>
+          <button class="network-node node-model" data-network="model" aria-pressed="false"><span class="node-symbol" aria-hidden="true">⌘</span><strong>LAN compute</strong><small>Explicitly selected</small></button>
+          <button class="network-node node-home" data-network="home" aria-pressed="false"><span class="node-symbol" aria-hidden="true">⌂</span><strong>Smart home</strong><small>Supported devices</small></button>
+          <button class="network-node node-phone" data-network="phone" aria-pressed="false"><span class="node-symbol" aria-hidden="true">▯</span><strong>Companion</strong><small>Android preview</small></button>
+        </div>
       </div>
-      <div class="promise-card fade-up d1">
-        <div class="promise-icon">🛠️</div>
-        <div class="promise-title">Rough edges expected</div>
-        <div class="promise-desc">Beta software changes fast. Bugs happen. Your reports are what shape the final release.</div>
-      </div>
-      <div class="promise-card fade-up d2">
-        <div class="promise-icon">📬</div>
-        <div class="promise-title">Direct line to the dev</div>
-        <div class="promise-desc">Every issue goes straight to <a href="mailto:thelanintelligence@gmail.com">thelanintelligence@gmail.com</a>. Every report is read and acted on.</div>
-      </div>
-      <div class="promise-card fade-up d3">
-        <div class="promise-icon">🔄</div>
-        <div class="promise-title">Auto-updates included</div>
-        <div class="promise-desc">TLI checks for updates on startup and patches itself. You'll always be on the latest build without reinstalling.</div>
+      <div class="workspace-showcase">
+        <div class="showcase-copy"><p class="eyebrow">MORE THAN A CHAT WINDOW</p><h3>A workspace<br> worth coming back to.</h3><p>Find your files. Protect your saved work. Understand your computers. Keep the useful parts together.</p><div class="workspace-tabs" role="tablist" aria-label="Explore workspaces"><button role="tab" id="workspace-files-tab" aria-selected="true" aria-controls="workspace-panel" data-workspace="files">Files <span aria-hidden="true">↗</span></button><button role="tab" id="workspace-vault-tab" aria-selected="false" aria-controls="workspace-panel" tabindex="-1" data-workspace="vault">Vault <span aria-hidden="true">↗</span></button><button role="tab" id="workspace-computers-tab" aria-selected="false" aria-controls="workspace-panel" tabindex="-1" data-workspace="computers">Computers <span aria-hidden="true">↗</span></button></div></div>
+        <div class="workspace-preview" id="workspace-panel" role="tabpanel" aria-labelledby="workspace-files-tab" tabindex="0"><img id="workspace-image" src="/assets/product/now-files.webp" width="1440" height="1000" loading="lazy" decoding="async" alt="Current TLI Files workspace, shown with example data."><p id="workspace-caption">Files: browse and work with your files, with review before consequential actions. 1.4.0-beta · example workspace.</p></div>
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- ── Bottom CTA ─────────────────────────────────────────────────── -->
-<section class="bottom-cta fade-up" id="access">
-  <h2>Ready to take back<br>your network?</h2>
-  <p>Download the beta now, or request a download link by email.</p>
-  <div class="download-actions" style="margin-bottom:28px;">
-    <a class="download-button" data-windows-download href="https://github.com/TheLANIntelligence/TLI/releases/download/v1.3.5-beta/TLI_dist_1.3.5-beta.zip">Download for Windows</a>
-    <a class="download-button secondary" href="#macos">Install on Mac</a>
-  </div>
-  <div style="max-width:480px;margin:0 auto 16px;">
-    <form class="waitlist-form" id="waitlist-form-2"
-          action="https://formspree.io/f/xlgarvnq"
-          method="POST">
-      <input type="email" name="email" placeholder="your@email.com" aria-label="Email address for a download link" required />
-      <button type="submit">Email me a link</button>
-    </form>
-    <div class="waitlist-success" id="waitlist-success-2">
-      ✓ &nbsp;Request received. We'll email you a download link.
+  <section class="section evolution-section" id="evolution" aria-labelledby="evolution-heading">
+    <div class="container">
+      <div class="section-topline"><p class="eyebrow"><span>03</span> THE EVOLUTION</p><span class="quiet-label">Same belief. A much bigger possibility.</span></div>
+      <div class="evolution-intro"><h2 id="evolution-heading">Look how far<br><span class="muted-heading">we've come.</span></h2><p>Every detail has a history. From the early console to a cohesive personal workspace, this is what building, learning, and building again looks like.</p></div>
+      <div class="comparison-top"><div class="comparison-tabs" role="tablist" aria-label="Compare TLI workspaces"><button role="tab" id="compare-chat-tab" aria-selected="true" aria-controls="comparison-panel" data-compare="chat">Ask TLI</button><button role="tab" id="compare-dashboard-tab" aria-selected="false" aria-controls="comparison-panel" tabindex="-1" data-compare="dashboard">Dashboard</button><button role="tab" id="compare-vault-tab" aria-selected="false" aria-controls="comparison-panel" tabindex="-1" data-compare="vault">Vault</button><button role="tab" id="compare-files-tab" aria-selected="false" aria-controls="comparison-panel" tabindex="-1" data-compare="files">Files</button></div><div class="comparison-mode" aria-label="Comparison view"><button data-compare-mode="before" aria-pressed="false">Then</button><button data-compare-mode="split" class="split-button selected" aria-pressed="true">Compare</button><button data-compare-mode="now" aria-pressed="false">Now</button></div></div>
+      <div id="comparison-panel" role="tabpanel" aria-labelledby="compare-chat-tab" tabindex="0">
+        <div class="comparison-stage" id="comparison-stage" style="--reveal:50%">
+          <img id="comparison-before" src="/assets/product/early-chat.webp" width="1440" height="1000" loading="lazy" decoding="async" alt="Early retained TLI Chat interface, reconstructed from May 2026 source with example data.">
+          <div class="comparison-after"><img id="comparison-now" src="/assets/product/ask-emerald-light.webp" width="1440" height="1000" loading="lazy" decoding="async" alt="Ask TLI 1.4.0-beta in the Emerald Light theme, with example data."></div>
+          <span class="comparison-label before-label">THEN <small>MAY 2026</small></span><span class="comparison-label now-label">NOW <small>1.4.0-BETA</small></span>
+          <div class="comparison-divider" aria-hidden="true"><span>↔</span></div>
+          <label class="sr-only" for="comparison-range">Amount of current TLI interface revealed</label><input class="comparison-range" id="comparison-range" type="range" min="0" max="100" value="50" aria-valuetext="50 percent current interface">
+        </div>
+        <div class="comparison-caption"><p id="comparison-description">From the early chat panel to a focused space for questions, writing, planning, ideas, and code.</p><span>Drag to explore <span aria-hidden="true">↔</span></span></div>
+      </div>
+      <p class="provenance-note">Then: earliest retained source, May 3, 2026; reconstructed with example data. Now: the 1.4.0-beta desktop interface, captured with example data. The interactive tour uses illustrative responses.</p>
     </div>
-  </div>
-  <p style="font-size:12.5px;color:var(--soft);">Email is optional. You can download and install right away.</p>
-</section>
+  </section>
 
-<!-- ── Footer ─────────────────────────────────────────────────────── -->
-<footer>
-  <p>© 2026 <span>TheLANIntelligence</span> · Beta · <a href="mailto:thelanintelligence@gmail.com" style="color:var(--soft);">thelanintelligence@gmail.com</a></p>
-</footer>
+  <section class="section appearance-section" id="appearance" aria-labelledby="appearance-heading">
+    <div class="container">
+      <div class="appearance-heading"><p class="eyebrow"><span>04</span> MAKE IT YOURS</p><h2 id="appearance-heading">Same intelligence.<br><span class="muted-heading">A different feeling.</span></h2><p>Quiet charcoal. Ocean blue. A little copper warmth.<br>23 built-in palettes. Here are six ways to feel at home.</p></div>
+      <div class="theme-selector" role="tablist" aria-label="Choose an appearance preview">
+        <button role="tab" id="theme-pacific" data-theme="pacific" tabindex="-1" aria-selected="false" aria-controls="theme-panel" style="--swatch:#63d2d4"><span></span>Pacific</button><button role="tab" id="theme-emerald-light" data-theme="emerald-light" aria-selected="true" aria-controls="theme-panel" style="--swatch:#9aceb6"><span></span>Emerald Light</button><button role="tab" id="theme-midnight" data-theme="midnight" tabindex="-1" aria-selected="false" aria-controls="theme-panel" style="--swatch:#65756f"><span></span>Midnight</button><button role="tab" id="theme-oled" data-theme="oled" tabindex="-1" aria-selected="false" aria-controls="theme-panel" style="--swatch:#151c18"><span></span>OLED</button><button role="tab" id="theme-copper" data-theme="copper" tabindex="-1" aria-selected="false" aria-controls="theme-panel" style="--swatch:#cf966f"><span></span>Copper</button><button role="tab" id="theme-rose-quartz" data-theme="rose-quartz" tabindex="-1" aria-selected="false" aria-controls="theme-panel" style="--swatch:#ddb6ce"><span></span>Rose Quartz</button>
+      </div>
+      <div class="theme-gallery" id="theme-panel" role="tabpanel" aria-labelledby="theme-emerald-light" tabindex="0"><div class="theme-glow" aria-hidden="true"></div><div class="product-frame"><div class="frame-toolbar"><span class="frame-dots" aria-hidden="true"><i></i><i></i><i></i></span><span id="theme-name">Emerald Light</span><span class="frame-label">YOUR SPACE, YOUR WAY</span></div><img id="theme-image" src="/assets/product/ask-emerald-light.webp" width="1440" height="1000" loading="lazy" decoding="async" alt="Ask TLI 1.4.0-beta in the Emerald Light appearance, with example data."></div></div>
+      <p class="theme-caption" id="theme-caption" aria-live="polite">Emerald Light — fresh sage, forest ink, and confident emerald.</p>
+    </div>
+  </section>
 
-<script>
-"use strict";
+  <section class="section story-section" id="story" aria-labelledby="story-heading">
+    <div class="container story-layout">
+      <div class="story-visual" aria-hidden="true"><div class="story-emblem"><span class="story-monogram">TLI</span></div><p class="story-signature">Built with intention.<span>Still evolving.</span></p></div>
+      <div class="story-copy"><p class="eyebrow"><span>05</span> THE REASON BEHIND IT</p><h2 id="story-heading">We built this.<br><span class="muted-heading">And we're just<br> getting started.</span></h2><p class="story-lead">The technology in your life should feel like it belongs to you. That's the idea behind this workspace.</p><p>So we keep building. A clearer conversation. A more useful workspace. Better ways to create, to connect, and to keep the things that matter.</p><p>TheLANIntelligence is that work, still in motion. Built with care. Tested, refined, and made to be yours.</p><ol class="milestones"><li><time datetime="2026-05">MAY 2026</time><span>The early console.<small>Our earliest retained interface.</small></span></li><li><time datetime="2026-09">SEPTEMBER 2026</time><span>A more connected workspace.<small>Conversation, creation, and useful tools.</small></span></li><li><time datetime="2026-10">OCTOBER 2026</time><span>A new atmosphere.<small>A cohesive interface. A personal feel.</small></span></li></ol></div>
+    </div>
+  </section>
 
-// Adopt full releases from the update feed, never frontend-only update ZIPs.
-// The published ZIP remains a usable fallback without JavaScript or on failure.
-(async function updateDownloads() {
-  try {
-    const response = await fetch("/latest.json", { cache: "no-cache" });
-    if (!response.ok) return;
-    const release = await response.json();
-    if (release.frontend_only !== false) return;
-    const url = new URL(release.download_url);
-    if (url.origin !== "https://github.com" || url.username || url.password ||
-        !url.pathname.startsWith("/TheLANIntelligence/TLI/releases/download/") ||
-        !url.pathname.endsWith(".zip") ||
-        typeof release.version !== "string" || !/^[\w.+-]{1,64}$/.test(release.version)) return;
-    document.querySelectorAll("[data-windows-download]").forEach(link => { link.href = url.href; });
-    document.querySelectorAll("[data-release-version]").forEach(label => {
-      label.textContent = "v" + release.version.replace(/^v/, "");
-    });
-  } catch {
-    // Retain the verified release link when the manifest is unavailable.
-  }
-})();
-
-// ── macOS copy command ──────────────────────────────────────────────
-function copyMacCmd() {
-  const cmd = "curl -fsSL https://thelanintelligence.com/install_mac.sh | bash";
-  const btn = document.getElementById("mac-cmd-copy");
-  navigator.clipboard.writeText(cmd).then(function() {
-    btn.textContent = "Copied!";
-    btn.classList.add("copied");
-    setTimeout(function() {
-      btn.textContent = "Copy";
-      btn.classList.remove("copied");
-    }, 2200);
-  }).catch(function() {
-    // Fallback for older browsers
-    const ta = document.createElement("textarea");
-    ta.value = cmd; ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta); ta.select();
-    document.execCommand("copy");
-    document.body.removeChild(ta);
-    btn.textContent = "Copied!"; btn.classList.add("copied");
-    setTimeout(function() { btn.textContent = "Copy"; btn.classList.remove("copied"); }, 2200);
-  });
-}
-
-// ── Form submission ─────────────────────────────────────────────────
-function setupForm(formId, successId) {
-  const form    = document.getElementById(formId);
-  const success = document.getElementById(successId);
-  if (!form) return;
-  form.addEventListener("submit", async function(e) {
-    e.preventDefault();
-    const btn = form.querySelector("button");
-    btn.textContent = "Sending…"; btn.disabled = true;
-    try {
-      const res = await fetch(form.action, {
-        method: "POST", body: new FormData(form),
-        headers: { "Accept": "application/json" }
-      });
-      if (res.ok) {
-        form.style.display = "none";
-        success.style.display = "block";
-      } else {
-        btn.textContent = "Try again"; btn.disabled = false;
-      }
-    } catch {
-      btn.textContent = "Try again"; btn.disabled = false;
-    }
-  });
-}
-setupForm("waitlist-form-2", "waitlist-success-2");
-
-// ── Scroll fade-in ──────────────────────────────────────────────────
-if ("IntersectionObserver" in window) {
-  const obs = new IntersectionObserver(entries => {
-    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("visible"); obs.unobserve(e.target); } });
-  }, { threshold: 0.07 });
-  document.documentElement.classList.add("reveal-ready");
-  document.querySelectorAll(".fade-up").forEach(el => obs.observe(el));
-}
-
-// ── Hero constellation canvas ───────────────────────────────────────
-(function () {
-  const canvas = document.getElementById("hero-canvas");
-  if (!canvas) return;
-  const ctx = canvas.getContext("2d");
-  let W, H, nodes = [], animId;
-  const ACCENT=[5,150,105], BLUE=[14,165,233], PURPLE=[139,92,246];
-  const COLORS=[ACCENT,BLUE,PURPLE];
-  const N=40, CONN=160, SPEED=0.26;
-
-  function resize() { W=canvas.width=canvas.offsetWidth; H=canvas.height=canvas.offsetHeight; }
-  function mkNode() {
-    const c=COLORS[Math.floor(Math.random()*COLORS.length)];
-    return { x:Math.random()*W, y:Math.random()*H,
-             vx:(Math.random()-.5)*SPEED, vy:(Math.random()-.5)*SPEED,
-             r:Math.random()*1.8+0.7, c };
-  }
-  function init() { resize(); nodes=Array.from({length:N},mkNode); }
-  function draw() {
-    ctx.clearRect(0,0,W,H);
-    for (let i=0;i<nodes.length;i++) {
-      const a=nodes[i];
-      for (let j=i+1;j<nodes.length;j++) {
-        const b=nodes[j], dx=a.x-b.x, dy=a.y-b.y, d=Math.sqrt(dx*dx+dy*dy);
-        if (d<CONN) {
-          ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
-          ctx.strokeStyle=`rgba(${a.c},${(1-d/CONN)*.17})`; ctx.lineWidth=0.8; ctx.stroke();
-        }
-      }
-    }
-    for (const n of nodes) {
-      ctx.beginPath(); ctx.arc(n.x,n.y,n.r,0,Math.PI*2);
-      ctx.fillStyle=`rgba(${n.c},.7)`; ctx.fill();
-      n.x+=n.vx; n.y+=n.vy;
-      if(n.x<0||n.x>W) n.vx*=-1;
-      if(n.y<0||n.y>H) n.vy*=-1;
-    }
-    animId=requestAnimationFrame(draw);
-  }
-  init(); draw();
-  window.addEventListener("resize",()=>{ cancelAnimationFrame(animId); init(); draw(); });
-})();
-</script>
+  <section class="section start-section" id="download" aria-labelledby="start-heading">
+    <div class="container">
+      <div class="start-panel"><div><p class="eyebrow"><span class="status-dot"></span> YOUR NEXT CHAPTER</p><h2 id="start-heading">Make room<br>for your own AI.</h2><p>Start with the current desktop beta. Make the workspace your own.</p></div><div class="start-actions"><span class="release-chip">PUBLIC BETA · 1.4.0-beta</span><a class="button button-primary" href="/download/#windows">Download for Windows <span aria-hidden="true">↗</span></a><a class="button button-secondary" id="macos" href="/download/#macos">Download for macOS <span aria-hidden="true">↗</span></a><p>Fresh Windows and macOS installations.<br>Model weights download separately.</p></div></div>
+      <div class="faq-layout"><div><p class="eyebrow">A FEW THINGS TO KNOW</p><h3>Your questions.<br>Straight answers.</h3><a class="text-button" href="/download/">Visit the install guide <span aria-hidden="true">↗</span></a></div><div class="faq-list">
+        <details><summary>Is the new experience available to download?<span aria-hidden="true">+</span></summary><p>Yes. TLI 1.4.0-beta brings the current desktop workspace to Windows and macOS: Ask TLI, appearance themes, Files, Vault, reviewed LAN connections, and small-app Builder. This page uses illustrative data and curated demonstrations. Your installation starts with your own setup.</p></details>
+        <details><summary>Can TLI work without the internet?<span aria-hidden="true">+</span></summary><p>With dependencies and a local model installed and running, general conversation can work offline. Your LAN is still needed for connected computers and local devices. Initial downloads, optional cloud providers, internet search, and some integrations require internet access.</p></details>
+        <details><summary>What hardware do I need?<span aria-hidden="true">+</span></summary><p>Requirements and response speed depend on your model, available memory, and CPU or GPU. Start with a model that fits your computer. Windows 10/11 needs 64-bit Python 3.10–3.14 (3.14 recommended); the launcher can install Python 3.14 when needed. The bundled Mac runtime needs macOS 14+ on Apple Silicon or 13.3+ on Intel. See the install guide for setup details.</p></details>
+        <details><summary>Where does my data go?<span aria-hidden="true">+</span></summary><p>TLI keeps its saved work on the host. Local inference processes requests on your own hardware. Choosing a LAN model shares the relevant request with that trusted computer. Optional external providers and services have their own data paths; choose them deliberately.</p></details>
+        <details><summary>Does it control everything automatically?<span aria-hidden="true">+</span></summary><p>No. Supported devices need configuration, computers need appropriate trust, and consequential actions have explicit scopes and review. TLI distinguishes a command acknowledgement from a checked outcome. AI answers and generated apps still need your judgment.</p></details>
+        <details><summary>Can I use TLI on my phone?<span aria-hidden="true">+</span></summary><p>The separate Android Companion beta connects to a compatible, configured TLI host. A phone app is not included in these desktop ZIPs, and this website does not offer a phone download, an iPhone app, or built-in off-LAN access.</p></details>
+      </div></div>
+    </div>
+  </section>
+</main>
+<footer class="site-footer" id="access"><div class="container"><div class="footer-top"><a class="brand" href="/"><span class="brand-mark" aria-hidden="true">TLI</span><span>TheLANIntelligence</span></a><p>Your AI. Your world. Your terms.</p><a class="text-button" href="mailto:thelanintelligence@gmail.com">Say hello <span aria-hidden="true">↗</span></a></div><div class="footer-wordmark" aria-hidden="true">TheLANIntelligence.</div><div class="footer-bottom"><span>© 2026 TheLANIntelligence</span><span>Built with intention. Still evolving.</span><a href="/download/#access">Request a download link</a></div></div></footer>
 </body>
 </html>

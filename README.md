@@ -11,10 +11,12 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Development status:** TLI is beta software. This README describes the current
-source tree; published packages and native Companion builds may contain an
-earlier feature set. Check the [release notes and available downloads](https://github.com/TheLANIntelligence/TLI/releases)
-for the package you install. Source tests do not establish physical-device,
+**Desktop release: 1.4.0-beta.** Download the prepared
+[Windows and macOS packages](https://thelanintelligence.com/download/), then follow
+[START_HERE.md](START_HERE.md). Each includes the current desktop experience and
+its platform's inference runtime; Python dependencies and model weights are
+separate downloads. Native Phone Companion builds are distributed separately.
+TLI remains beta software. Source tests do not establish physical-device,
 two-computer, offline or platform acceptance; see the recorded limits in the
 [everyday experience guide](docs/TLI_EVERYDAY_EXPERIENCE.md).
 

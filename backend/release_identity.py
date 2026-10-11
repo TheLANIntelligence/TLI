@@ -151,14 +151,18 @@ def capture():
         _runtime = ReleaseIdentity(root, executable=sys.executable if frozen else None, frontend_root=frontend_root)
 
 
-def public_status(routes=None):
+def public_status(paths=None):
     # A router imported without the real application bootstrap must not claim a
     # source identity was captured before its other code loaded.
     if _runtime is None:
         return {"schema_version": 1, "protocol": PROTOCOL, "source_id": None,
                 "capabilities": [], "compatibility": {"state": "unknown", "reasons": ["Host startup identity was not captured."]}}
     value = _runtime.status()
-    if routes is not None:
-        actual = {(method, getattr(route, "path", None)) for route in routes for method in getattr(route, "methods", ()) or ()}
+    if paths is not None:
+        # Use FastAPI's public OpenAPI path map. Its lower-level app.routes tree
+        # need not contain flat routes when the application includes routers.
+        methods = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
+        actual = {(method.upper(), path) for path, operations in paths.items()
+                  for method in operations if method in methods}
         value["capabilities"] = [name for name in CAPABILITIES if REQUIRED_ROUTES[name] <= actual]
     return value

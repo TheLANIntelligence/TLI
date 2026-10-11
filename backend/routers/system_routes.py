@@ -779,7 +779,7 @@ def diagnostics_version(request: Request):
     from fastapi.responses import JSONResponse
     return JSONResponse({"ok": True, "build_id": BUILD_ID, "build_utc": BACKEND_BUILD_UTC,
             "python": sys.version.split()[0], "platform": platform.platform(),
-            "release": public_status(request.app.routes)}, headers={"Cache-Control": "no-store"})
+            "release": public_status(request.app.openapi()["paths"])}, headers={"Cache-Control": "no-store"})
 
 @router.get("/api/diagnostics/whoami")
 def diagnostics_whoami():
@@ -954,27 +954,69 @@ def pin_emergency_reset(response: Response, _session: str = Depends(require_sess
 
 # ── Onboarding endpoints ──────────────────────────────────────
 
+from threading import RLock as _OnboardingLock
+import security_state as _onboarding_security
+
 _ONBOARDING_COMPLETE_FILE = Path(S.DATA_DIR) / "onboarding_complete.json"
+_ONBOARDING_STARTED_FILE = Path(S.DATA_DIR) / "onboarding_started.json"
+_ONBOARDING_LOCK = _OnboardingLock()
+
+
+def _read_onboarding_marker(path: Path, timestamp: str):
+    try:
+        value = _onboarding_security.read_json(path, "onboarding progress", 65536)
+    except FileNotFoundError:
+        return None
+    # Older completion markers were presence-only; an empty JSON object is
+    # still valid. An unreadable or malformed marker is never a fresh install.
+    legacy_complete = timestamp == "completed_at" and value == {}
+    if not isinstance(value, dict) or not (legacy_complete or isinstance(value.get(timestamp), str) and value[timestamp].strip()):
+        raise _onboarding_security.SecurityStateUnavailable("onboarding progress")
+    return value
+
+
+def _onboarding_state():
+    cfg = S.load_pin_config()
+    if _read_onboarding_marker(_ONBOARDING_COMPLETE_FILE, "completed_at") is not None:
+        return {"complete": True, "started": False}
+    if _read_onboarding_marker(_ONBOARDING_STARTED_FILE, "started_at") is not None:
+        return {"complete": False, "started": True}
+    # Preserve installations predating explicit onboarding progress. A PIN
+    # created during the new flow cannot take this path because start is saved
+    # first. Reading status does not migrate or modify any saved files.
+    return {"complete": bool(cfg["enabled"]), "started": False}
 
 
 @router.get("/system/onboarding/status")
 def onboarding_status():
-    """Returns complete=true if onboarding has been finished OR a PIN is already set (existing users)."""
-    if _ONBOARDING_COMPLETE_FILE.exists():
-        return {"complete": True}
-    cfg = S.load_pin_config()
-    if cfg["enabled"]:
-        # Existing user — mark complete silently so they never see the wizard
-        _ONBOARDING_COMPLETE_FILE.write_text(json.dumps({"completed_at": S.now_iso()}), encoding="utf-8")
-        return {"complete": True}
-    return {"complete": False}
+    """Public, read-only setup status; started means unfinished setup."""
+    with _ONBOARDING_LOCK:
+        return _onboarding_state()
+
+
+@router.post("/system/onboarding/start")
+def onboarding_start(_session: str = Depends(require_session)):
+    """Persist progress before creating a PIN; never reset completed setup."""
+    with _ONBOARDING_LOCK:
+        state = _onboarding_state()  # Also validate security for existing sessions.
+        if not state["complete"] and not state["started"]:
+            _onboarding_security.write_json(
+                _ONBOARDING_STARTED_FILE, {"started_at": S.now_iso()}, "onboarding progress"
+            )
+            state = {"complete": False, "started": True}
+        return {"ok": True, **state}
 
 
 @router.post("/system/onboarding/complete")
 def onboarding_complete(_session: str = Depends(require_session)):
-    """Mark onboarding as finished. No auth required — called at wizard completion."""
-    _ONBOARDING_COMPLETE_FILE.write_text(json.dumps({"completed_at": S.now_iso()}), encoding="utf-8")
-    return {"ok": True}
+    """Acknowledge completion only after an authenticated, durable save."""
+    with _ONBOARDING_LOCK:
+        _onboarding_state()  # Refuse corrupt progress or security; preserve files.
+        if _read_onboarding_marker(_ONBOARDING_COMPLETE_FILE, "completed_at") is None:
+            _onboarding_security.write_json(
+                _ONBOARDING_COMPLETE_FILE, {"completed_at": S.now_iso()}, "onboarding progress"
+            )
+        return {"ok": True}
 
 
 class NodeNameRequest(BaseModel):

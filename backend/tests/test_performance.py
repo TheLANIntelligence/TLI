@@ -76,7 +76,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(P, 'identity', lambda pid: (None, {**PROCESS, 'pid': pid}))
     for name in ['cpu_percent', 'cpu_count', 'virtual_memory', 'pids', 'Process']:
         monkeypatch.setattr(P.psutil, name, lambda *args, **kwargs: pytest.fail('No real resource calls in tests'))
-    manager = P.Observations(probe_factory=FakeProbe, duration=.03, interval=.01)
+    # Sample/value tests do not assert elapsed time. Keep scheduler delays from
+    # turning synthetic samples into deadline failures on a busy CI worker.
+    # The real-clock deadline is exercised explicitly below.
+    manager = P.Observations(probe_factory=FakeProbe, clock=lambda: 0.0, duration=.03, interval=.01)
     monkeypatch.setattr(P, 'manager', manager)
     yield manager
     for row in manager.rows.values(): row['stop'].set()
@@ -121,6 +124,21 @@ def test_completed_values_and_no_persistence_until_explicit_save(isolated):
     assert all(check['status'] == 'pass' for check in saved['checks'])
 
 
+def test_real_clock_deadline_reports_delayed_sampling_without_fabricated_values(isolated):
+    class DelayedProbe(FakeProbe):
+        def __init__(self, selected):
+            super().__init__(selected)
+            # Deliberately exceed the production deadline. Any scheduler delay
+            # makes the same outcome more certain; no exact wake time is needed.
+            time.sleep(isolated.duration + isolated.interval + .02)
+    isolated.clock = time.monotonic
+    isolated.probe_factory = DelayedProbe
+    row = finished(isolated, start(isolated)['id'])
+    assert row['status'] == 'partial' and row['reason'] == 'sampling_delayed'
+    assert row['sample_count'] == 0 and isolated.active is None
+    assert all(metric['samples'] == 0 for metric in row['summary'].values())
+
+
 def test_duplicate_start_and_save_serialize_and_keep_immutable_report(isolated):
     with ThreadPoolExecutor(8) as pool:
         rows = list(pool.map(lambda _: isolated.start(OWNER, 'same', 77, 1200.0), range(8)))
@@ -135,14 +153,24 @@ def test_duplicate_start_and_save_serialize_and_keep_immutable_report(isolated):
 
 
 def test_active_observation_blocks_other_owner_without_leaking_identity(isolated):
+    release = threading.Event()
+    class WaitingProbe(FakeProbe):
+        def sample(self):
+            assert release.wait(2), 'Test did not release its active synthetic observation'
+            return dict(VALUES)
+    isolated.probe_factory = WaitingProbe
     row = start(isolated)
-    with pytest.raises(HTTPException) as error: isolated.start('other', 'other', 55, 1200.0)
-    assert error.value.status_code == 409 and '77' not in error.value.detail
-    with pytest.raises(HTTPException): isolated.get('other', row['id'])
-    with pytest.raises(HTTPException): isolated.stop('other', row['id'])
-    with pytest.raises(HTTPException): isolated.save('other', row['id'], 'save')
-    assert isolated.listing('other') == []
-    with pytest.raises(HTTPException): isolated.by_request('other', 'start-1')
+    try:
+        with pytest.raises(HTTPException) as error: isolated.start('other', 'other', 55, 1200.0)
+        assert error.value.status_code == 409 and '77' not in error.value.detail
+        with pytest.raises(HTTPException): isolated.get('other', row['id'])
+        with pytest.raises(HTTPException): isolated.stop('other', row['id'])
+        with pytest.raises(HTTPException): isolated.save('other', row['id'], 'save')
+        assert isolated.listing('other') == []
+        with pytest.raises(HTTPException): isolated.by_request('other', 'start-1')
+    finally:
+        release.set()
+    finished(isolated, row['id'])
 
 
 def test_reused_request_or_process_identity_rejected_before_worker(isolated):
@@ -154,12 +182,25 @@ def test_reused_request_or_process_identity_rejected_before_worker(isolated):
 
 
 def test_stop_is_request_then_terminal_idempotent_and_keeps_samples(isolated):
+    sampled, release_sample = threading.Event(), threading.Event()
+    class ControlledProbe(FakeProbe):
+        def sample(self):
+            sampled.set()
+            assert release_sample.wait(2), 'Test did not release its synthetic sample'
+            return dict(VALUES)
+    isolated.probe_factory = ControlledProbe
+    # Synchronize with the worker instead of assuming the scheduler records a
+    # sample during a 16 ms sleep. No real sampling or elapsed-time claim here.
+    isolated.clock = lambda: 0.0
     row = start(isolated)
-    time.sleep(.016)
-    stopping = isolated.stop(OWNER, row['id'])
+    try:
+        assert sampled.wait(2), 'Synthetic observation worker did not start'
+        stopping = isolated.stop(OWNER, row['id'])
+    finally:
+        release_sample.set()
     assert stopping['status'] in ('running','stopped')
     result = finished(isolated, row['id'])
-    assert result['status'] == 'stopped' and 0 < result['sample_count'] < 3
+    assert result['status'] == 'stopped' and result['sample_count'] == 1
     assert isolated.stop(OWNER, row['id']) == result
     report = isolated.save(OWNER, row['id'], 'stop-save')
     assert all(check['status'] == 'unavailable' for check in report['checks'])
@@ -206,7 +247,7 @@ def test_failed_replacement_save_preserves_existing_history_and_can_retry(isolat
 def test_ttl_and_cap_bound_unsaved_results(isolated):
     for index in range(23): finished(isolated,start(isolated,str(index))['id'])
     assert len(isolated.rows)==20
-    now=time.monotonic()
+    now=isolated.clock()
     isolated.clock=lambda:now+601
     assert isolated.listing(OWNER)==[]
 

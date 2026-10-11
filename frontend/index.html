@@ -79,12 +79,13 @@
 <link rel="stylesheet" href="premium-chat.css?v=e4e5e90265f1">
 <link rel="stylesheet" href="connected-workspaces.css?v=be27a10b54d8">
 <link rel="stylesheet" href="header-status.css?v=f75f2cab3d29">
+<link rel="stylesheet" href="onboarding.css?v=176a174d0386">
 </head>
 
 <body>
   <p id="tli-interface-notice" class="interface-announcement" role="status" aria-live="polite" aria-atomic="true"></p>
   <!-- =====================================================
-     First-Run Onboarding + Optional Intro Audio
+     First-Run Onboarding
      (same experience across Windows/Mac/Linux)
      ===================================================== -->
 
@@ -198,50 +199,53 @@
   </div>
 </div>
 
-<audio id="tli-startup-audio" preload="auto">
-  <source src="/assets/tli_intro.mp3" type="audio/mpeg" />
-</audio>
-
 <div id="tli-onboard" class="tli-onboard hidden" aria-hidden="true">
-  <div class="tli-onboard-card" role="dialog" aria-modal="true" aria-label="TLI Setup">
-    <div class="tli-onboard-top">
-      <div class="tli-onboard-title">TheLANIntelligence</div>
-      <button class="tli-onboard-close" id="tli-onboard-close" title="Close">✕</button>
-    </div>
-
-    <div class="tli-onboard-progress">
-      <div class="tli-onboard-progress-bar" id="tli-onboard-bar"></div>
-    </div>
-
-    <div class="tli-onboard-body">
-      <div class="tli-onboard-step-title" id="tli-onboard-step-title"></div>
-      <div class="tli-onboard-step-text" id="tli-onboard-step-text"></div>
-
-      <div class="tli-onboard-dyn" id="tli-onboard-dyn"></div>
-
-      <div class="tli-onboard-status" id="tli-onboard-status"></div>
-    </div>
-
-    <div class="tli-onboard-actions">
-      <button class="btn btn-ghost btn-sm" id="tli-onboard-back">Back</button>
-
-      <div class="tli-onboard-actions-right">
-        <div class="tli-audio-controls">
-          <button class="tli-audio-pp" id="tli-audio-playpause" title="Play / Pause" data-playing="0">
-            <svg class="tli-audio-icon-play" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M4 2.5l10 5.5-10 5.5V2.5z"/></svg>
-            <svg class="tli-audio-icon-pause" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><rect x="3" y="2" width="4" height="12" rx="1"/><rect x="9" y="2" width="4" height="12" rx="1"/></svg>
-          </button>
-          <div class="tli-audio-vol-wrap">
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity:.5;flex-shrink:0"><path d="M3 6v4h2.5L9 13V3L5.5 6H3zm9.5-1.5a5 5 0 010 7 .75.75 0 01-1.06-1.06 3.5 3.5 0 000-4.88A.75.75 0 0112.5 4.5z"/></svg>
-            <input class="tli-audio-vol" id="tli-audio-vol" type="range" min="0" max="1" step="0.01" value="0.22" />
-          </div>
-        </div>
-
-        <button class="btn-primary btn-sm" id="tli-onboard-next">Continue</button>
+  <div class="onboarding-dialog" role="dialog" aria-modal="true" aria-labelledby="tli-onboard-step-title">
+    <aside class="onboarding-story" aria-label="Welcome to TLI">
+      <div class="onboarding-brand"><span class="onboarding-wordmark">TLI<span aria-hidden="true">.</span></span><span class="onboarding-brand-label">YOUR PRIVATE AI</span></div>
+      <div class="onboarding-editorial">
+        <p class="onboarding-eyebrow">A SPACE FOR YOUR IDEAS</p>
+        <h2>A little more<br>possibility.</h2>
+        <p>Think it through. Make something.<br>Move your everyday forward.</p>
       </div>
-    </div>
+      <div class="onboarding-orbit" aria-hidden="true">
+        <div class="onboarding-orbit-ring onboarding-orbit-ring-one"></div>
+        <div class="onboarding-orbit-ring onboarding-orbit-ring-two"></div>
+        <div class="onboarding-orbit-ring onboarding-orbit-ring-three"></div>
+        <div class="onboarding-orbit-core">TLI<span>.</span></div>
+        <span class="onboarding-orbit-point onboarding-orbit-point-one"></span>
+        <span class="onboarding-orbit-point onboarding-orbit-point-two"></span>
+        <span class="onboarding-orbit-caption">BUILT AROUND YOU</span>
+      </div>
+      <ol id="onboard-steps" aria-label="Setup progress">
+        <li data-onboard-step="0" aria-current="step"><span class="onboarding-step-number" aria-hidden="true">01</span><span>Welcome</span></li>
+        <li data-onboard-step="1"><span class="onboarding-step-number" aria-hidden="true">02</span><span>Make it yours</span></li>
+        <li data-onboard-step="2"><span class="onboarding-step-number" aria-hidden="true">03</span><span>Protect access</span></li>
+        <li data-onboard-step="3"><span class="onboarding-step-number" aria-hidden="true">04</span><span>Set up AI</span></li>
+        <li data-onboard-step="4"><span class="onboarding-step-number" aria-hidden="true">05</span><span>Begin</span></li>
+      </ol>
+      <p class="onboarding-story-footnote">Local intelligence. Personal possibilities.</p>
+    </aside>
+    <section class="onboarding-main" aria-label="Set up TLI">
+      <div class="onboarding-topline">
+        <span id="onboard-step-count">01 / 05</span>
+        <button id="tli-onboard-close" type="button">Finish later</button>
+      </div>
+      <div class="onboarding-progress" aria-hidden="true"><div id="tli-onboard-bar"></div></div>
+      <div class="onboarding-content">
+        <h1 id="tli-onboard-step-title" tabindex="-1">Welcome to your TLI.</h1>
+        <p id="tli-onboard-step-text">A private AI for questions, ideas, and everything you want to make happen. Let’s make it feel like yours.</p>
+        <div id="tli-onboard-dyn"></div>
+        <div id="tli-onboard-status" role="status" aria-live="polite" aria-atomic="true"></div>
+      </div>
+      <footer class="onboarding-footer">
+        <button id="tli-onboard-back" type="button">Back</button>
+        <span id="onboard-footer-note">Your space. Your pace.</span>
+        <button id="tli-onboard-next" type="button">Let’s begin</button>
+      </footer>
+    </section>
   </div>
-  </div>
+</div>
 
   <div class="app-shell">
     <!-- Sidebar -->
@@ -3192,7 +3196,7 @@
         <button class="btn-icon" data-close-modal aria-label="Close About TLI">&times;</button>
       </div>
       <div class="modal-body">
-        <p><strong>Version:</strong> <span id="about-version">v1.3.5-beta</span></p>
+        <p><strong>Version:</strong> <span id="about-version">v1.4.0-beta</span></p>
         <p><strong>Purpose:</strong> Your private home console for computers, devices, files and local AI.</p>
         <p><strong>AI:</strong> Bundled local inference, optional LM Studio and connected TLI computers. Check AI &amp; chat settings for current model availability.</p>
         <p><strong>Saved work:</strong> Notes &amp; fixes holds setup details, preferences and past fixes. Vault notes use a separate passphrase.</p>
@@ -3218,13 +3222,14 @@
 
   <!-- Main JS bundle -->
   <script src="/js/host-identity.js?v=1c681b225322"></script>
-  <script src="/js/ui-foundation.js?v=a244f8e48ca0"></script>
+  <script src="/js/ui-foundation.js?v=950fd0ae324f"></script>
   <script src="/js/simplification.js?v=e33126f9622a"></script>
   <script src="/js/device-details.js?v=d63b700c50fe"></script>
   <script src="/js/room-display.js?v=52948454ea67"></script>
   <script src="/js/ui-health.js?v=f0512d10910f"></script>
   <script src="/js/local-voice.js?v=23aa2949b2d5"></script>
-  <script src="/app.js?v=523f3c523234"></script>
+  <script src="/app.js?v=e1dfcfa79192"></script>
+  <script src="/js/onboarding.js?v=68d899e30edb"></script>
   <script src="/js/lan-inference.js?v=f4d181d981ad"></script>
   <script src="/js/vault.js?v=f12ddafda69f"></script>
   <script src="/js/vault-backups.js?v=a01c7a5a5e84"></script>
@@ -3269,7 +3274,7 @@
   <script src="/js/builder-web-apps.js?v=e2c1cc4a9ad1"></script>
   <script src="/js/builder.js?v=a1cef232b467"></script>
   <script src="/js/mesh-service.js?v=e6ceba17542f"></script>
-<script src="/js/pin-lock.js?v=6291d69c746d"></script>
+<script src="/js/pin-lock.js?v=e366f62ec3f7"></script>
 <script src="/js/cmd-palette.js?v=043431b7c323"></script>
   <script src="/js/fetch-interceptor.js?v=eae0038f9c0b"></script>
   <script src="/js/release-status.js?v=eb36ce4767d8"></script>

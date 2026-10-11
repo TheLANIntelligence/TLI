@@ -91,7 +91,7 @@ AGENT_TASKS_PATH    = MESH_DATA_DIR / "agent_tasks.json"
 #  Version
 # ============================================
 
-TLI_VERSION = "1.3.5-beta"
+TLI_VERSION = "1.4.0-beta"
 
 # ============================================
 #  LM Studio / HTTP config
