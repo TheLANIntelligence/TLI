@@ -1,4 +1,4 @@
-import { PUBLIC_RELEASE } from './release.js?v=onboarding-20261012';
+import { PUBLIC_RELEASE } from './release.js?v=release-1.4.1-20261011';
 
 // Verified email precedes access to the selected fresh-install link.
 // The underlying public GitHub release is not an authenticated file service.

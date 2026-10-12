@@ -94,6 +94,8 @@ def test_bundled_capacity_records_actual_owned_launch_arguments(tmp_path, monkey
     process = SimpleNamespace(pid=7654, poll=lambda: None)
     def fake_process(args, **kwargs):
         launches.append(args); return process
+    # Preflight is tested separately; record only the owned model launch here.
+    monkeypatch.setattr(am, "check_windows_runtime", lambda _path: None)
     monkeypatch.setattr(am.subprocess, "Popen", fake_process)
     monkeypatch.setattr(am, "_assign_to_win32_job", lambda pid: None)
     monkeypatch.setattr(am, "_is_port_open", lambda *a: False)
