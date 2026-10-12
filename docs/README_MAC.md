@@ -1,158 +1,95 @@
-# TheLANIntelligence — macOS Guide
-*v1.1.1-beta · All features supported on macOS*
+# TLI on macOS
 
----
+The current Mac desktop release is a Python-based ZIP installation with a
+Terminal launcher. It is not a signed, notarized Mac application or a DMG.
+It includes Apple Silicon and Intel inference runtimes; Python dependencies
+and AI model weights are separate downloads. Platform and device support varies.
 
-## Installing TLI
+## Install and start
 
-### Option A — One-line installer (recommended)
+The bundled inference runtime requires **macOS 14 or newer on Apple Silicon**,
+or **macOS 13.3 or newer on Intel**.
 
-Open **Terminal** (`⌘ Cmd + Space` → type **Terminal** → press **Return**), paste the command below, and press **Return**:
+1. Download the Mac ZIP from the [official TLI download page](https://thelanintelligence.com/download/)
+   and compare its published SHA-256 checksum. Extract the entire ZIP into a new,
+   writable folder. Keep any older TLI installation intact.
+2. Install Python 3.10 or newer from [python.org](https://www.python.org/downloads/macos/)
+   if needed. For a python.org installation, run **Install Certificates.command**
+   from its Python folder in Applications before first setup.
+3. Open **TLI_Start.command** in the extracted folder. If macOS blocks it, follow
+   the specific review steps below before proceeding.
+4. First setup prepares `backend/.venv` inside this installation and downloads
+   its Python dependencies. Keep Terminal open; the browser opens when the host
+   starts. Use the address printed in Terminal if it does not open automatically.
+5. Choose and download a model in TLI, or configure a provider such as LM Studio.
+   The package includes inference runtimes, not model weights.
 
-```
-curl -fsSL https://thelanintelligence.com/install_mac.sh | bash
-```
+TLI defaults to local access. Existing saved startup settings can change its
+address, port and HTTPS mode. Review **Settings → Security & connections** before
+connecting other computers or phones; the launcher does not automatically enable
+LAN access. Source-checkout setup is described in [README.md](../README.md).
 
-TLI downloads, installs to `~/TLI`, strips the Gatekeeper quarantine flag, and opens in your browser. Takes about 30 seconds.
+The optional Terminal installer linked from the download page verifies the
+release checksum and creates a new `~/Applications/TLI-<version>` folder. It
+refuses to replace an existing folder, does not migrate old data, and does not
+remove macOS security attributes. It still requires Python and a separate launch.
 
----
+## If Apple could not verify TLI_Start.command
 
-### Option B — Already downloaded the zip?
+The message that Apple could not verify **TLI_Start.command** is macOS checking
+the downloaded launcher before it runs. TLI's startup code cannot repair a
+security decision that prevents that code from starting.
 
-1. Extract the zip if you haven't already
-2. Open **Terminal** (`⌘ Cmd + Space` → type **Terminal** → press **Return**)
-3. Run:
+Only if you obtained the official release, checked its checksum, and trust that
+copy, use Apple's per-file review process:
 
-```
-bash ~/Downloads/TLI_Beta_V1.1.1/TLI_Start.command
-```
+1. Choose **Done** in the warning.
+2. Open **Apple menu → System Settings → Privacy & Security**.
+3. Scroll to **Security** and find the notice for **TLI_Start.command**.
+4. Choose **Open Anyway**, then **Open** in the follow-up prompt. Authenticate
+   if macOS requests it.
 
-Replace the path with wherever you extracted the zip.
+These steps follow [Apple's guidance for opening downloaded software](https://support.apple.com/en-us/102445).
+If the notice is absent, attempt to open that same file again and return to the
+settings page. A managed Mac may restrict this choice; contact its administrator
+if it remains unavailable.
 
-**Gatekeeper note:** If macOS says "cannot be opened because the developer cannot be verified", right-click `TLI_Start.command` → **Open** → **Open**. You only need to do this once.
+Do not use these steps for a warning that software **will damage your computer**,
+contains malware, or **is damaged**. Stop and check the download with support.
+Do not disable Gatekeeper or remove quarantine attributes across the folder.
+Right-click → Open is not a reliable alternative: Apple removed that override
+for incorrectly signed or unnotarized software in
+[macOS Sequoia](https://developer.apple.com/news/?id=saqachfa).
 
----
+Running a shell command does not establish that a download is trustworthy or
+make the release notarized. The lasting distribution improvement is a properly
+packaged, Developer ID-signed and notarized Mac release, following
+[Apple's Developer ID guidance](https://developer.apple.com/developer-id/).
+The current ZIP does not provide that experience.
 
-## Starting TLI after the first install
+## Stop or update
 
-Double-click `TLI_Start.command` inside the `~/TLI` folder.
+Press **Control+C** in the Terminal that launched this installation to stop TLI.
+Closing its browser tab does not stop the host.
 
-Or from Terminal:
+For an update, download and extract the new package separately, back up important
+saved data, and stop the original host. Open **TLI_Update.command** in the new
+package, select the original installation folder, review it and type **UPDATE**.
+Then reopen TLI from the original folder. See the
+[update and recovery guide](TLI_UPDATES.md) for supported releases and rollback.
 
-```
-bash ~/TLI/TLI_Start.command
-```
+## Remove this installation
 
-TLI opens at `http://localhost:8000` in your browser.
+1. Export and verify backups you want to keep **outside the TLI folder**. A Saved
+   work archive does not replace a separate Vault backup or a model backup.
+2. Stop the host with **Control+C** and stop any separate TLI helper you started
+   for this installation.
+3. In Finder, check the exact installation folder and its contents, then move
+   that folder to Trash when ready. Removing it also removes the saved data,
+   Vault, local backups and model files stored inside it.
+4. Remove only login items or shortcuts you added for that installation. Review
+   browser site data, browser extensions and the native phone Companion separately.
 
----
-
-## First run — AI runtime setup
-
-On the first launch, the installer will ask:
-
-```
-Bundled AI runtime not found.
-Download AI runtime now? [Y/n]
-```
-
-Type **Y** and press Return. TLI will:
-1. Detect your Mac's chip (Apple Silicon arm64 or Intel x86_64)
-2. Download the correct `llama-server` binary from the official llama.cpp releases (~50 MB)
-3. Place it in `backend/ai/runtime/` and set the right permissions
-
-This only happens once. After that, go to **Settings → AI Model** to download a model (1–4 GB).
-
-If you'd rather use **LM Studio**, say **N** and configure the LM Studio URL in **Settings → AI**.
-
----
-
-## First run checklist
-
-1. TLI opens automatically — wait for the browser tab to appear
-2. Complete the **onboarding wizard** — set your node name and PIN
-3. Download an AI model if prompted (or skip and use LM Studio)
-4. Everything else is optional — explore from the Dashboard
-
----
-
-## What works on macOS
-
-Everything. TLI detects macOS and uses the right tools automatically:
-
-| Feature | How TLI handles it on Mac |
-|---|---|
-| Printer list | CUPS via `lpstat` |
-| Test print | `lp` command |
-| Open scanner | Image Capture (falls back to Preview) |
-| Add printer | System Preferences → Printers & Scanners |
-| Game detection | `osascript` frontmost app + psutil process scan |
-| Steam library | `~/Library/Application Support/Steam` |
-| GOG Galaxy | `~/Library/Application Support/GOG.com/Games` |
-| Disk info | `diskutil info` per drive |
-| GPU / display info | `system_profiler SPDisplaysDataType` |
-| USB / drives | `mount` + `statvfs` for size |
-| Open in Finder | `open -R <path>` |
-| AI runtime | Auto-downloaded on first run (`macos-arm64` or `macos-x64`) |
-
----
-
-## Accessing TLI from other devices (phones, tablets, other Macs)
-
-Once TLI is running, open a browser on any device on your home Wi-Fi and go to:
-
-```
-http://<this-mac-ip>:8000
-```
-
-Find your Mac's IP in TLI under **Settings → Node Identity**.
-
----
-
-## Stopping TLI
-
-Close the Terminal window, or click inside it and press `Ctrl + C`.
-
----
-
-## Updates
-
-TLI checks for updates automatically a few seconds after startup. When one is available you'll see a notification in **Settings → Updates**. Updates are never applied without your approval.
-
----
-
-## Uninstalling TLI
-
-**Option A — Uninstall script (recommended)**
-
-Double-click `Uninstall_TLI.command` inside the `~/TLI` folder, or run:
-
-```
-bash ~/TLI/Uninstall_TLI.command
-```
-
-Type **YES** when prompted. This removes the entire TLI folder including all data, models, and settings.
-
----
-
-**Option B — Manual removal**
-
-Open Terminal and run:
-
-```bash
-# Stop TLI if running
-lsof -ti tcp:8000 | xargs kill -9 2>/dev/null; echo "Stopped."
-
-# Delete TLI
-rm -rf ~/TLI
-echo "TLI removed."
-```
-
-If you installed the browser extension, remove it separately: **Chrome/Edge → Extensions → TheLANIntelligence → Remove**.
-
----
-
-## Help & bug reports
-
-- Full manual: **TLI → Settings → Manual**, or `TLI_MANUAL.md`
-- Email: thelanintelligence@gmail.com
+**Uninstall_TLI.command** provides these manual steps; it does not kill processes
+or delete files automatically. Models and backups stored elsewhere, Python and
+LM Studio remain separate. See the [removal guide](TLI_UNINSTALL.md) for details.

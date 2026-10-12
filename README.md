@@ -63,7 +63,13 @@ phone host-start controls. `TLI_Start.bat` remains a command-line fallback, and
 `TLI_Diagnostics.bat` provides a visible diagnostic launch. Source users can also
 build the Windows launcher with `powershell -File build_launcher.ps1`.
 
-**macOS:** open `TLI_Start.command` from the extracted folder.
+**macOS:** open `TLI_Start.command` from the extracted folder. If Apple says it
+could not verify this launcher, click **Done**, then open **System Settings →
+Privacy & Security → Security → Open Anyway** for `TLI_Start.command`. Confirm
+**Open** and authenticate if asked, only for the official release you trust.
+The current Mac ZIP is not a signed, notarized app. See the
+[first-launch guide](START_HERE.md#if-apple-blocks-tli_startcommand) and
+[Apple's instructions](https://support.apple.com/en-us/102445).
 
 **Linux:** run `bash TLI_Start.sh` from the extracted folder.
 

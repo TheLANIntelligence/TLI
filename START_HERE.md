@@ -46,14 +46,35 @@ Intel**, for the bundled inference runtime.
    [python.org](https://www.python.org/downloads/macos/) if it is not already present.
    For a python.org installation, run **Install Certificates.command** from the
    Python folder under Applications before first setup.
-3. Open **TLI_Start.command**, or open Terminal in this folder and run
-   `bash TLI_Start.command`. First setup prepares this installation's Python
-   environment and needs internet access.
+3. Open **TLI_Start.command**. If macOS displays **“TLI_Start.command” Not Opened**
+   and says Apple could not verify it, follow the steps below. First setup
+   prepares this installation's Python environment and needs internet access.
 4. Keep Terminal open while TLI is running. Press **Control+C** there to stop TLI.
 
 The Mac package contains Apple Silicon and Intel inference runtimes and chooses
 the matching architecture. It is a Python-based ZIP installation, not a notarized
 Mac application or a DMG installer.
+
+### If Apple blocks TLI_Start.command
+
+For the TLI ZIP you obtained directly from the official release and trust:
+
+1. Click **Done** on the warning.
+2. Open **Apple menu → System Settings → Privacy & Security**.
+3. Scroll to **Security** and find the blocked `TLI_Start.command` entry.
+4. Click **Open Anyway**, then **Open** in the confirmation. Authenticate if asked.
+5. Continue setup in Terminal and keep that window open while using TLI.
+
+This approves that launcher; it does not turn off Gatekeeper for other software.
+If the entry is missing, try opening `TLI_Start.command` once more, then return
+to Privacy & Security. A managed Mac may require its administrator's help.
+If the warning instead says the file **will damage your computer**, was moved
+to Trash as malware, or is **damaged**, stop and report that exact message rather
+than using these approval steps. See [Apple's instructions](https://support.apple.com/en-us/102445).
+
+For a deliberate Terminal launch of a package you have reviewed, open Terminal
+in the extracted folder and run `bash TLI_Start.command`. This does not sign or
+notarize the package and is not a repair for a damaged or malware-blocked file.
 
 ## Start a conversation
 

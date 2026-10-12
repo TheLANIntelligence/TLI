@@ -207,7 +207,9 @@ def main():
     print("Or run: bash " + shlex.quote(str(target / "TLI_Start.command")))
     print("First launch downloads Python dependencies into this new folder.")
     print("The package includes the AI runtime. Download and select model weights in TLI separately, or configure LM Studio.")
-    print("If macOS blocks the unsigned launcher, review it and use System Settings > Privacy & Security.")
+    print("If Apple could not verify TLI_Start.command from this trusted release, click Done on the warning.")
+    print("Open System Settings > Privacy & Security, scroll to Security, and choose Open Anyway for TLI_Start.command.")
+    print("Confirm Open and authenticate if asked. See https://support.apple.com/en-us/102445")
     print("No security attributes were removed. No old data was copied or changed.")
 
 
