@@ -50,6 +50,9 @@ def package_root(tmp_path, monkeypatch):
         ".env": "secret settings",
         ".dev.vars": "synthetic local worker secrets",
         ".dev.vars.preview": "synthetic preview worker secrets",
+        ".wrangler/tmp/bundle-example/worker.js": "synthetic website worker bundle",
+        ".wrangler/state/v3/d1/example.sqlite-wal": "synthetic local verification records",
+        "backend/.wrangler/state/v3/d1/example.sqlite-wal": "synthetic nested local state",
         "website/download-verification.mjs": "website service",
         "website/vendor/example.json": "website data",
         "functions/api/download/request.js": "website endpoint",
@@ -173,7 +176,8 @@ def test_private_memory_is_pruned_without_enumerating_or_reading_it(package_root
     original = os.scandir
     def scan(path):
         relative = Path(path).relative_to(package_root).as_posix()
-        assert not relative.startswith(("backend/ai/memory", "backend/memory", "data/", "backend/tli_data", "backend/vault_data"))
+        assert not relative.startswith(("backend/ai/memory", "backend/memory", "data/", "backend/tli_data", "backend/vault_data",
+                                        ".wrangler", "backend/.wrangler"))
         return original(path)
     monkeypatch.setattr(os, "scandir", scan)
     packager.build(package_root / "safe.zip", dry_run=dry_run)

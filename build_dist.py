@@ -71,7 +71,7 @@ SKIP_DIR_NAMES: set[str] = {
     "TLI_Beta", "TLI_Confidential", "TLI_Installer",
     "tli-vault-extension", "tools", "docs", "landing", "modules",
     # Node / misc
-    "node_modules", "mobile", ".expo", ".gradle",  # native apps have their own EAS distribution
+    "node_modules", "mobile", ".expo", ".gradle", ".wrangler",  # native apps have their own EAS distribution
 }
 
 # File extensions that are never useful to a user running from source
