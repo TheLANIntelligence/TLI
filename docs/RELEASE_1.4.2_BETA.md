@@ -26,8 +26,21 @@ included `docs/TLI_UPDATES.md` before updating.
 Windows 10/11 x64, Mac runtime requirements, unsigned-launcher behavior and
 the legacy update channel are unchanged. Model weights remain separate.
 
-The focused checks passed 24 Windows setup cases, the onboarding backend tests,
-45 browser scenarios and 40 layouts. The browser checks block external network
+The focused checks passed 24 Windows setup cases, 16 onboarding backend tests,
+37 browser behavior checks and 8 layout runs covering 40 responsive views.
+Four focused offline browser checks also passed in the isolated release checkout.
+The browser checks block external network
 requests and confirm completion without any model action, preservation of a
 ready local model, and explicit checking of an installed custom model. They use
 synthetic API responses and do not establish model inference quality.
+
+The exact release ZIPs passed setup preparation, extracted application/static
+inventory checks and native inference-engine version/help checks on Windows,
+Apple Silicon and Intel Mac CI runners. These checks do not run model inference
+or certify a physical end-user installation. Package source: `4f43a616c1cdd21963a6cc119a59b604ecbe6d13`.
+See the attached `RELEASE_VERIFICATION.json` and `SHA256SUMS.txt` for evidence.
+
+Both archives also passed a 1.4.1-to-1.4.2 guided update and rollback rehearsal,
+including acceptance by the old packaged updater and preservation of synthetic
+saved data, models, settings, Python environments and unknown files. These file
+transactions were tested on Windows; the Mac native checks are separate.
