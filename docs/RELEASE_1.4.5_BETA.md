@@ -10,7 +10,7 @@ This beta brings the shared phone workspace and the continuous **Connect device*
 
 ## Updating an existing computer
 
-Open **Settings → Software Updates → Check for updates**, then prepare the offered update. You can also download the matching Windows or macOS ZIP directly from this release. Extract the complete ZIP into a separate folder. Back up important saved data, finish active work and stop the original TLI host. Run `TLI_Update.bat` on Windows or `TLI_Update.command` on Mac from the new package, select the original installation and review the destination before confirming. Continue using the original folder and shortcuts afterward.
+Open **Settings → Software Updates → Check for updates**, then choose **Download from releases**. This release uses a browser download because older updaters do not recognize its new setup files. Download the matching Windows or macOS ZIP and extract the complete ZIP into a separate folder. Back up important saved data, finish active work and stop the original TLI host. Run `TLI_Update.bat` on Windows or `TLI_Update.command` on Mac from the new package, select the original installation and review the destination before confirming. Continue using the original folder and shortcuts afterward.
 
 The guided updater preserves saved data, identity, existing trust, models and configuration. First start can require internet to prepare dependencies, including DNS-SD support. Python, Python dependencies and model weights are not bundled; these packages are not fully self-contained offline installers. Legacy frozen/native backend installations are outside the guided update path. See `docs/TLI_UPDATES.md` in the package.
 
