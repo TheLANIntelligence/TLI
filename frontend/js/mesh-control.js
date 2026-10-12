@@ -93,6 +93,12 @@
       details.textContent = 'Device details'; details.dataset.deviceDetailsId = 'node-' + registryId;
       details.addEventListener('click', () => window.TLIDeviceDetails?.open('node-' + registryId)); card.appendChild(details);
       if (!isSelf) { const messages = document.createElement('button'); messages.type = 'button'; messages.className = 'btn-outline'; messages.textContent = 'Messages & files'; messages.addEventListener('click', () => window.TLIChat?.openPeer?.(registryId)); card.appendChild(messages); }
+      if (!isSelf && n.pairing_available === true) {
+        const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'btn-primary';
+        connect.textContent = 'Request connection'; connect.dataset.pairingDeviceId = registryId;
+        connect.addEventListener('click', () => window.TLIPeerPairing?.open({deviceId:registryId,name:n.node_name || n.hostname || registryId}));
+        card.appendChild(connect);
+      }
     }
 
     if (!online) {

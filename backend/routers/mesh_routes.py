@@ -18,7 +18,8 @@ import shutil
 
 import requests
 import peer_trust
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+import peer_pairing
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -112,6 +113,8 @@ class MeshDeviceEntry(BaseModel):
     trust_revision: Optional[str] = None
     origin: Optional[str] = None
     peer_profile: Optional[str] = None
+    messaging: Optional[Dict[str, Any]] = None
+    discovered_name: Optional[str] = None
 
 class MeshDirectoryResponse(BaseModel):
     mode: str
@@ -211,7 +214,7 @@ def _ensure_host_in_mesh_directory() -> None:
 
     # Names and IP addresses are not identities. Preserve all other records.
     entry = devices.get(node_cfg.node_id, {})
-    entry.setdefault("display_name", node_cfg.node_name)
+    entry["display_name"] = node_cfg.node_name
     # Auto-detect and persist the host's own IP
     if not entry.get("ip") and node_cfg.role == "host":
         try:
@@ -429,6 +432,21 @@ def agent_report_task(body: AgentTaskReportRequest, access=Depends(peer_trust.co
 #  Mesh directory CRUD
 # ============================================
 
+def _discovered_peer_name(entry):
+    discovery = entry.get("discovery")
+    name = discovery.get("name") if isinstance(discovery, dict) else None
+    return name if isinstance(name, str) and 1 <= len(name.strip()) <= 128 else None
+
+
+def _peer_display_name(device_id, entry):
+    # Older installations saved the first pre-setup hostname indefinitely.
+    # Project the latest hint for pending discoveries even before a new beacon.
+    # Reviewed/blocked labels stay bound to their saved identity and review.
+    if entry.get("status", "pending") == "pending" and not entry.get("peer_trust"):
+        return _discovered_peer_name(entry) or entry.get("display_name") or device_id
+    return entry.get("display_name") or device_id
+
+
 @router.get("/mesh/directory", response_model=MeshDirectoryResponse)
 def get_mesh_directory(_session=Depends(require_session)):
     node_cfg = S.load_node_config()
@@ -444,10 +462,11 @@ def get_mesh_directory(_session=Depends(require_session)):
         except Exception:
             status_enum = MeshDeviceStatusEnum.pending
         devices.append(MeshDeviceEntry(
-            device_id=dev_id, display_name=d.get("display_name", dev_id), ip=d.get("ip"),
+            device_id=dev_id, display_name=_peer_display_name(dev_id, d), ip=d.get("ip"),
             tli_port=int(d.get("tli_port", 8000)),
             status=status_enum, is_host=bool(d.get("is_host", False)), last_seen=d.get("last_seen"),
             labels=d.get("labels") or [], notes=d.get("notes"),
+            messaging=peer_trust.message_readiness(dev_id), discovered_name=_discovered_peer_name(d),
             **peer_trust.public_trust(dev_id),
         ))
     host_device_id = node_cfg.node_id if node_cfg.role == "host" else None
@@ -494,7 +513,8 @@ def mesh_health(_session=Depends(require_session)):
             continue
         seen_ids.add(ident)
         peer_list.append({"peer_id": dev_id, "ip": ip, "port": int(d.get("tli_port", 8000)),
-                          "display_name": d.get("display_name") or dev_id})
+                          "display_name": _peer_display_name(dev_id, d),
+                          "pairing_available": d.get("status", "pending") == "pending" and not d.get("peer_trust")})
 
     def _friendly_error(exc: Exception) -> str:
         msg = str(exc)
@@ -510,7 +530,8 @@ def mesh_health(_session=Depends(require_session)):
 
     def _fetch_peer(p: dict) -> dict:
         base = {"is_self": False, "peer_id": p["peer_id"],
-                "node_name": p["display_name"], "ip": p["ip"], "port": p["port"]}
+                "node_name": p["display_name"], "ip": p["ip"], "port": p["port"],
+                "pairing_available": p["pairing_available"]}
         trust = peer_trust.public_trust(p["peer_id"])
         if trust.get("peer_profile") == "inference_node":
             return {**base, **trust, "online": None, "connection_state": "inference_only",
@@ -545,8 +566,8 @@ def mesh_health(_session=Depends(require_session)):
 def get_lan_peers(_session=Depends(require_session)):
     """Return distinct recorded LAN identities and reported presence.
 
-    This is the lightweight endpoint TLI Chat uses — no mesh pairing required.
-    Any TLI node on the same LAN that has been seen via UDP beacon shows up here.
+    Discovery lists computers without granting permission. Messaging readiness
+    describes the local review only; the recipient must also review the sender.
     """
     try:
         node_cfg = S.load_node_config()
@@ -556,7 +577,6 @@ def get_lan_peers(_session=Depends(require_session)):
     raw = S.load_mesh_directory()
     now = time.time()
 
-    seen_ips: set[str] = set()
     peers = []
 
     for dev_id, d in raw.items():
@@ -577,12 +597,14 @@ def get_lan_peers(_session=Depends(require_session)):
 
         peers.append({
             "id":        dev_id,
-            "name":      d.get("display_name") or dev_id,
+            "name":      _peer_display_name(dev_id, d),
+            "discovered_name": _discovered_peer_name(d),
             "ip":        ip,
             "port":      int(d.get("tli_port", 8000)),
             "last_seen": last_seen_str,
             "online":    online,
             "status":    d.get("status", "pending"),
+            "messaging": peer_trust.message_readiness(dev_id),
             **peer_trust.public_trust(dev_id),
         })
 
@@ -1387,16 +1409,22 @@ class PeerApproveRequest(BaseModel):
     identity_fingerprint: str
     certificate_sha256: str
 
+@router.get("/mesh/trust/setup")
+def mesh_trust_setup(request: Request, response: Response, _session=Depends(require_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return peer_trust.local_setup(request)
+
+
 @router.post("/mesh/trust/card")
 def mesh_trust_card(body: PeerCardRequest, _session=Depends(require_session)):
     return {"ok": True, "protocol": peer_trust.PROTOCOL, "card": peer_trust.local_card(body.origin)}
 
 @router.post("/mesh/trust/preview")
-def mesh_trust_preview(body: PeerReviewRequest, request: Request, _session=Depends(require_session)):
+def mesh_trust_preview(body: PeerReviewRequest, request: Request, _session=Depends(peer_pairing.browser_owner)):
     return peer_trust.preview(body.card, body.grants, _session, request)
 
 @router.post("/mesh/trust/approve")
-def mesh_trust_approve(body: PeerApproveRequest, request: Request, _session=Depends(require_session)):
+def mesh_trust_approve(body: PeerApproveRequest, request: Request, _session=Depends(peer_pairing.browser_owner)):
     return peer_trust.approve(body.review_id, body.identity_fingerprint, body.certificate_sha256, _session, request)
 
 @router.get("/mesh/peer/self-status")
@@ -1411,7 +1439,7 @@ def mesh_peer_capabilities(device_id: str, _session=Depends(require_session)):
 
 @router.post("/mesh/trust/{device_id}/revoke")
 @peer_trust.directory_locked
-def mesh_trust_revoke(device_id: str, _session=Depends(require_session)):
+def mesh_trust_revoke(device_id: str, _session=Depends(peer_pairing.browser_owner)):
     if device_id == S.load_node_config().node_id:
         raise HTTPException(422, "This computer cannot revoke itself.")
     directory = S.load_mesh_directory()

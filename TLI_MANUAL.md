@@ -106,6 +106,21 @@ from remote browsers and phones; unsupported or older unmanaged launches explain
 how to stop them from their original launcher or terminal. If a command response
 is lost, use **Check connection**; TLI never automatically resends the command.
 
+### Removing an installation
+
+Open **Settings → App & troubleshooting → Uninstall TLI** for its exact folder
+and removal steps. Current Windows setup adds **TLI** to **Windows Settings →
+Apps → Installed apps** and an **Uninstall TLI** Start menu shortcut. You can
+also open **Uninstall_TLI.bat** in that installation folder.
+
+Back up saved work and Vault outside that folder, finish active work, quit TLI
+and stop its optional helper first. The removal window offers keeping every
+file while removing Windows entries, or deleting the whole reviewed folder,
+including its data and models. Full deletion requires typing **DELETE**.
+Mac/Linux and source checkouts use manual removal. Shared software and files
+outside the folder remain. See [Uninstall TLI](docs/TLI_UNINSTALL.md) for the
+complete scope, older installations and browser/phone cleanup.
+
 **macOS note:** Review the downloaded package's source before allowing it through
 macOS's security prompt. The Windows shortcut/helper setup does not install a
 macOS startup service.

@@ -43,6 +43,18 @@ def require_session(tli_session: Optional[str] = Cookie(default=None), request: 
     return resolve_user(request, tli_session)
 
 
+@router.get("/system/uninstall")
+def uninstall_information(request: Request, response: Response, owner: str = Depends(require_session)):
+    """Describe this host's removal entry point without starting any operation."""
+    from companion_auth import operation_access
+    from uninstall_info import describe
+    check = operation_access(request, owner)
+    result = describe(S.BASE_DIR)
+    check()
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 # ============================================
 #  Build ID
 # ============================================

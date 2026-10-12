@@ -47,6 +47,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # launch(), not a second read that could race a settings change.
         if result.get("backend_state") != "running" or not result.get("url"):
             raise RuntimeError("TLI did not confirm an address that is ready to open.")
+        if result.get("runtime_warning"):
+            _emit(protocol, "warning", code="local_ai_unavailable", message=result["runtime_warning"])
         _emit(protocol, "ready", url=result["url"])
         return 0
     except Exception as error:

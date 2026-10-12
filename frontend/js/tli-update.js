@@ -1,285 +1,218 @@
-// TLI AUTO-UPDATE — v1
-// Polls /update/status, shows banner when update is available,
-// handles apply flow with progress bar, and wires Settings panel controls.
-// =====================================================================
-(function () {
-  // ── Element refs ─────────────────────────────────────────────────
-  const banner       = document.getElementById("tli-update-banner");
-  const versionSpan  = document.getElementById("tli-update-version");
-  const applyBtn     = document.getElementById("tli-update-apply-btn");
-  const dismissBtn   = document.getElementById("tli-update-dismiss-btn");
-  const notesBtn     = document.getElementById("tli-update-notes-btn");
-  const notesPop     = document.getElementById("tli-update-notes-pop");
-  const notesTitle   = document.getElementById("tli-update-notes-title");
-  const notesBody    = document.getElementById("tli-update-notes-body");
-  const notesClose   = document.getElementById("tli-update-notes-close");
-  const progressWrap = document.getElementById("tli-update-progress-wrap");
-  const progressBar  = document.getElementById("tli-update-progress-bar");
-  const progressLbl  = document.getElementById("tli-update-progress-label");
-
-  // Settings panel refs
-  const settingsVersion   = document.getElementById("settings-tli-version");
-  const settingsSidebarVersion = document.getElementById("version-pill-settings");
-  const settingsState     = document.getElementById("settings-update-state");
-  const checkBtn          = document.getElementById("settings-check-update-btn");
-  const urlInput          = document.getElementById("settings-update-url");
-  const urlSave           = document.getElementById("settings-update-url-save");
-  const autoCheckBox      = document.getElementById("settings-update-auto-check");
-
-  let _dismissed    = false;
-  let _pollTimer    = null;
-  let _lastState    = null;
-  let _settingsConfirmed = false;
-  let _savedAutoCheck = null;
-  if (urlSave) urlSave.disabled = true;
-  if (autoCheckBox) autoCheckBox.disabled = true;
-
-  let settingsSaveStatus = document.getElementById("settings-update-save-status");
-  if (!settingsSaveStatus && urlSave) {
-    settingsSaveStatus = document.createElement("div");
-    settingsSaveStatus.id = "settings-update-save-status";
-    settingsSaveStatus.className = "small-meta";
-    settingsSaveStatus.setAttribute("role", "status");
-    urlSave.parentElement?.after(settingsSaveStatus);
-  }
-  function _settingsMessage(message) {
-    if (settingsSaveStatus) settingsSaveStatus.textContent = message;
-  }
-  function _showHostVersion(version) {
-    const text = typeof version === "string" && version.trim() ? "v" + version.trim().replace(/^v/, "") : "Unavailable";
-    if (settingsVersion) settingsVersion.textContent = text;
-    if (settingsSidebarVersion) settingsSidebarVersion.textContent = text;
-  }
-
-  // ── Load current settings into Settings panel ─────────────────
-  async function _loadSettings() {
+// Guided updates: download and verify a package, then let the user install it.
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const states = ['idle', 'checking', 'up_to_date', 'available', 'downloading', 'verifying', 'preparing', 'ready', 'error'];
+  const working = ['checking', 'downloading', 'verifying', 'preparing'];
+  const manualURL = 'https://github.com/TheLANIntelligence/TLI/releases';
+  let status = null, busy = false, dismissed = false, timer = null, refreshing = false;
+  let startupPoll = true, stopped = false, revision = 0, actionError = '', connectionError = '';
+  let settingsConfirmed = false, savedAutoCheck = null;
+  const set = (id, value) => { if ($(id)) $(id).textContent = value; };
+  const hide = (id, value) => { if ($(id)) $(id).hidden = value; };
+  const toast = (message, type = 'error') => { if (typeof showToast === 'function') showToast(message, type); };
+  const localDesktop = () => {
     try {
-      const r = await fetch("/update/status");
-      const d = await r.json();
-      if (!r.ok) throw new Error("The host could not provide saved update preferences.");
-      _showHostVersion(d?.current_version);
-      if (d && typeof d === "object" && !Object.prototype.hasOwnProperty.call(d, "auto_check")) {
-        const error = new Error("The host does not report its saved automatic-update preference.");
-        error.code = "missing_saved_preference";
-        throw error;
+      const url = new URL(window.location.href);
+      return ['http:', 'https:'].includes(url.protocol) && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname.toLowerCase()) &&
+        navigator.userAgentData?.mobile !== true && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
+    } catch { return false; }
+  };
+  let settingsSaveStatus = $('settings-update-save-status');
+  if (!settingsSaveStatus && $('settings-update-url-save')) {
+    settingsSaveStatus = document.createElement('div');
+    settingsSaveStatus.id = 'settings-update-save-status';
+    settingsSaveStatus.className = 'small-meta';
+    settingsSaveStatus.setAttribute('role', 'status');
+    $('settings-update-url-save').parentElement?.after(settingsSaveStatus);
+  }
+  function settingsMessage(message) { if (settingsSaveStatus) settingsSaveStatus.textContent = message; }
+  function showHostVersion(version) {
+    const text = typeof version === 'string' && version.trim() ? 'v' + version.trim().replace(/^v/, '') : 'Unavailable';
+    set('settings-tli-version', text);
+    set('version-pill-settings', text);
+  }
+  function loadPreferences(data) {
+    showHostVersion(data?.current_version);
+    if (data && typeof data === 'object' && !Object.prototype.hasOwnProperty.call(data, 'auto_check')) {
+      const error = Error('The host does not report its saved automatic-update preference.');
+      error.code = 'missing_saved_preference';
+      throw error;
+    }
+    if (typeof data?.auto_check !== 'boolean' || typeof data?.update_url !== 'string') throw Error('Invalid saved update preferences.');
+    if ($('settings-update-url')) $('settings-update-url').value = data.update_url;
+    savedAutoCheck = data.auto_check;
+    if ($('settings-update-auto-check')) { $('settings-update-auto-check').checked = data.auto_check; $('settings-update-auto-check').disabled = false; }
+    settingsConfirmed = true;
+    if ($('settings-update-url-save')) $('settings-update-url-save').disabled = false;
+    settingsMessage('Saved update preferences loaded from this host.');
+  }
+  function preferencesUnavailable(error) {
+    settingsConfirmed = false;
+    if ($('settings-update-url-save')) $('settings-update-url-save').disabled = true;
+    if ($('settings-update-auto-check')) $('settings-update-auto-check').disabled = true;
+    settingsMessage(error.code === 'missing_saved_preference'
+      ? 'This host does not report saved automatic-update preferences. Use matching TLI app and host files; if host files were updated, restart TLI normally, then refresh. Saving is disabled to preserve your choice.'
+      : 'Saved update preferences are unavailable. Reconnect to the host, then refresh TLI to recheck before changing them.');
+  }
+  async function request(path, method = 'GET', body = {}) {
+    const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      ...(method === 'POST' ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {}) });
+    let data;
+    try { data = await response.json(); } catch { throw Error('The host returned an unreadable update response.'); }
+    if (!response.ok) throw Error(typeof data?.detail === 'string' ? data.detail : `The update request failed (${response.status}).`);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('The host returned an invalid update response.');
+    return data;
+  }
+  function applyStatus(data) {
+    if (!states.includes(data?.state) || (['available', 'ready'].includes(data.state) && (typeof data.latest_version !== 'string' || !data.latest_version.trim()))) {
+      throw Error('The host returned an unsupported update status. Check that the app and host files match.');
+    }
+    if (!settingsConfirmed) { try { loadPreferences(data); } catch (error) { preferencesUnavailable(error); } }
+    if (status?.state !== data.state || status?.latest_version !== data.latest_version) actionError = '';
+    status = data;
+    connectionError = '';
+    render();
+  }
+  function action() {
+    if (connectionError || status?.state === 'error') return 'check';
+    if (status?.state === 'available' && status.can_prepare === true && localDesktop()) return 'prepare';
+    if (status?.state === 'ready' && status.can_open === true && localDesktop()) return 'open';
+    return null;
+  }
+  function render() {
+    const d = status || {}, state = d.state || 'idle', active = working.includes(state) && !connectionError, ready = state === 'ready';
+    const progress = Number.isFinite(d.progress) ? Math.min(100, Math.max(0, d.progress)) : 0;
+    const version = typeof d.latest_version === 'string' ? 'v' + d.latest_version.replace(/^v/, '') : '';
+    if (status) showHostVersion(d.current_version);
+    const labels = { idle: 'Check for a newer TLI release.', checking: 'Checking for updates…', up_to_date: 'Up to date',
+      available: `Update available: ${version}`, downloading: `Downloading… ${progress}%`, verifying: 'Verifying download…',
+      preparing: 'Preparing update folder…', ready: `${version} downloaded — installation pending`, error: 'Update could not be prepared' };
+    set('settings-update-state', connectionError ? 'Update status unavailable' : labels[state]);
+    if ($('settings-update-state')) $('settings-update-state').style.color = connectionError || state === 'error' ? 'var(--danger, #f87171)' : 'var(--text-muted)';
+    const platform = { windows: 'Windows', win32: 'Windows', mac: 'macOS', macos: 'macOS', darwin: 'macOS', linux: 'Linux' }[d.platform] || d.platform || 'Not reported';
+    set('settings-update-platform', 'Update platform: ' + platform);
+    const checked = typeof d.checked_at === 'string' ? new Date(d.checked_at) : null;
+    set('settings-update-checked', checked && Number.isFinite(checked.getTime()) ? 'Last checked: ' + checked.toLocaleString() : 'Last checked: not yet');
+    let message = connectionError || actionError || (state === 'error' ? d.error : '') || d.message || '';
+    if (!message && state === 'available') message = d.can_prepare === true ? 'Download the verified package here. Finish installation after quitting TLI.' : 'Get this release from the download page and follow its update instructions.';
+    if (state === 'available' && d.can_prepare === true && !localDesktop()) message = 'Open TLI in a local desktop browser on the host computer (localhost) to download this update and finish installation.';
+    if (ready && !localDesktop()) message += ' Open TLI in a local desktop browser on the host computer (localhost) to open the update folder and finish installation.';
+    set('settings-update-message', message);
+    hide('settings-update-ready', !ready);
+    set('settings-update-path', typeof d.ready_path === 'string' ? 'Update folder: ' + d.ready_path : '');
+    const mac = ['mac', 'macos', 'darwin'].includes(d.platform);
+    set('settings-update-installer', mac ? 'Run TLI_Update.command in that folder.' : d.platform === 'linux' ? 'Run TLI_Update.sh in that folder.' : 'Run TLI_Update.bat in that folder.');
+    set('settings-update-stop', mac || d.platform === 'linux'
+      ? 'Finish active work, then press Control+C in the Terminal window that started TLI. Stop any optional Host Start helper too. Closing this browser alone does not stop TLI.'
+      : 'Finish active work, then choose Quit TLI below and review the confirmation. If TLI was started in a terminal, stop it there with Ctrl+C. Stop any optional Host Start helper too. Closing this browser alone does not stop TLI.');
+    hide('settings-update-quit-btn', !ready || !localDesktop() || mac || d.platform === 'linux');
+    if ($('settings-update-quit-btn')) $('settings-update-quit-btn').disabled = busy || !window.TLIHostLifecycle?.open;
+    const next = action(), actionText = next === 'open' ? 'Open update folder' : next === 'check' ? 'Retry check' : 'Download update';
+    for (const id of ['settings-update-action-btn', 'tli-update-apply-btn']) {
+      hide(id, !next);
+      if ($(id)) { $(id).disabled = busy || active; $(id).textContent = busy ? 'Please wait…' : actionText; }
+    }
+    if ($('settings-check-update-btn')) {
+      $('settings-check-update-btn').disabled = busy || active;
+      $('settings-check-update-btn').textContent = state === 'checking' ? 'Checking…' : 'Check for updates';
+    }
+    const manual = state === 'available' && d.can_prepare !== true;
+    for (const id of ['settings-update-manual-link', 'tli-update-manual-link']) {
+      hide(id, !manual);
+      if ($(id)) $(id).href = manualURL;
+    }
+    for (const id of ['settings-update-progress-wrap', 'tli-update-progress-wrap']) hide(id, !active);
+    if ($('settings-update-progress')) $('settings-update-progress').value = progress;
+    set('settings-update-progress-label', labels[state]);
+    if ($('tli-update-progress-bar')) $('tli-update-progress-bar').style.setProperty('--w', progress + '%');
+    set('tli-update-progress-label', labels[state]);
+    hide('tli-update-banner', dismissed || !['available', 'downloading', 'verifying', 'preparing', 'ready', 'error'].includes(state));
+    set('tli-update-banner-title', ready ? 'TLI update ready to install' : state === 'error' ? 'TLI update needs attention' : active ? 'Preparing TLI update' : 'TLI update available');
+    set('tli-update-version', version);
+    for (const id of ['tli-update-notes-btn', 'settings-update-notes-btn']) hide(id, !d.latest_version);
+  }
+  function schedulePoll() {
+    clearTimeout(timer);
+    timer = null;
+    if (stopped || document.hidden) return;
+    const ms = working.includes(status?.state) ? 1500 : startupPoll ? 15000 : 60000;
+    timer = setTimeout(async () => { startupPoll = false; await refreshStatus(); }, ms);
+  }
+  async function refreshStatus() {
+    if (refreshing || busy || stopped || document.hidden) { schedulePoll(); return; }
+    refreshing = true;
+    const ticket = revision;
+    try { const data = await request('/update/status'); if (ticket === revision && !stopped) applyStatus(data); }
+    catch (error) { if (ticket === revision && !stopped) { connectionError = error.message + ' Use Check for updates to retry.'; render(); } }
+    finally { refreshing = false; schedulePoll(); }
+  }
+  async function runAction(kind) {
+    if (!['check', 'prepare', 'open'].includes(kind) || busy || (working.includes(status?.state) && !connectionError)) return;
+    if (kind !== 'check' && kind !== action()) return;
+    busy = true;
+    revision++;
+    actionError = '';
+    clearTimeout(timer);
+    if (kind === 'check') dismissed = false;
+    render();
+    try {
+      const data = await request(kind === 'prepare' ? '/update/apply' : kind === 'open' ? '/update/open' : '/update/check', 'POST');
+      if (kind === 'check') applyStatus(data);
+      else {
+        if (data.ok !== true) throw Error('The host did not confirm the update request.');
+        if (kind === 'prepare') applyStatus(await request('/update/status'));
+        else actionError = 'Update folder opened. Follow the steps below to stop TLI and run the update script in that folder.';
       }
-      if (typeof d?.auto_check !== "boolean" || typeof d?.update_url !== "string") throw new Error("The host did not report valid saved update preferences.");
-      if (urlInput) urlInput.value = d.update_url;
-      _savedAutoCheck = d.auto_check;
-      if (autoCheckBox) { autoCheckBox.checked = d.auto_check; autoCheckBox.disabled = false; }
-      _settingsConfirmed = true;
-      if (urlSave) urlSave.disabled = false;
-      _settingsMessage("Saved update preferences loaded from this host.");
     } catch (error) {
-      _settingsConfirmed = false;
-      if (urlSave) urlSave.disabled = true;
-      if (autoCheckBox) autoCheckBox.disabled = true;
-      _settingsMessage(error.code === "missing_saved_preference"
-        ? "This host does not report saved automatic-update preferences. Use matching TLI app and host files; if host files were updated, restart TLI normally, then refresh. Saving is disabled to preserve your choice."
-        : "Saved update preferences are unavailable. Reconnect to the host, then refresh TLI to recheck before changing them.");
-    }
+      if (kind === 'open') actionError = 'Could not open the update folder: ' + error.message + ' Try Open update folder again, or use the folder path below on this computer.';
+      else { status = { ...status, state: 'error', error: error.message + ' Retry the update check.' }; connectionError = ''; }
+      toast(error.message);
+    } finally { busy = false; render(); schedulePoll(); }
   }
-
-  // ── Apply banner state from status ────────────────────────────
-  function _applyStatus(d) {
-    const state = d.state;
-
-    // Settings panel version display
-    _showHostVersion(d.current_version);
-    if (settingsState) {
-      const labels = {
-        idle:        "",
-        checking:    "Checking…",
-        up_to_date:  "Up to date",
-        available:   "Update available: v" + d.latest_version,
-        downloading: "Downloading… " + d.progress + "%",
-        verifying:   "Verifying…",
-        applying:    "Applying…",
-        done:        "Updated to v" + d.latest_version + " — reload to activate",
-        error:       "Error: " + d.error,
-      };
-      settingsState.textContent = labels[state] || state;
-      settingsState.style.color = state === "error" ? "var(--danger, #f87171)"
-                                 : state === "done"  ? "var(--accent, #38e8b2)"
-                                 : "var(--text-muted)";
-    }
-
-    // Banner
-    if (!banner) return;
-
-    if (state === "available" && !_dismissed) {
-      banner.hidden = false;
-      if (versionSpan) versionSpan.textContent = "v" + d.latest_version;
-      if (progressWrap) progressWrap.hidden = true;
-      if (applyBtn) { applyBtn.hidden = false; applyBtn.disabled = false; applyBtn.textContent = "Update Now"; }
-      return;
-    }
-
-    if (["downloading", "verifying", "applying"].includes(state)) {
-      banner.hidden = false;
-      if (progressWrap) progressWrap.hidden = false;
-      if (applyBtn) { applyBtn.hidden = true; }
-      if (progressBar) progressBar.style.width = (d.progress || 0) + "%";
-      if (progressLbl) {
-        const labels2 = { downloading: "Downloading", verifying: "Verifying", applying: "Applying" };
-        progressLbl.textContent = (labels2[state] || state) + " " + (d.progress || 0) + "%";
-      }
-      // Keep polling
-      _startPoll(2000);
-      return;
-    }
-
-    if (state === "done") {
-      banner.hidden = false;
-      if (progressWrap) progressWrap.hidden = true;
-      if (applyBtn) {
-        applyBtn.hidden = false;
-        applyBtn.disabled = false;
-        applyBtn.textContent = "Reload Now";
-        applyBtn.onclick = () => location.reload();
-      }
-      if (versionSpan) versionSpan.textContent = "v" + d.latest_version + " ready";
-      if (dismissBtn) dismissBtn.hidden = true;
-      _stopPoll();
-      return;
-    }
-
-    if (state === "error") {
-      if (banner && !banner.hidden) {
-        // Show error in banner briefly
-        if (applyBtn) { applyBtn.textContent = "Retry"; applyBtn.disabled = false; applyBtn.onclick = _applyUpdate; }
-        if (progressWrap) progressWrap.hidden = true;
-      }
-      _stopPoll();
-      return;
-    }
-
-    // All other states — hide banner
-    if (state !== "available") {
-      banner.hidden = true;
-    }
-
-    _lastState = state;
-  }
-
-  // ── Poll ──────────────────────────────────────────────────────
-  function _startPoll(ms) {
-    _stopPoll();
-    _pollTimer = setInterval(async () => {
-      try {
-        const d = await fetch("/update/status").then(r => r.json());
-        _applyStatus(d);
-        if (["idle", "up_to_date", "available", "done", "error"].includes(d.state)) {
-          _stopPoll();
-        }
-      } catch {}
-    }, ms);
-  }
-
-  function _stopPoll() {
-    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
-  }
-
-  // ── Check button ──────────────────────────────────────────────
-  async function _checkUpdate() {
-    if (checkBtn) { checkBtn.disabled = true; checkBtn.textContent = "Checking…"; }
+  async function savePreferences() {
+    const button = $('settings-update-url-save');
+    if (!settingsConfirmed || button?.disabled) return;
+    const url = $('settings-update-url')?.value?.trim() || '';
+    const auto = $('settings-update-auto-check')?.checked ?? savedAutoCheck;
+    if (button) { button.disabled = true; button.textContent = 'Saving…'; }
     try {
-      const d = await fetch("/update/check", { method: "POST" }).then(r => r.json());
-      _applyStatus(d);
-      if (d.state === "available") {
-        if (typeof showToast === "function") showToast("Update available: v" + d.latest_version, "success");
-      } else if (d.state === "up_to_date") {
-        if (typeof showToast === "function") showToast("TLI is up to date (v" + d.current_version + ")", "info");
-      } else if (d.state === "error") {
-        if (typeof showToast === "function") showToast(d.error || "Update check failed", "error");
-      }
-    } catch {
-      if (typeof showToast === "function") showToast("Update check failed", "error");
-    } finally {
-      if (checkBtn) { checkBtn.disabled = false; checkBtn.textContent = "Check for updates"; }
-    }
-  }
-
-  // ── Apply update ──────────────────────────────────────────────
-  async function _applyUpdate() {
-    if (applyBtn) { applyBtn.disabled = true; applyBtn.textContent = "Starting…"; }
-    if (progressWrap) progressWrap.hidden = false;
-    if (progressBar) progressBar.style.width = "0%";
-    if (progressLbl) progressLbl.textContent = "Starting…";
-    try {
-      const r = await fetch("/update/apply", { method: "POST" });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        throw new Error(d.detail || "Could not start update");
-      }
-      // Start polling for progress
-      _startPoll(1500);
-    } catch (err) {
-      if (typeof showToast === "function") showToast("Update failed: " + err.message, "error");
-      if (applyBtn) { applyBtn.disabled = false; applyBtn.textContent = "Update Now"; }
-      if (progressWrap) progressWrap.hidden = true;
-    }
-  }
-
-  // ── Save update URL ───────────────────────────────────────────
-  async function _saveUpdateUrl() {
-    if (!_settingsConfirmed || urlSave?.disabled) return;
-    const url    = urlInput?.value?.trim() || "";
-    const auto   = autoCheckBox?.checked ?? _savedAutoCheck;
-    if (urlSave) { urlSave.disabled = true; urlSave.textContent = "Saving…"; }
-    try {
-      const response = await fetch("/update/settings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ update_url: url, auto_check: auto }),
-      });
-      const data = await response.json();
-      if (!response.ok || data.ok !== true) throw new Error(typeof data.detail === "string" ? data.detail : "The host did not confirm the save.");
-      _settingsMessage("Update preferences saved on this host. Startup checks use this choice the next time TLI starts.");
-      if (urlSave) { urlSave.textContent = "Saved ✓"; setTimeout(() => { urlSave.textContent = "Save"; }, 2000); }
+      const data = await request('/update/settings', 'POST', { update_url: url, auto_check: auto });
+      if (data.ok !== true) throw Error('The host did not confirm the save.');
+      savedAutoCheck = auto;
+      settingsMessage('Update preferences saved on this host. Startup checks use this choice the next time TLI starts.');
+      if (button) { button.textContent = 'Saved ✓'; setTimeout(() => { button.textContent = 'Save'; }, 2000); }
     } catch (error) {
-      if (urlSave) { urlSave.textContent = "Save"; }
-      _settingsMessage("Update preferences could not be saved. Your changes are still available to retry.");
-      if (typeof showToast === "function") showToast("Could not save update settings: " + error.message, "error");
-    } finally {
-      if (urlSave) urlSave.disabled = false;
-    }
+      if (button) button.textContent = 'Save';
+      settingsMessage('Update preferences could not be saved. Your changes are still available to retry.');
+      toast('Could not save update settings: ' + error.message);
+    } finally { if (button) button.disabled = false; }
   }
-
-  // ── Wire up events ────────────────────────────────────────────
-  if (applyBtn)   applyBtn.addEventListener("click", _applyUpdate);
-  if (dismissBtn) dismissBtn.addEventListener("click", () => { _dismissed = true; banner.hidden = true; });
-  if (checkBtn)   checkBtn.addEventListener("click", _checkUpdate);
-  if (urlSave)    urlSave.addEventListener("click", _saveUpdateUrl);
-
-  if (notesBtn && notesPop) {
-    notesBtn.addEventListener("click", () => {
-      fetch("/update/status").then(r => r.json()).then(d => {
-        if (notesTitle) notesTitle.textContent = "TLI v" + (d.latest_version || "?") + " — Release Notes";
-        if (notesBody)  notesBody.textContent  = d.notes || "No release notes available.";
-        notesPop.hidden = false;
-      }).catch(() => {});
-    });
-  }
-  if (notesClose) notesClose.addEventListener("click", () => { notesPop.hidden = true; });
-
-  // ── Init: load status + settings on startup ───────────────────
-  async function _init() {
-    await _loadSettings();
+  for (const id of ['settings-update-action-btn', 'tli-update-apply-btn']) $(id)?.addEventListener('click', () => runAction(action()));
+  $('settings-check-update-btn')?.addEventListener('click', () => runAction('check'));
+  $('settings-update-url-save')?.addEventListener('click', savePreferences);
+  $('tli-update-dismiss-btn')?.addEventListener('click', () => { dismissed = true; render(); });
+  $('settings-update-quit-btn')?.addEventListener('click', event => {
+    if (!busy && status?.state === 'ready' && ['windows', 'win32'].includes(status.platform) && localDesktop()) window.TLIHostLifecycle?.open?.('quit', event.currentTarget);
+  });
+  for (const id of ['tli-update-notes-btn', 'settings-update-notes-btn']) $(id)?.addEventListener('click', () => {
+    set('tli-update-notes-title', 'TLI v' + (status?.latest_version || '?').replace(/^v/, '') + ' — Release Notes');
+    set('tli-update-notes-body', typeof status?.notes === 'string' && status.notes ? status.notes : 'No release notes available.');
+    hide('tli-update-notes-pop', false);
+  });
+  $('tli-update-notes-close')?.addEventListener('click', () => hide('tli-update-notes-pop', true));
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(timer); else refreshStatus(); });
+  window.addEventListener?.('pagehide', () => { stopped = true; revision++; clearTimeout(timer); });
+  window.addEventListener?.('pageshow', () => { if (stopped) { stopped = false; refreshStatus(); } });
+  async function init() {
+    if ($('settings-update-url-save')) $('settings-update-url-save').disabled = true;
+    if ($('settings-update-auto-check')) $('settings-update-auto-check').disabled = true;
     try {
-      const d = await fetch("/update/status").then(r => r.json());
-      _applyStatus(d);
-      // If update already available from background startup check, show banner
-      if (d.state === "available") {
-        if (typeof showToast === "function")
-          showToast("TLI update available: v" + d.latest_version + " — see update banner", "info");
-      }
-    } catch {}
+      const data = await request('/update/status');
+      try { loadPreferences(data); } catch (error) { preferencesUnavailable(error); }
+      applyStatus(data);
+    } catch (error) { if (!settingsConfirmed) preferencesUnavailable(error); connectionError = error.message + ' Use Check for updates to retry.'; render(); }
+    schedulePoll();
   }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", _init);
-  } else {
-    _init();
-  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
 })();

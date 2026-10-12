@@ -7,9 +7,9 @@ export const PUBLIC_RELEASE = Object.freeze({
   packageType: 'full-install',
   releaseNotesUrl: 'https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.0-beta',
   windows: Object.freeze({
-    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip',
-    filename: 'TLI_1.4.0-beta_Windows.zip',
-    sha256: 'b55d2bc8e1362d46ea5be4069b5ff7e0355081b211dc64e2ffb5ece83b666e75',
+    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows_Onboarding.zip',
+    filename: 'TLI_1.4.0-beta_Windows_Onboarding.zip',
+    sha256: '29aa7439d8267116d7127f0e8baa1dd24f43c11cad3342468bb6cbb08ebd8f24',
   }),
   macos: Object.freeze({
     url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip',

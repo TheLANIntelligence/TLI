@@ -156,15 +156,15 @@ $('connect-next')?.addEventListener('click', () => {
   $('lamp-scene').classList.toggle('is-on', commandStep === 2);
   if (commandStep === 1) {
     receipt.textContent = '1 / Acknowledged. The example command was accepted. Its outcome has not been checked yet.';
-    $('lamp-status').textContent = 'Example device · awaiting check';
+    $('lamp-status').textContent = 'Example Shelly switch · awaiting check';
     button.textContent = 'Show the example state check ↗';
   } else if (commandStep === 2) {
     receipt.textContent = '2 / State checked. In this example, the device reports that Office Lamp is on.';
-    $('lamp-status').textContent = 'Example device · confirmed on';
+    $('lamp-status').textContent = 'Example Shelly switch · reported on';
     button.textContent = 'Start this example again ↻';
   } else {
     receipt.textContent = 'Ready to walk through an example.';
-    $('lamp-status').textContent = 'Example device · off';
+    $('lamp-status').textContent = 'Example Shelly switch · off';
     button.textContent = 'Send the example request ↗';
   }
 });
@@ -172,7 +172,7 @@ $('connect-next')?.addEventListener('click', () => {
 const connections = {
   host: ['THE STARTING POINT', 'Your main computer', 'Your conversations and saved work stay with the TLI host. Run an installed local model here to use general AI without the internet.'],
   model: ['COMPUTE YOU CHOOSE', 'Another trusted computer', 'Review the computer’s identity and inference permission, then explicitly select its model. The host keeps the conversation context. Requests do not silently fall back to another peer.'],
-  home: ['USEFUL CONNECTIONS', 'Your supported devices', 'Configure supported local devices and ask for a specific action. An acknowledgement and a verified state are shown as distinct outcomes. Device capabilities and integrations vary.'],
+  home: ['CONTROLS WITH CONTEXT', 'Shelly and other supported devices', 'Turn a configured, compatible Shelly switch on or off by name, check its reported state, and see power readings where supported. Other adapters have their own requirements. Saved routines are reviewed and run manually.'],
   phone: ['COMPANION BETA', 'A familiar space, on your phone', 'The separate Android Companion beta brings conversation and supported shared workflows to a compatible, configured host on your LAN. The phone app is not included in these desktop ZIPs, and this website does not offer a phone download.'],
 };
 document.querySelectorAll('[data-network]').forEach((button) => {
@@ -189,9 +189,9 @@ document.querySelectorAll('[data-network]').forEach((button) => {
 });
 
 const workspaces = {
-  files: 'Files: browse and work with your files, with review before consequential actions.',
-  vault: 'Vault: protect saved secrets and files, with explicit locked and unlocked states.',
-  computers: 'Computers: understand the host and manage reviewed connections to other computers.',
+  files: 'Files: browse host folders and review rename or organization plans before applying them. Free Space adds storage maps and reviewed cleanup.',
+  vault: 'Vault: protect files, notes, secrets, and saved logins with a separate passphrase, and create portable encrypted Vault backups.',
+  computers: 'Computers: review trusted TLI hosts for LAN messages, approved file transfers, supported checks, and explicitly selected text inference. Each connection needs the appropriate permission.',
 };
 tabs('[data-workspace]', (button) => {
   const name = button.dataset.workspace;

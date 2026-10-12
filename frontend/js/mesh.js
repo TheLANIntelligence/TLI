@@ -1095,7 +1095,7 @@ if (multiRunBtn && multiSelect) {
         if (!ok) return;
       }
 
-      if (action === 'allow') { window.TLIPeerTrust.open(); return; }
+      if (action === 'allow') { window.TLIPeerTrust.open({deviceId}); return; }
       if (action === 'block') { window.TLIPeerTrust.revoke(deviceId); return; }
       performMeshAction(deviceId, action);
     });
@@ -1475,7 +1475,7 @@ function openReviewedPeerConsole(id,panel) {
   } catch {showToast('Review this computer’s exact identity and HTTPS address first.','error');return false;}
 }
 window.TLIPeerTrust=(()=>{
-  let dialog,body,notice,review=null,epoch=0,busy=false,focus;
+  let dialog,body,notice,review=null,epoch=0,busy=false,focus,selectedPeerId=null,selectedPeerName=null,cardRequest=null;
   const n=(tag,text)=>{const x=document.createElement(tag);if(text!=null)x.textContent=text;return x;};
   const alive=t=>dialog?.open&&!meshUiLocked&&t===epoch;
   function button(text,fn){const b=n('button',text);b.type='button';b.className='btn btn-outline';Object.assign(b.style,{minWidth:'0',maxWidth:'100%',whiteSpace:'normal',overflowWrap:'anywhere'});b.addEventListener('click',()=>{if((busy&&text!=='Close')||meshUiLocked)return;Promise.resolve().then(fn).catch(e=>{if(dialog?.open&&!meshUiLocked)notice.textContent=e.message;});});return b;}
@@ -1490,12 +1490,117 @@ window.TLIPeerTrust=(()=>{
     const host=['system_observation_v1','coordination_v1','messages_v1'];
     return capabilities.length===host.length&&capabilities.every((value,index)=>value===host[index])?'host':null;
   }
-  function close(){epoch++;review=null;busy=false;dialog?.close();focus?.focus?.();}
+  function cancelCardLoad(){cardRequest?.abort();cardRequest=null;}
+  function close(){epoch++;cancelCardLoad();review=null;busy=false;dialog?.close();focus?.focus?.();}
+  function privateOrigin(value){
+    try{const u=new URL(value),parts=u.hostname.split('.').map(Number);
+      return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash&&
+        /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)&&parts.every(x=>x>=0&&x<=255)&&
+        (parts[0]===10||parts[0]===192&&parts[1]===168||parts[0]===172&&parts[1]>=16&&parts[1]<=31);
+    }catch{return false;}
+  }
+  function localCardPanel(){
+    cancelCardLoad();
+    const section=n('section');section.id='tli-peer-local-card';section.style.minWidth='0';
+    const heading=n('h3','1. This computer’s card');
+    const status=n('p','Reading this computer’s secure LAN setup…');status.id='tli-peer-card-status';status.setAttribute('role','status');
+    const addressLabel=n('label'),address=n('select');address.id='tli-peer-card-address';address.setAttribute('aria-label','This computer’s HTTPS LAN IPv4 address and port');address.style.width='100%';address.style.maxWidth='100%';address.disabled=true;
+    addressLabel.append(n('span','This computer’s HTTPS LAN IPv4 address and port'),address);
+    const outputLabel=n('label'),output=n('textarea');output.readOnly=true;output.rows=5;output.style.width='100%';output.style.boxSizing='border-box';output.placeholder='Your public card will appear here after TLI checks this computer’s secure LAN setup.';
+    outputLabel.append(n('span','Your public computer card; contains no private key'),output);
+    const fingerprints=n('p');fingerprints.style.overflowWrap='anywhere';
+    const controls=n('div');Object.assign(controls.style,{display:'flex',flexWrap:'wrap',gap:'8px'});
+    const copy=button('Copy card',async()=>{
+      if(!output.value)return;
+      try{await navigator.clipboard.writeText(output.value);if(output.isConnected)status.textContent='Public card copied. Paste it into the other computer’s trust dialog.';}
+      catch{output.focus();output.select();status.textContent='Public card selected. Copy the selected text and paste it into the other computer’s trust dialog.';}
+    });copy.disabled=true;
+    const reload=button('Reload card',()=>load());reload.disabled=true;
+    const settings=button('Open connection settings',()=>{close();window.switchPanel?.('panel-companion');});settings.hidden=true;
+    controls.append(copy,reload,settings);
+    section.append(heading,status,addressLabel,outputLabel,fingerprints,controls,n('p','Copy this public card to the other computer. Open this same dialog there to get its card for the next step.'));
+    body.append(section);
+    let origins=[],node=null;
+    function choices(values,selected){
+      origins=values;address.replaceChildren();
+      if(!selected){const option=n('option',values.length?'Choose this computer’s LAN address…':'No HTTPS LAN address available');option.value='';address.append(option);}
+      for(const value of values){const option=n('option',value);option.value=value;address.append(option);}
+      address.value=selected||'';address.disabled=!values.length;
+    }
+    function showCard(card,origin){
+      if(!cardProfile(card)||card.origin!==origin||!node?.id||card.node_id!==node.id||
+          !/^[a-f0-9]{4}(?::[a-f0-9]{4}){7}$/i.test(card.identity_fingerprint||'')||!/^[a-f0-9]{64}$/i.test(card.certificate_sha256||''))
+        throw Error('TLI returned incomplete or mismatched public card details. Reload the card before copying.');
+      output.value=JSON.stringify(card,null,2);copy.disabled=false;
+      fingerprints.replaceChildren(n('p','Identity fingerprint: '+card.identity_fingerprint),n('p','HTTPS fingerprint: '+card.certificate_sha256));
+      status.textContent='Public card ready for '+(node.name||'this computer')+'. Copy it to the other computer, then compare both fingerprints on the original screens.';
+    }
+    async function load(chosen){
+      cancelCardLoad();const controller=new AbortController();cardRequest=controller;const t=epoch;
+      const current=()=>alive(t)&&cardRequest===controller&&section.isConnected;
+      const timeout=setTimeout(()=>controller.abort(),10000),previous=chosen||address.value;
+      if(!chosen)choices([],null);
+      output.value='';fingerprints.replaceChildren();copy.disabled=true;reload.disabled=true;address.disabled=true;settings.hidden=true;
+      status.textContent='Reading this computer’s secure LAN setup…';
+      async function read(path,payload){
+        const r=await fetch(path,{method:payload===undefined?'GET':'POST',cache:'no-store',signal:controller.signal,
+          ...(payload===undefined?{}:{headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})});
+        if(!current())throw Error('Review closed.');
+        if(r.status===401){window.dispatchEvent(new CustomEvent('tli-session-locked'));throw Error('Unlock TLI to read its public card.');}
+        const data=await r.json().catch(()=>null);if(!current())throw Error('Review closed.');
+        if(!r.ok){const error=Error(typeof data?.detail==='string'?data.detail:data?.detail?.message||'This computer’s public card could not be loaded.');error.status=r.status;throw error;}
+        if(!data||typeof data!=='object'||Array.isArray(data))throw Error('TLI returned incomplete secure LAN setup details. Reload the card.');
+        return data;
+      }
+      try{
+        if(chosen){
+          if(!origins.includes(chosen))throw Error('Choose one of this computer’s detected HTTPS addresses.');
+          const result=await read('/mesh/trust/card',{origin:chosen});if(current())showCard(result.card,chosen);
+        }else{
+          let setup,legacy=false;
+          try{setup=await read('/mesh/trust/setup');}
+          catch(error){
+            if(error.status!==404||!current())throw error;
+            // Existing hosts already expose their certificate-checked local
+            // origins. This compatibility path creates only a public card.
+            const older=await read('/api/companion/v1/setup');legacy=true;
+            if(typeof older.tls_enabled!=='boolean'||typeof older.lan_enabled!=='boolean'||!Array.isArray(older.origins))throw Error('TLI returned incomplete secure LAN setup details. Reload the card.');
+            const values=Array.isArray(older.origins)?older.origins.filter(privateOrigin):[];
+            const enabled=older.tls_enabled===true&&older.lan_enabled===true;
+            setup={node:older.node,origins:enabled?values:[],ready:enabled&&values.length===1,
+              code:enabled&&values.length>1?'choose_address':enabled&&values.length===1?'ready':'unavailable',
+              selected_origin:enabled&&values.length===1?values[0]:null,card:null,
+              reason:!older.tls_enabled?'Enable HTTPS in connection settings, then restart TLI.':!older.lan_enabled?'Enable Secure home-network access in connection settings, then restart TLI.':
+                values.length?'Choose this computer’s address on the same network as the other computer.':older.reason||'No certificate-covered private LAN address is available. Open connection settings to check this host.'};
+          }
+          if(!Array.isArray(setup.origins)||setup.origins.length>32||!setup.origins.every(privateOrigin))throw Error('TLI returned incomplete secure LAN addresses. Reload the card.');
+          node=setup.node;heading.textContent='1. '+(node?.name||'This computer')+' — your public card';
+          if(setup.ready!==true&&setup.code!=='choose_address'){
+            choices([],null);status.textContent=setup.reason||'This computer’s secure LAN setup is unavailable. Open connection settings to check it.';settings.hidden=false;return;
+          }
+          if(!legacy&&setup.ready===true&&!setup.card)throw Error('TLI did not provide this computer’s public card. Reload the card.');
+          const selected=setup.origins.includes(previous)?previous:setup.selected_origin;
+          if(selected&&!setup.origins.includes(selected))throw Error('The selected address was not found on this computer. Reload the card.');
+          choices(setup.origins,selected);
+          if(!selected){status.textContent=setup.reason||'Choose this computer’s LAN address to show its public card.';settings.hidden=setup.origins.length>0;}
+          else if(!legacy&&setup.card&&setup.card.origin===selected){showCard(setup.card,selected);}
+          else {const result=await read('/mesh/trust/card',{origin:selected});if(current())showCard(result.card,selected);}
+        }
+      }catch(error){
+        if(current()){
+          output.value='';copy.disabled=true;fingerprints.replaceChildren();
+          status.textContent=error.status===404?'The running TLI server cannot provide public-card setup. If its files were updated, restart TLI normally, then reopen this dialog.':
+            controller.signal.aborted?'TLI took too long to read this computer’s public card. Check the connection and select Reload card.':error.message||'The public card could not be loaded. Select Reload card to try again.';
+        }
+      }finally{clearTimeout(timeout);if(current()){reload.disabled=false;address.disabled=!origins.length;}}
+    }
+    address.addEventListener('change',()=>{if(address.value)load(address.value);});
+    load();
+  }
   function home(){review=null;body.replaceChildren();notice.textContent='';body.append(n('p','Exchange public cards on both computers. Compare both fingerprints on the other computer’s own screen. Names and discovered addresses are not proof of identity.'));
-    const address=field('This computer’s HTTPS LAN IPv4 address and port');address.placeholder='https://192.168.1.20:8000';
-    const output=field('Your public computer card; contains no private key','textarea');output.readOnly=true;output.rows=6;
-    body.append(button('Show this computer’s card',()=>run(async()=>{const t=epoch,j=await api('/mesh/trust/card',{origin:address.value.trim()},t);output.value=JSON.stringify(j.card,null,2);notice.textContent='Identity: '+j.card.identity_fingerprint+' · HTTPS: '+j.card.certificate_sha256;})));
-    const input=field('Paste the other computer’s public card','textarea');input.rows=6;const checks=[];
+    if(selectedPeerId){const peer=meshDirectoryCache?.devices?.find(x=>x.device_id===selectedPeerId);body.append(n('p','Reviewing '+(peer?.display_name||selectedPeerName||'the selected computer')+' · ID: '+selectedPeerId),n('p','For LAN messages, select the explicit LAN messages permission here and repeat this review on the other computer using this computer’s card. Discovery alone does not enable messages.'));}
+    localCardPanel();body.append(n('h3','2. The other computer’s card'));
+    const input=field('Paste the other computer’s public card','textarea');input.rows=6;input.placeholder='On the other computer, open Review computer trust and copy its public card. Paste that card here.';const checks=[];
     const profileNotice=n('p');profileNotice.setAttribute('role','status');body.append(profileNotice);
     for(const [id,text] of [['observe','Allow short CPU, RAM and uptime observations'],['coordinate','Allow connection status and read-only coordination/ping'],['messages','Allow explicit LAN messages and file offers (files need separate receiver consent)'],['inference','Allow explicitly selected AI inference (shared prompts and enabled conversation/notes; no device actions)']]){const label=n('label'),c=n('input');c.type='checkbox';c.value=id;c.checked=false;label.append(c,n('span',text));body.append(label);checks.push(c);}
     let cardRevision=0;
@@ -1510,6 +1615,7 @@ window.TLIPeerTrust=(()=>{
       const t=epoch,revision=cardRevision,raw=input.value;
       if(raw.length>24576)throw Error('Public card is too large.');
       let card;try{card=JSON.parse(raw);}catch{throw Error('Paste the complete public JSON card.');}
+      if(selectedPeerId&&card?.node_id!==selectedPeerId)throw Error('This card belongs to a different computer identity. Close this review and select the matching current computer; old installations can have the same name and address.');
       const profile=cardProfile(card);if(!profile)throw Error('This public card has an unsupported capability profile.');
       const grants=checks.filter(x=>x.checked&&!x.disabled&&(profile==='host'||x.value==='inference')).map(x=>x.value);
       if(!grants.length)throw Error('Select at least one permission to review.');
@@ -1520,26 +1626,27 @@ window.TLIPeerTrust=(()=>{
       review=result;paint();
     })));
   }
-  function paint(){body.replaceChildren();const c=review.card;body.append(n('p',c.name+' · '+c.node_id),n('p',c.origin),n('p','Identity: '+c.identity_fingerprint),n('p','HTTPS certificate SHA-256: '+c.certificate_sha256),n('p','Permissions: '+review.grants.join(', ')+'. '+(cardProfile(c)==='node'?'This TLI Node offers AI compute only. Prepared prompts and enabled conversation/notes are shared when you explicitly select its model. No device actions are granted. Complete pairing on the Node too.':'No cleanup, arbitrary commands or device actions. File offers require a separate receiver review for each file; this trust review never accepts a file. Complete this review on both computers.')));
+  function paint(){cancelCardLoad();body.replaceChildren();const c=review.card;body.append(n('p',c.name+' · '+c.node_id),n('p',c.origin),n('p','Identity: '+c.identity_fingerprint),n('p','HTTPS certificate SHA-256: '+c.certificate_sha256),n('p','Permissions: '+review.grants.join(', ')+'. '+(cardProfile(c)==='node'?'This TLI Node offers AI compute only. Prepared prompts and enabled conversation/notes are shared when you explicitly select its model. No device actions are granted. Complete pairing on the Node too.':'No cleanup, arbitrary commands or device actions. File offers require a separate receiver review for each file; this trust review never accepts a file. Complete this review on both computers.')));
     if(review.replaces_existing)body.append(n('p','This replaces trust for this exact node ID. Other same-name or same-address records are preserved.'));
     const fp=field('Paste the matching identity fingerprint from the other computer’s screen');fp.maxLength=39;const cert=field('Paste the matching HTTPS SHA-256 from that screen');cert.maxLength=64;
-    body.append(button('Trust these exact details',()=>run(async()=>{const t=epoch;if(!await compatible(t))return;await api('/mesh/trust/approve',{review_id:review.review_id,identity_fingerprint:fp.value.trim(),certificate_sha256:cert.value.trim()},t);home();notice.textContent='Trust saved here. The other computer must review your card too.';await refreshMeshNodeAndMaybeDirectory();})),button('Back to card',home));
+    body.append(button('Trust these exact details',()=>run(async()=>{const t=epoch;if(!await compatible(t))return;await api('/mesh/trust/approve',{review_id:review.review_id,identity_fingerprint:fp.value.trim(),certificate_sha256:cert.value.trim()},t);home();notice.textContent='Trust saved here. The other computer must review your card too, with LAN messages enabled on both computers.';window.dispatchEvent(new CustomEvent('tli-peer-trust-changed'));await refreshMeshNodeAndMaybeDirectory();})),button('Back to card',home));
   }
-  function open(){if(meshUiLocked||document.hidden)return;if(!dialog){dialog=n('dialog');dialog.id='tli-peer-trust-dialog';dialog.setAttribute('aria-labelledby','tli-peer-trust-heading');Object.assign(dialog.style,{width:'min(720px, calc(100vw - 24px))',maxHeight:'90vh',overflow:'auto',color:'var(--text)',background:'var(--bg-panel)',border:'1px solid var(--border)',borderRadius:'14px',padding:'20px',boxSizing:'border-box'});const h=n('h2','Trust a computer');h.id='tli-peer-trust-heading';h.tabIndex=-1;body=n('div');Object.assign(body.style,{display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:'12px',minWidth:'0',overflowWrap:'anywhere'});notice=n('p');notice.setAttribute('role','status');dialog.append(h,body,notice,button('Close',close));dialog.addEventListener('cancel',e=>{e.preventDefault();close();});document.body.append(dialog);}epoch++;busy=false;focus=document.activeElement;home();dialog.showModal();dialog.querySelector('h2').focus();}
-  async function revoke(id){if(meshUiLocked||!confirm('Revoke this computer’s access here? Saved identity and history remain. Another explicit review will be required.'))return;const t=meshUiEpoch;try{const r=await fetch('/mesh/trust/'+encodeURIComponent(id)+'/revoke',{method:'POST'});if(!meshUiCurrent(t))return;if(!r.ok)throw Error('Could not revoke this computer.');await refreshMeshNodeAndMaybeDirectory();}catch(e){if(meshUiCurrent(t))showToast(e.message,'error');}}
+  function open(options={}){if(meshUiLocked||document.hidden)return;selectedPeerId=typeof options?.deviceId==='string'?options.deviceId:null;selectedPeerName=typeof options?.name==='string'?options.name.slice(0,128):null;if(!dialog){dialog=n('dialog');dialog.id='tli-peer-trust-dialog';dialog.setAttribute('aria-labelledby','tli-peer-trust-heading');Object.assign(dialog.style,{width:'min(720px, calc(100vw - 24px))',maxHeight:'90vh',overflow:'auto',color:'var(--text)',background:'var(--bg-panel)',border:'1px solid var(--border)',borderRadius:'14px',padding:'20px',boxSizing:'border-box'});const h=n('h2','Trust a computer');h.id='tli-peer-trust-heading';h.tabIndex=-1;body=n('div');Object.assign(body.style,{display:'grid',gridTemplateColumns:'minmax(0,1fr)',gap:'12px',minWidth:'0',overflowWrap:'anywhere'});notice=n('p');notice.setAttribute('role','status');dialog.append(h,body,notice,button('Close',close));dialog.addEventListener('cancel',e=>{e.preventDefault();close();});document.body.append(dialog);}epoch++;busy=false;focus=document.activeElement;home();dialog.showModal();dialog.querySelector('h2').focus();}
+  async function revoke(id){if(meshUiLocked||!confirm('Revoke this computer’s access here? Saved identity and history remain. Another explicit review will be required.'))return;const t=meshUiEpoch;try{const r=await fetch('/mesh/trust/'+encodeURIComponent(id)+'/revoke',{method:'POST'});if(!meshUiCurrent(t))return;if(!r.ok)throw Error('Could not revoke this computer.');window.dispatchEvent(new CustomEvent('tli-peer-trust-changed'));await refreshMeshNodeAndMaybeDirectory();}catch(e){if(meshUiCurrent(t))showToast(e.message,'error');}}
   function renderDirectory(directory){
     const list=document.getElementById('tli-peer-trust-list');if(!list)return;list.replaceChildren();
     if(meshUiLocked)return;
     const entries=directory?.devices;if(!Array.isArray(entries)){list.append(n('p','Computer access is unavailable. Refresh to read saved identities.'));return;}
     if(!entries.length){list.append(n('p','No other computer identities are recorded here yet.'));return;}
     for(const entry of entries){const row=n('div');Object.assign(row.style,{borderTop:'1px solid var(--border-subtle)',padding:'12px 0',overflowWrap:'anywhere'});
-      row.append(n('strong',entry.display_name||entry.device_id),n('p','ID: '+entry.device_id),n('p',entry.status==='blocked'?'Access revoked':entry.trust_state==='verified'?'Reviewed permissions saved here':'Review required before communication'));
+      row.append(n('strong',entry.display_name||entry.device_id),n('p','ID: '+entry.device_id),n('p',entry.messaging?.message||(entry.status==='blocked'?'Access revoked':entry.trust_state==='verified'?'Reviewed permissions saved here':'Review required before communication')));
+      if(entry.discovered_name&&entry.discovered_name!==entry.display_name)row.append(n('p','Discovered name: '+entry.discovered_name+'. Review a fresh public card to confirm this name change.'));
       if(entry.origin)row.append(n('p',entry.origin));
-      row.append(button('Review computer',open));if(entry.status!=='blocked')row.append(button('Revoke access',()=>revoke(entry.device_id)));list.append(row);}
+      row.append(button('Review computer',()=>open({deviceId:entry.device_id})));if(entry.status!=='blocked')row.append(button('Revoke access',()=>revoke(entry.device_id)));list.append(row);}
   }
   function install(){if(document.getElementById('tli-peer-trust-open'))return;const anchor=document.querySelector('#panel-mesh .mcd-header');if(!anchor)return;
     const wrap=n('div'),b=button('Review computer trust',open);b.id='tli-peer-trust-open';wrap.style.padding='0 0 18px';wrap.append(b,n('p','Both computers explicitly review identity and HTTPS fingerprints before communicating.'));
     const details=n('details');details.append(n('summary','Reviewed computer access'));const list=n('div');list.id='tli-peer-trust-list';details.append(list);wrap.append(details);anchor.after(wrap);renderDirectory(meshDirectoryCache);
   }
-  window.addEventListener('tli-session-locked',()=>{epoch++;review=null;busy=false;if(dialog){body.replaceChildren();notice.textContent='';dialog.close();}document.getElementById('tli-peer-trust-list')?.replaceChildren();});window.addEventListener('pagehide',()=>{epoch++;review=null;dialog?.close();});return{open,revoke,install,renderDirectory};
+  window.addEventListener('tli-session-locked',()=>{epoch++;cancelCardLoad();review=null;busy=false;if(dialog){body.replaceChildren();notice.textContent='';dialog.close();}document.getElementById('tli-peer-trust-list')?.replaceChildren();});window.addEventListener('pagehide',()=>{epoch++;cancelCardLoad();review=null;dialog?.close();});return{open,revoke,install,renderDirectory};
 })();

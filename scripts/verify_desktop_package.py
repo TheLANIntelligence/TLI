@@ -12,6 +12,7 @@ import argparse
 from contextlib import ExitStack
 import hashlib
 from html.parser import HTMLParser
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -32,21 +33,31 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Validate the release inventory using trusted verifier source, never code from
+# the ZIP. This standalone policy imports no application state or services.
+_policy_spec = importlib.util.spec_from_file_location("tli_desktop_package_policy", ROOT / "backend/update_install.py")
+_policy = importlib.util.module_from_spec(_policy_spec)
+_policy_spec.loader.exec_module(_policy)
+MANIFEST_NAME = "TLI_RELEASE.json"
 MARKER = "synthetic desktop package verification only"
 MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES = 5000, 128 * 1024 * 1024, 1024 * 1024 * 1024
 COMMON_ROOT = {"README.md", "START_HERE.md", "LICENSE", "SECURITY.md", "TLI_MANUAL.md"}
 PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                  "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                  "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
-                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md", "RELEASE_1.4.0_BETA.md"}
+                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md", "RELEASE_1.4.0_BETA.md",
+                 "RELEASE_1.4.1_BETA.md", "TLI_UPDATES.md", "TLI_UNINSTALL.md"}
 PLATFORM_ROOT = {
     "windows": {"TLI.exe", "TLI_Start.bat", "TLI_Diagnostics.bat", "TLI_Bootstrap.ps1",
-                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1"},
-    "macos": {"TLI_Start.command", "TLI_Start.sh"},
+                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1",
+                "TLI_Update.bat", "TLI_Update.ps1", "Uninstall_TLI.bat", "TLI_Uninstall.ps1"},
+    "macos": {"TLI_Start.command", "TLI_Start.sh", "TLI_Update.command", "TLI_Update.sh",
+              "Uninstall_TLI.command", "Uninstall_TLI.sh"},
 }
 REQUIRED_SOURCE = {"backend/main.py", "backend/tli_state.py", "backend/requirements.txt",
                    "backend/host_launcher.py", "backend/launch_checks.py", "backend/release_identity.py",
-                   "backend/desktop_launcher.py", "backend/ai/runtime_support.py",
+                   "backend/desktop_launcher.py", "backend/ai/runtime_support.py", "backend/update_install.py",
+                   "docs/TLI_UPDATES.md", "docs/TLI_UNINSTALL.md",
                    "frontend/index.html", "frontend/app.js", "frontend/style.css"}
 PRIVATE_DIRS = {"data", "tli_data", "vault_data", "vault", "memory", "models", "session", "sessions",
                 "keys", "tls", "secrets", "node_modules", "tests", "scripts", "build", "build_work",
@@ -99,7 +110,7 @@ def allowed_file(path, target):
     if name.casefold() in PRIVATE_NAMES or name.startswith(".") or suffix in PRIVATE_SUFFIXES:
         return False
     if len(parts) == 1:
-        return name in COMMON_ROOT | PLATFORM_ROOT[target]
+        return name in COMMON_ROOT | PLATFORM_ROOT[target] | {MANIFEST_NAME}
     if parts[:3] == ("backend", "ai", "runtime"):
         if target == "windows":
             return len(parts) == 4 and (name == "llama_server.exe" or WINDOWS_DLL.fullmatch(name)
@@ -144,8 +155,10 @@ def inspect_archive(archive, target, expected_version):
             require(not any(parent.as_posix().casefold() in file_keys
                             for parent in PurePosixPath(name).parents if parent != PurePosixPath(".")),
                     "ZIP contains conflicting file and directory paths")
-        for name in COMMON_ROOT | PLATFORM_ROOT[target] | REQUIRED_SOURCE:
+        for name in COMMON_ROOT | PLATFORM_ROOT[target] | REQUIRED_SOURCE | {MANIFEST_NAME}:
             require(name in files, "ZIP is missing a required file: " + name)
+        if {"frontend/assets/fonts/InterVariable.woff2", "frontend/assets/fonts/InterVariable-Italic.woff2"} & files.keys():
+            require("frontend/assets/fonts/Inter-LICENSE.txt" in files, "ZIP is missing bundled Inter font licensing")
         runtime_dirs = ["backend/ai/runtime"] if target == "windows" else [
             "backend/ai/runtime/macos-arm64", "backend/ai/runtime/macos-x64"]
         for directory in runtime_dirs:
@@ -165,7 +178,16 @@ def inspect_archive(archive, target, expected_version):
             version = re.search(r'\bTLI_VERSION\s*=\s*["\']([^"\']+)["\']', text)
             require(version is not None and version[1] == expected_version, "Packaged version does not match: " + name)
         require(bundle.testzip() is None, "ZIP member CRC verification failed")
-        return {"files": len(files), "expanded_bytes": total, "paths": sorted(files)}
+        try:
+            manifest = _policy.validate_archive(archive, expected_version, target)
+        except _policy.UpdateError as error:
+            raise PackageError("Release inventory validation failed: " + str(error)) from error
+        require(manifest["platform"] == target, "Release inventory platform must match the platform-specific ZIP")
+        for entry in manifest["files"]:
+            require(files[entry["path"]].external_attr >> 16 & 0o7777 == entry["mode"],
+                    "ZIP permissions disagree with the release inventory: " + entry["path"])
+        return {"files": len(files), "expanded_bytes": total, "paths": sorted(files),
+                "release_inventory_verified": True, "release_inventory_files": len(manifest["files"])}
 
 
 def extract_fresh(archive, destination):

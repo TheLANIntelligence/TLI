@@ -1,5 +1,7 @@
 """Distribution rules run against synthetic files, never the installation's data."""
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 import stat
@@ -18,9 +20,11 @@ def package_root(tmp_path, monkeypatch):
     files = {
         "backend/tli_state.py": 'TLI_VERSION = "test"',
         "backend/main.py": "print('application')",
+        "backend/update_install.py": "# standalone updater",
         "backend/requirements.txt": "Pillow>=12.1.1",
         "frontend/index.html": "<html>TLI</html>",
         "frontend/js/intelligence.js": "/* shipped feature */",
+        "frontend/assets/intro.mp3": "synthetic welcome audio",
         "frontend/tests/example.test.cjs": "/* test only */",
         "mobile/package.json": "{}",
         "mobile/modules/tli-transport/index.ts": "/* native app only */",
@@ -60,6 +64,7 @@ def package_root(tmp_path, monkeypatch):
         "backend/.env.local": "local secrets",
         "backend/key.pem": "private key",
         "backend/ai/runtime/llama_server.exe": "runtime",
+        "backend/ai/runtime/LICENSE": "synthetic runtime license",
         "backend/ai/runtime/ggml.dll": "runtime library",
         "backend/ai/runtime/llama-server": "unix runtime",
         "backend/ai/runtime/private.gguf": "model weights",
@@ -82,8 +87,9 @@ def test_full_release_keeps_dependencies_runtime_and_excludes_private_files(pack
     with zipfile.ZipFile(output) as archive:
         names = set(archive.namelist())
         assert names == {
-            "backend/tli_state.py", "backend/main.py", "backend/requirements.txt",
+            "backend/tli_state.py", "backend/main.py", "backend/update_install.py", "backend/requirements.txt", "TLI_RELEASE.json",
             "frontend/index.html", "frontend/js/intelligence.js",
+            "frontend/assets/intro.mp3", "backend/ai/runtime/LICENSE",
             "backend/ai/runtime/llama_server.exe", "backend/ai/runtime/ggml.dll",
             "backend/ai/runtime/llama-server", "TLI_Start.sh",
         }
@@ -99,7 +105,7 @@ def test_frontend_only_is_explicit_and_contains_no_backend(package_root, capsys)
     output = package_root / "ui.zip"
     packager.build(output, frontend_only=True)
     with zipfile.ZipFile(output) as archive:
-        assert set(archive.namelist()) == {"frontend/index.html", "frontend/js/intelligence.js"}
+        assert set(archive.namelist()) == {"frontend/index.html", "frontend/js/intelligence.js", "frontend/assets/intro.mp3", "TLI_RELEASE.json"}
     assert '"frontend_only": true' in capsys.readouterr().out
 
 
@@ -107,6 +113,8 @@ def test_frontend_only_is_explicit_and_contains_no_backend(package_root, capsys)
 def test_platform_packages_keep_matching_runtime_and_launchers_only(package_root, platform):
     for name in (packager.COMMON_ROOT_FILES | set().union(*packager.PLATFORM_ROOT_FILES.values())):
         (package_root / name).write_text("synthetic release file", encoding="utf-8")
+    (package_root / "docs").mkdir(exist_ok=True)
+    (package_root / "docs/TLI_UNINSTALL.md").write_text("synthetic removal guide", encoding="utf-8")
     for arch in ("macos-arm64", "macos-x64"):
         base = package_root / "backend/ai/runtime" / arch
         base.mkdir(parents=True)
@@ -124,6 +132,7 @@ def test_platform_packages_keep_matching_runtime_and_launchers_only(package_root
     assert not any(name.startswith((".github/", "scripts/", "desktop/")) for name in names)
     assert "build_mac.sh" not in names
     assert "START_HERE.md" in names and "LICENSE" in names
+    assert "docs/TLI_UNINSTALL.md" in names
     if platform == "macos":
         assert "backend/ai/runtime/macos-arm64/llama-server" in names
         assert "backend/ai/runtime/macos-x64/libllama.0.dylib" in names
@@ -205,8 +214,9 @@ def test_sensitive_exclusions_are_case_insensitive(path):
 
 
 def test_desktop_launcher_ships_but_machine_shortcuts_and_other_executables_do_not(package_root):
-    public = ["TLI.exe", "build_launcher.ps1", "desktop/TliLauncher.cs", "desktop/tli.ico"]
-    private = ["TLI.lnk", "desktop/TLI.LNK", "desktop/unreviewed.exe", "other/TLI.exe", "backend/TLI.exe"]
+    public = ["TLI.exe"]
+    private = ["TLI.lnk", "desktop/TLI.LNK", "desktop/unreviewed.exe", "other/TLI.exe", "backend/TLI.exe",
+               "build_launcher.ps1", "desktop/TliLauncher.cs", "desktop/tli.ico"]
     for name in public + private:
         path = package_root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -216,3 +226,40 @@ def test_desktop_launcher_ships_but_machine_shortcuts_and_other_executables_do_n
     with zipfile.ZipFile(output) as archive:
         assert set(public) <= set(archive.namelist())
         assert not set(private) & set(archive.namelist())
+
+
+def test_inventory_hashes_actual_archived_bytes_and_excludes_local_update_hints(package_root):
+    (package_root / "TLI_Start.command").write_bytes(b"#!/bin/bash\r\necho ready\r\n")
+    (package_root / "TLI_RELEASE.json").write_text('{"old":"inventory"}')
+    (package_root / "update-target.json").write_text('{"target":"private local path"}')
+    output = package_root / "verified.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        manifest = json.loads(archive.read("TLI_RELEASE.json"))
+        assert manifest["schema_version"] == 1
+        assert manifest["version"] == "test"
+        assert manifest["platform"] == "all"
+        assert {entry["path"] for entry in manifest["files"]} == set(archive.namelist()) - {"TLI_RELEASE.json"}
+        assert "update-target.json" not in archive.namelist()
+        for entry in manifest["files"]:
+            raw = archive.read(entry["path"])
+            assert entry["size"] == len(raw)
+            assert entry["sha256"] == hashlib.sha256(raw).hexdigest()
+            assert entry["mode"] == (archive.getinfo(entry["path"]).external_attr >> 16) & 0o777
+            assert packager._policy.is_application_path(entry["path"])
+        command = next(entry for entry in manifest["files"] if entry["path"] == "TLI_Start.command")
+        assert command["mode"] == 0o755
+        assert b"\r" not in archive.read(command["path"])
+        packager._policy._manifest(archive.read("TLI_RELEASE.json"))
+    assert packager._policy.validate_archive(output)["version"] == "test"
+
+
+def test_update_capable_package_excludes_unreviewed_code_roots(package_root):
+    for name in ("personal_script.py", "other/service.py", "backend/custom/note.py", "frontend/unknown/note.js"):
+        destination = package_root / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text("not application source")
+    output = package_root / "reviewed.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        assert not {"personal_script.py", "other/service.py", "backend/custom/note.py", "frontend/unknown/note.js"} & set(archive.namelist())

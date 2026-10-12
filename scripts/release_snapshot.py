@@ -22,12 +22,14 @@ import tempfile
 
 POLICY_VERSION = 1
 ROOT_FILES = {
-    ".easignore", ".gitignore", "AGENTS.md", "CLAUDE.md", "README.md", "TLI_MANUAL.md",
+    ".easignore", ".gitignore", "AGENTS.md", "CLAUDE.md", "README.md", "TLI_MANUAL.md", "LICENSE", "SECURITY.md",
     "build_dist.py", "build.ps1", "build_windows.ps1", "build_linux.sh", "build_mac.sh",
     "TLI_Start.bat", "TLI_Start.command", "TLI_Start.sh", "tli_sentinel.ps1",
     "TLI_Setup.ps1", "TLI_Setup.bat", "TLI_Diagnostics.bat",
+    "TLI_Bootstrap.ps1", "START_HERE.md",
+    "TLI_Update.bat", "TLI_Update.ps1", "TLI_Update.command", "TLI_Update.sh",
     "TLI.exe", "build_launcher.ps1",
-    "Uninstall_TLI.bat", "Uninstall_TLI.command", "Uninstall_TLI.sh",
+    "Uninstall_TLI.bat", "TLI_Uninstall.ps1", "Uninstall_TLI.command", "Uninstall_TLI.sh",
 }
 BACKEND_DIRS = {"ai", "builder", "cleanup", "drivers", "game_configs", "intelligence", "providers", "routers", "tests"}
 BACKEND_FILES = {"requirements.txt", "requirements-test.txt", "pytest.ini", "tli_backend.spec", "run_backend_dev.bat"}
@@ -35,7 +37,7 @@ PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",
-                "RELEASE_1.4.0_BETA.md"}
+                "RELEASE_1.4.0_BETA.md", "RELEASE_1.4.1_BETA.md", "TLI_UPDATES.md", "TLI_UNINSTALL.md"}
 MOBILE_FILES = {"package.json", "package-lock.json", "app.config.ts", "tsconfig.json", "expo-env.d.ts", "eas.json", ".easignore", ".gitignore", "README.md"}
 MOBILE_DIRS = {"app", "src", "modules", "assets", "tests", "scripts"}
 SOURCE_EXTENSIONS = {".py", ".js", ".cjs", ".mjs", ".ts", ".tsx", ".html", ".css", ".svg", ".png", ".ico", ".jpg", ".jpeg", ".webp", ".woff", ".woff2", ".ttf", ".mp3", ".swift", ".kt", ".java", ".gradle", ".podspec", ".xml", ".md", ".yml", ".yaml"}
@@ -44,6 +46,8 @@ PRIVATE_DIRS = {"data", "tli_data", "vault_data", "vault", "memory", "models", "
 PRIVATE_FILES = {"active_model.json", "devices.json", "tli_model_config.json", "vault_meta.json", "credentials.json", "node_identity.json", "tli_pin.json", "tli_system_profile.json", "conversations.json", "vault_sessions.json", "startup.json", "printers_snmp.json", "secrets.json", "secrets.yaml", "secrets.yml", "credentials.yaml", "credentials.yml", "id_rsa", "id_ed25519"}
 PRIVATE_EXTENSIONS = {".pem", ".key", ".crt", ".pfx", ".p12", ".jks", ".keystore", ".mobileprovision", ".gguf", ".ggml", ".bin", ".safetensors", ".onnx", ".pt", ".pth", ".db", ".sqlite", ".sqlite3", ".enc", ".jsonl", ".log", ".bak", ".tmp", ".zip", ".rar", ".7z", ".gz", ".pyc"}
 RUNTIME_DEV_PREFIXES = ("llama-bench", "llama-batched", "llama-cli", "llama-completion", "llama-fit-params", "llama-gemma", "llama-gguf", "llama-imatrix", "llama-llava", "llama-minicpmv", "llama-mtmd-cli", "llama-perplexity", "llama-quantize", "llama-qwen", "llama-tokenize", "llama-tts", "rpc-server")
+RUNTIME_LICENSE_NAMES = {"LICENSE", "LICENSE-llama.cpp.txt", "LICENSE-jsonhpp.txt",
+                         "LICENSE-cpp-httplib.txt", "LICENSE-LLVM-OpenMP.txt", "RUNTIME-NOTICES.txt"}
 
 
 class SnapshotError(RuntimeError):
@@ -90,13 +94,14 @@ def _file_allowed(rel: Path) -> bool:
     if parts[0] == "backend":
         if parts[1:3] == ("ai", "runtime"):
             return not name.startswith(RUNTIME_DEV_PREFIXES) and (
-                name in {"llama-server", "llama_server"} or suffix in {".exe", ".dll", ".so", ".dylib", ".metal", ".metallib"}
+                name in {"llama-server", "llama_server"} or rel.name in RUNTIME_LICENSE_NAMES
+                or suffix in {".exe", ".dll", ".so", ".dylib", ".metal", ".metallib"}
                 or re.fullmatch(r"lib[\w.-]+\.so(?:\.\d+)+", name) is not None)
         return suffix == ".py" or (len(parts) == 2 and rel.name in BACKEND_FILES) or (
             parts[1:3] in {("ai", "prompts"), ("builder", "prompts")} and suffix == ".txt") or (
             parts[1] == "tests" and suffix in {".json", ".txt", ".html"})
     if parts[0] == "frontend":
-        return suffix in SOURCE_EXTENSIONS or rel.as_posix() in {"frontend/manifest.json", "frontend/history/provenance.json", "frontend/assets/answer-validation.json", "frontend/assets/model-comparison.json", "frontend/assets/model-comparison-anniversary.json", "frontend/tests/fixtures/free-space-api.json", "frontend/tests/fixtures/next-check.json"}
+        return suffix in SOURCE_EXTENSIONS or rel.as_posix() in {"frontend/manifest.json", "frontend/history/provenance.json", "frontend/assets/answer-validation.json", "frontend/assets/model-comparison.json", "frontend/assets/model-comparison-anniversary.json", "frontend/assets/fonts/Inter-LICENSE.txt", "frontend/tests/fixtures/free-space-api.json", "frontend/tests/fixtures/next-check.json"}
     if parts[0] == "mobile":
         if rel.as_posix() in {"mobile/tests/fixtures/case-report-preview.json", "mobile/tests/fixtures/peer-guided-report.json", "mobile/tests/fixtures/next-check.json"}:
             return True

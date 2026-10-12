@@ -145,10 +145,17 @@ def _upsert_peer(peer_id: str, peer_name: str, ip: str, port: int, ai_advertisem
             observed.update({"ai_healthy": ai_advertisement.get("ai_healthy") is True,
                              "has_ai": ai_advertisement.get("has_ai") is True})
         existing["discovery"] = observed
-        # Preserve every prior trust/status/label and reviewed address, even
+        # Discovery names are hints, and may change after first-run setup.
+        # Refresh pending entries so their initial OS hostname does not hide
+        # the name the owner subsequently chose. Reviewed/blocked names keep
+        # their existing meaning until another explicit trust review.
+        # Preserve prior status/labels and every reviewed name/address, even
         # when a beacon claims the same node ID at another IP or listener.
         if not existing.get("peer_trust"):
-            existing.update({"device_id": peer_id, "display_name": existing.get("display_name") or peer_name,
+            display_name = existing.get("display_name") or peer_name
+            if existing.get("status", "pending") == "pending":
+                display_name = peer_name
+            existing.update({"device_id": peer_id, "display_name": display_name,
                              "ip": ip, "tli_port": port, "last_seen": S.now_iso()})
             existing.setdefault("status", "pending")
             existing.setdefault("is_host", False)

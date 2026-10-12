@@ -27,6 +27,7 @@ def manager(tmp_path, monkeypatch):
     monkeypatch.setattr(am, "get_models_dir", lambda: models)
     monkeypatch.setattr(routes, "get_models_dir", lambda: models)
     monkeypatch.setattr(am, "ACTIVE_MODEL_PATH", tmp_path / "active_model.json")
+    monkeypatch.setattr(am, "check_windows_runtime", lambda _path: None)
     mgr = am.BundledAIManager(am.BundledAIConfig(tmp_path, runtime, gguf(models / am.MODEL_PRESETS["standard"]["filename"])))
     mgr._active_preset = "standard"
     monkeypatch.setattr(am.BundledAIManager, "get", classmethod(lambda cls: mgr))
@@ -322,6 +323,38 @@ def test_unowned_runtime_port_is_not_reused_for_candidate(manager, monkeypatch):
     monkeypatch.setattr(am, "_is_port_open", lambda *a: True)
     monkeypatch.setattr(am.subprocess, "Popen", lambda *a, **kw: pytest.fail("Must not launch into occupied port"))
     assert manager._start_runtime() is False
+
+
+def test_broken_optional_runtime_does_not_spawn_or_repeat_automatic_attempts(manager, monkeypatch):
+    calls = []
+    def unavailable(path):
+        calls.append(path)
+        raise am.RuntimeUnavailable("Synthetic loader dependency missing")
+    monkeypatch.setattr(am, "check_windows_runtime", unavailable)
+    monkeypatch.setattr(am.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("Do not spawn a failed runtime"))
+    before = am.ACTIVE_MODEL_PATH.read_bytes()
+    assert manager._start_runtime() is False
+    assert manager._manual_failure is True and manager.is_healthy() is False
+    assert manager._start_runtime() is False
+    assert calls == [manager.cfg.runtime_path]
+    assert am.ACTIVE_MODEL_PATH.read_bytes() == before
+
+
+def test_explicit_activation_retries_runtime_after_in_memory_failure(manager, monkeypatch):
+    manager._manual_failure = True
+    calls = []
+    def repaired(path):
+        calls.append(path)
+    monkeypatch.setattr(am, "check_windows_runtime", repaired)
+    monkeypatch.setattr(am, "_is_port_open", lambda *_args: False)
+    monkeypatch.setattr(am, "_assign_to_win32_job", lambda *_args: None)
+    monkeypatch.setattr(am.subprocess, "Popen", lambda *_args, **_kwargs: SimpleNamespace(pid=123, poll=lambda: None))
+    monkeypatch.setattr(manager, "start", lambda: am.BundledAIManager.start(manager))
+    monkeypatch.setattr(manager, "is_healthy", lambda: manager._transition)
+    result = manager.switch_model("standard")
+    assert result["ok"] is True and result["healthy"] is True
+    assert calls == [manager.cfg.runtime_path]
+    assert manager._manual_failure is False
 
 
 def test_optional_catalogue_preserves_defaults_and_pins_publisher_files():

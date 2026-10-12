@@ -30,8 +30,10 @@ import tli_state as S
 
 
 def _validate_startup():
+    from update_install import require_completed_update
     from startup_config import resolve, local_only
     from security_state import validate_existing_security
+    require_completed_update(Path(S.BASE_DIR))
     settings = resolve(S.BASE_DIR)
     validate_existing_security()
     if settings["configured"] and not local_only(settings["effective_next"]["host"]) and not S.load_pin_config()["enabled"]:
@@ -248,6 +250,7 @@ except Exception:
 # --- New split routers ---
 from routers.vault_routes import router as vault_router
 from routers.mesh_routes import router as mesh_router
+from routers.peer_pairing_routes import router as peer_pairing_router
 from routers.chat_routes import router as chat_router
 from routers.system_routes import router as system_router
 from routers.file_routes import router as file_router
@@ -274,6 +277,7 @@ app.include_router(satellite_router)
 app.include_router(hub_router)
 app.include_router(federation_router)
 app.include_router(mesh_router)
+app.include_router(peer_pairing_router)
 app.include_router(chat_router)
 app.include_router(system_router)
 app.include_router(file_router)

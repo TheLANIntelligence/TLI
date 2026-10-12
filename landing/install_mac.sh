@@ -19,6 +19,8 @@ case "$mac_arch" in
     x86_64) (( 10#$mac_major > 13 || (10#$mac_major == 13 && 10#$mac_minor >= 3) )) || { printf 'This release requires macOS 13.3 or newer on Intel.\n' >&2; exit 1; } ;;
     *) printf 'This release supports Apple Silicon and Intel Macs.\n' >&2; exit 1 ;;
 esac
+# An unrelated Python environment must not interfere with interpreter detection.
+unset PYTHONHOME PYTHONPATH
 PYTHON=""
 for candidate in python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 \
         /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do
@@ -32,7 +34,6 @@ if [ -z "$PYTHON" ]; then
     printf 'Install Python 3.10 or newer from https://www.python.org/downloads/ and run this installer again.\n' >&2
     exit 1
 fi
-unset PYTHONHOME PYTHONPATH
 "$PYTHON" - <<'TLI_INSTALLER_PY'
 import hashlib
 import json
@@ -41,39 +42,57 @@ import re
 import shlex
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import urllib.parse
-import urllib.request
 import zipfile
 
 MANIFEST_URL = "https://thelanintelligence.com/downloads.json"
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_EXTRACTED_BYTES = 1024 * 1024 * 1024
+CURL = "/usr/bin/curl"
 REQUIRED = {"TLI_Start.command", "TLI_Start.sh", "backend/main.py", "backend/requirements.txt", "frontend/index.html"}
 EXECUTABLES = {"TLI_Start.command", "TLI_Start.sh",
+               "TLI_Update.command", "TLI_Update.sh", "Uninstall_TLI.command", "Uninstall_TLI.sh",
                "backend/ai/runtime/macos-arm64/llama-server", "backend/ai/runtime/macos-x64/llama-server"}
-
-
-class HTTPSRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, message, headers, newurl):
-        if urllib.parse.urlsplit(newurl).scheme != "https":
-            raise ValueError("An HTTPS download tried to redirect to an insecure address.")
-        return super().redirect_request(request, fp, code, message, headers, newurl)
 
 
 def download(url, destination, limit):
     if urllib.parse.urlsplit(url).scheme != "https":
         raise ValueError("Downloads must use HTTPS.")
-    opener = urllib.request.build_opener(HTTPSRedirects())
-    request = urllib.request.Request(url, headers={"User-Agent": "TLI-macOS-installer"})
-    with opener.open(request, timeout=60) as response, destination.open("xb") as output:
-        total = 0
-        while chunk := response.read(1024 * 1024):
-            total += len(chunk)
-            if total > limit:
-                raise ValueError("The download exceeds this installer's size limit.")
-            output.write(chunk)
+    # Use macOS's verified HTTPS transport, just like the command that fetched
+    # this script. A fresh python.org installation may not have its separate
+    # certificate bundle yet. Never disable certificate or redirect checks.
+    command = [CURL, "--disable", "--fail", "--silent", "--show-error", "--location",
+               "--proto", "=https", "--proto-redir", "=https",
+               "--connect-timeout", "20", "--max-time", "600",
+               "--user-agent", "TLI-macOS-installer", "--", url]
+    created = False
+    try:
+        with tempfile.TemporaryFile() as errors, destination.open("xb") as output:
+            created = True
+            with subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.PIPE, stderr=errors) as process:
+                try:
+                    total = 0
+                    while chunk := process.stdout.read(1024 * 1024):
+                        total += len(chunk)
+                        if total > limit:
+                            raise ValueError("The download exceeds this installer's size limit.")
+                        output.write(chunk)
+                    if process.wait(timeout=5) != 0:
+                        errors.seek(0)
+                        detail = errors.read(2000).decode("utf-8", errors="replace").strip()
+                        raise RuntimeError("The secure download failed. " + detail)
+                except BaseException:
+                    process.kill()
+                    process.wait()
+                    raise
+    except BaseException:
+        if created:
+            destination.unlink(missing_ok=True)
+        raise
 
 
 def validate_manifest(manifest):

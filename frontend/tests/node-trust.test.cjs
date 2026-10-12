@@ -14,7 +14,7 @@ const card = (capabilities = ['inference_v1'], values = {}) => ({
 });
 
 function fixture() {
-  const ids = {}, events = {}, calls = [], created = [];
+  const ids = {}, events = {}, calls = [], setupCalls = [], created = [];
   const document = { hidden: false, activeElement: null };
   const walk = node => node.children.flatMap(child => [child, ...walk(child)]);
   function node(tag) {
@@ -27,6 +27,7 @@ function fixture() {
       querySelector(selector) { return walk(this).find(child => child.tag === selector); },
     };
     Object.defineProperty(el, 'id', { get() { return Object.keys(ids).find(key => ids[key] === el); }, set(value) { ids[value] = el; } });
+    Object.defineProperty(el, 'isConnected', { get() { return el === document.body || !!document.body && walk(document.body).includes(el); } });
     created.push(el); return el;
   }
   document.body = node('body'); document.createElement = node; document.getElementById = id => ids[id];
@@ -34,15 +35,27 @@ function fixture() {
   const window = { addEventListener: (name, fn) => (events[name] ||= []).push(fn), dispatchEvent: event => emit(event.type),
     TLIRelease: { async requireCapability() {} } };
   let respond = async call => ({ card: call.body.card, grants: call.body.grants, review_id: 'review-synthetic' });
+  const ownCard = card(hostCapabilities, { node_id: 'synthetic-host', name: 'This computer',
+    origin: 'https://192.168.1.20:8000', identity_fingerprint: 'aaaa:bbbb:cccc:dddd:eeee:ffff:0000:1111' });
   const context = vm.createContext({ window, document, meshUiLocked: false, meshUiEpoch: 0, meshDirectoryCache: null,
+    AbortController, URL, setTimeout, clearTimeout,
     CustomEvent: class { constructor(type) { this.type = type; } }, refreshMeshNodeAndMaybeDirectory: async () => {},
-    fetch: async (url, options) => { const call = { url, body: JSON.parse(options.body) }; calls.push(call); const data = await respond(call);
+    fetch: async (url, options = {}) => {
+      if (url === '/mesh/trust/setup') {
+        assert.equal(options.method, 'GET'); assert.equal(options.body, undefined);
+        setupCalls.push({ url, method: options.method });
+        return { ok: true, status: 200, json: async () => ({ ok: true, ready: true, code: 'ready', reason: null,
+          node: { id: ownCard.node_id, name: ownCard.name }, origins: [ownCard.origin], selected_origin: ownCard.origin, card: ownCard }) };
+      }
+      assert.ok(['/mesh/trust/preview', '/mesh/trust/approve'].includes(url), 'No peer probes or inference requests are permitted');
+      assert.equal(options.method, 'POST');
+      const call = { url, body: JSON.parse(options.body) }; calls.push(call); const data = await respond(call);
       return { ok: !data.status || data.status < 400, status: data.status || 200, json: async () => data }; },
   });
   vm.runInContext(source, context); window.TLIPeerTrust.open();
   const find = (tag, text) => walk(document.body).find(el => el.tag === tag && el.textContent === text);
   const input = () => walk(document.body).find(el => el.tag === 'label' && el.children[0]?.textContent === 'Paste the other computer’s public card')?.children[1];
-  return { ids, calls, created, document, window, context, emit, input,
+  return { ids, calls, setupCalls, ownCard, created, document, window, context, emit, input,
     respond: fn => { respond = fn; }, button: text => find('button', text),
     checks: () => walk(document.body).filter(el => el.tag === 'input' && el.type === 'checkbox'),
     text: () => walk(document.body).map(el => el.textContent).join('\n'),
@@ -52,8 +65,12 @@ function fixture() {
   };
 }
 
-test('opening and pasting a Node card never probes and offers only unchecked inference', () => {
+test('opening reads only this host setup; pasting a Node card never probes and offers only unchecked inference', async () => {
   const f = fixture(); assert(f.checks().every(el => el.disabled && !el.checked));
+  await tick();
+  assert.deepEqual(f.setupCalls, [{ url: '/mesh/trust/setup', method: 'GET' }]);
+  assert.equal(f.button('Copy card').disabled, false);
+  assert.match(f.text(), /Public card ready for This computer/);
   f.paste(card());
   assert.deepEqual(f.checks().map(el => [el.value, el.disabled, el.checked]), [
     ['observe', true, false], ['coordinate', true, false], ['messages', true, false], ['inference', false, false],

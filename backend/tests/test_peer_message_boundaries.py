@@ -126,18 +126,16 @@ def test_append_sync_failure_cannot_acknowledge_or_repeat_uncertain_write(peers,
     assert next(iter(ledger.values()))['status']=='started' and encoded==[True]
 
 
-def test_trust_review_binds_actual_bearer_over_cookie_for_same_owner(peers,monkeypatch):
+def test_trust_review_rejects_bearer_even_with_same_owner_browser_cookie(peers,monkeypatch):
     import companion_auth
     monkeypatch.setattr(companion_auth,'credential_owner',lambda value:'owner' if value in ('credential-one','credential-two') else None)
     app=FastAPI();app.include_router(mesh.router);original=S.MESH_DIRECTORY_PATH.read_bytes()
     with TestClient(app,base_url='https://192.168.2.10:8443') as client:
-        first={'Authorization':'Bearer credential-one','Cookie':'tli_session=browser-token'}
-        second={'Authorization':'Bearer credential-two','Cookie':'tli_session=browser-token'}
-        review=client.post('/mesh/trust/preview',json={'card':peers.b,'grants':['observe']},headers=first)
-        assert review.status_code==200,review.text
-        payload={'review_id':review.json()['review_id'],'identity_fingerprint':peers.b['identity_fingerprint'],'certificate_sha256':peers.b['certificate_sha256']}
-        wrong=client.post('/mesh/trust/approve',json=payload,headers=second)
-        assert wrong.status_code==409 and S.MESH_DIRECTORY_PATH.read_bytes()==original
-        first['Cookie']='tli_session=different-ignored-cookie'
-        correct=client.post('/mesh/trust/approve',json=payload,headers=first)
-        assert correct.status_code==200,correct.text
+        for token in ('credential-one', 'credential-two'):
+            headers={'Authorization':'Bearer '+token,'Cookie':'tli_session=browser-token'}
+            review=client.post('/mesh/trust/preview',json={'card':peers.b,'grants':['observe']},headers=headers)
+            assert review.status_code==403,review.text
+            assert review.json()['detail']['code']=='pairing_browser_required'
+            payload={'review_id':'absent','identity_fingerprint':peers.b['identity_fingerprint'],'certificate_sha256':peers.b['certificate_sha256']}
+            assert client.post('/mesh/trust/approve',json=payload,headers=headers).status_code==403
+            assert S.MESH_DIRECTORY_PATH.read_bytes()==original

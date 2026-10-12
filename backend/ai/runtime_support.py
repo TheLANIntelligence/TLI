@@ -7,6 +7,7 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
+from runtime_preflight import suppress_runtime_dialogs
 
 _LOCK = threading.Lock()
 FLAGS = ("--jinja", "--chat-template-kwargs", "--reasoning-budget", "--reasoning-format")
@@ -40,9 +41,10 @@ def runtime_info(path):
 @lru_cache(maxsize=8)
 def _inspect(path, mtime, size, minute):
     def run(flag):
-        result = subprocess.run([path, flag], cwd=str(Path(path).parent), capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=3,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+        with suppress_runtime_dialogs():
+            result = subprocess.run([path, flag], cwd=str(Path(path).parent), capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=3,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
         if result.returncode:
             raise ValueError("Runtime inspection failed")
         return result.stdout + "\n" + result.stderr

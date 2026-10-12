@@ -1,5 +1,7 @@
 """Host-independent package boundary tests; no live application or native runtime."""
 import importlib.util
+import hashlib
+import json
 from pathlib import Path
 import stat
 import zipfile
@@ -10,7 +12,7 @@ import pytest
 spec = importlib.util.spec_from_file_location("desktop_package_verifier", Path(__file__).parents[1] / "verify_desktop_package.py")
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
-VERSION = "1.4.0-beta"
+VERSION = "1.4.1-beta"
 
 
 def test_failed_child_reports_bounded_output_tail():
@@ -70,6 +72,8 @@ def fixture_files(target):
     files["backend/tli_state.py"] = f'TLI_VERSION = "{VERSION}"\n'.encode()
     files["frontend/app.js"] = f'const TLI_VERSION = "{VERSION}";\n'.encode()
     files["frontend/index.html"] = b'<link href="style.css"><script src="app.js"></script>'
+    files["frontend/assets/fonts/InterVariable.woff2"] = b"synthetic bundled font"
+    files["frontend/assets/fonts/Inter-LICENSE.txt"] = b"synthetic bundled font license"
     directories = ["backend/ai/runtime"] if target == "windows" else ["backend/ai/runtime/macos-arm64", "backend/ai/runtime/macos-x64"]
     for directory in directories:
         runtime = "llama_server.exe" if target == "windows" else "llama-server"
@@ -86,6 +90,11 @@ def write_zip(tmp_path, target="windows", changes=None, extra=(), modes=None):
             files.pop(name)
         else:
             files[name] = data
+    manifest = {"schema_version": 1, "version": VERSION, "platform": target, "files": [
+        {"path": name, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+         "mode": 0o755 if name in verifier.PLATFORM_ROOT["macos"] or name.endswith("/llama-server") else 0o644}
+        for name, raw in sorted(files.items())]}
+    files[verifier.MANIFEST_NAME] = json.dumps(manifest).encode()
     archive = tmp_path / "fixture.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
         for name, raw in list(files.items()) + list(extra):
@@ -102,7 +111,9 @@ def write_zip(tmp_path, target="windows", changes=None, extra=(), modes=None):
 def test_complete_inventory_and_fresh_extraction(tmp_path, target):
     archive = write_zip(tmp_path, target)
     inventory = verifier.inspect_archive(archive, target, VERSION)
-    assert inventory["files"] == len(fixture_files(target))
+    assert inventory["files"] == len(fixture_files(target)) + 1
+    assert inventory["release_inventory_verified"] is True
+    assert inventory["release_inventory_files"] == len(fixture_files(target))
     destination = tmp_path / "installation"
     verifier.extract_fresh(archive, destination)
     assert verifier.asset_paths(destination / "frontend") == ["app.js", "index.html", "style.css"]
@@ -142,7 +153,8 @@ def test_private_empty_directory_and_file_directory_collision_rejected(tmp_path)
 
 
 @pytest.mark.parametrize("changes,match", [({"frontend/app.js": b'const TLI_VERSION = "old";'}, "version"),
-    ({"TLI_Bootstrap.ps1": None}, "required"), ({"backend/ai/runtime/LICENSE-llama.cpp.txt": None}, "licensing")])
+    ({"TLI_Bootstrap.ps1": None}, "required"), ({"backend/ai/runtime/LICENSE-llama.cpp.txt": None}, "licensing"),
+    ({"frontend/assets/fonts/Inter-LICENSE.txt": None}, "font licensing")])
 def test_missing_entrypoint_license_or_stale_version_fails(tmp_path, changes, match):
     with pytest.raises(verifier.PackageError, match=match):
         verifier.inspect_archive(write_zip(tmp_path, changes=changes), "windows", VERSION)
@@ -151,9 +163,91 @@ def test_missing_entrypoint_license_or_stale_version_fails(tmp_path, changes, ma
 def test_macos_requires_lf_and_executable_launchers_and_runtime(tmp_path):
     with pytest.raises(verifier.PackageError, match="LF"):
         verifier.inspect_archive(write_zip(tmp_path, "macos", {"TLI_Start.sh": b"#!/bin/bash\r\n"}), "macos", VERSION)
-    for name in ["TLI_Start.command", "backend/ai/runtime/macos-arm64/llama-server"]:
+    for name in sorted(verifier.PLATFORM_ROOT["macos"]) + ["backend/ai/runtime/macos-arm64/llama-server"]:
         with pytest.raises(verifier.PackageError, match="executable"):
             verifier.inspect_archive(write_zip(tmp_path, "macos", modes={name: stat.S_IFREG | 0o644}), "macos", VERSION)
+
+
+@pytest.mark.parametrize("target", ["windows", "macos"])
+def test_update_and_uninstall_launchers_and_guides_are_required(tmp_path, target):
+    required = (verifier.PLATFORM_ROOT[target] | {"backend/update_install.py", "docs/TLI_UPDATES.md", "docs/TLI_UNINSTALL.md"})
+    for name in sorted(required):
+        with pytest.raises(verifier.PackageError, match="required file"):
+            verifier.inspect_archive(write_zip(tmp_path, target, {name: None}), target, VERSION)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "invalid-json", "duplicate-key", "version", "platform", "all-platforms",
+                                      "hash", "size", "duplicate-path", "unlisted", "missing-entry", "permissions"])
+def test_generated_release_inventory_is_validated_before_extraction(tmp_path, mutation):
+    archive = write_zip(tmp_path)
+    with zipfile.ZipFile(archive) as bundle:
+        entries = {info.filename: (info, bundle.read(info)) for info in bundle.infolist()}
+    info, raw = entries[verifier.MANIFEST_NAME]
+    manifest = json.loads(raw)
+    if mutation == "missing":
+        del entries[verifier.MANIFEST_NAME]
+    elif mutation == "invalid-json":
+        entries[verifier.MANIFEST_NAME] = (info, b"not JSON")
+    elif mutation == "duplicate-key":
+        entries[verifier.MANIFEST_NAME] = (info, raw[:-1] + b',"schema_version":1}')
+    elif mutation == "permissions":
+        entry, contents = entries["frontend/app.js"]
+        entry.external_attr = (stat.S_IFREG | 0o755) << 16
+    else:
+        if mutation == "version":
+            manifest["version"] = "older"
+        elif mutation == "platform":
+            manifest["platform"] = "macos"
+        elif mutation == "all-platforms":
+            manifest["platform"] = "all"
+        elif mutation == "hash":
+            manifest["files"][0]["sha256"] = "0" * 64
+        elif mutation == "size":
+            manifest["files"][0]["size"] += 1
+        elif mutation == "duplicate-path":
+            manifest["files"].append(manifest["files"][0])
+        elif mutation == "unlisted":
+            manifest["files"].pop()
+        elif mutation == "missing-entry":
+            manifest["files"].append({"path": "frontend/js/missing.js", "size": 0, "sha256": hashlib.sha256(b"").hexdigest(), "mode": 0o644})
+        entries[verifier.MANIFEST_NAME] = (info, json.dumps(manifest).encode())
+    with zipfile.ZipFile(archive, "w") as bundle:
+        for entry, contents in entries.values():
+            bundle.writestr(entry, contents)
+    with pytest.raises(verifier.PackageError, match="inventory|required file"):
+        verifier.inspect_archive(archive, "windows", VERSION)
+
+
+@pytest.mark.parametrize("target", ["windows", "macos"])
+def test_current_platform_package_survives_safe_source_snapshot(tmp_path, monkeypatch, target):
+    repo = Path(__file__).resolve().parents[2]
+    def load(name, path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    snapshot = load("desktop_snapshot_integration", repo / "scripts/release_snapshot.py")
+    packager = load("desktop_packager_integration", repo / "build_dist.py")
+    assert verifier.PLATFORM_ROOT == packager.PLATFORM_ROOT_FILES
+    assert verifier.PUBLIC_GUIDES == packager.PUBLIC_GUIDES == snapshot.PUBLIC_GUIDES
+    original = tmp_path / "original"
+    original.mkdir()
+    for name, raw in fixture_files(target).items():
+        path = original / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    for name in ("data/private.json", "backend/ai/memory/private.py", "backend/ai/runtime/private-notes.txt", "TLI_RELEASE.json"):
+        path = original / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("PRIVATE_CANARY_DO_NOT_SHIP")
+    frozen = snapshot.create_snapshot(original)
+    monkeypatch.setattr(packager, "ROOT", Path(frozen["snapshot_root"]))
+    archive = Path(frozen["workspace"]) / "desktop.zip"
+    packager.build(archive, platform=target)
+    result = verifier.inspect_archive(archive, target, VERSION)
+    assert result["release_inventory_verified"]
+    with zipfile.ZipFile(archive) as bundle:
+        assert not any(b"PRIVATE_CANARY_DO_NOT_SHIP" in bundle.read(name) for name in bundle.namelist())
 
 
 def test_asset_references_resolve_queries_and_css_but_reject_missing_or_escape(tmp_path):

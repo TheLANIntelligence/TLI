@@ -6,7 +6,7 @@
     ['ai', 'AI & chat', 'Choose your AI, where it runs and how it replies.'],
     ['access', 'Security & connections', 'Protect access and connect this TLI computer to your network or phone.'],
     ['data', 'Saved data & backups', 'Understand, check and back up your saved information.'],
-    ['app', 'App & troubleshooting', 'Updates, licensing and tools for investigating a problem.'],
+    ['app', 'App & troubleshooting', 'Updates, uninstalling, licensing and tools for investigating a problem.'],
   ];
   // Search only stable labels and keywords, never saved values, results or credentials.
   const catalog = [
@@ -28,6 +28,7 @@
     ['data-recovery-settings', 'data', 'Your account on the TLI host', 'recovery backup notes notebook chat history diagnostic reports archive password verify saved data'],
     ['settings-browser-data-card', 'data', 'This browser only', 'legacy history browser preferences export import json clear'],
     ['settings-section-host-lifecycle', 'app', 'This computer · reviewed application control', 'restart quit exit close stop shutdown host application background phone disconnect'],
+    ['settings-section-uninstall', 'app', 'TLI host · removal guidance', 'uninstall remove delete installation computer app program windows saved data backup erase clean'],
     ['settings-section-updates', 'app', 'TLI host', 'software updates version release manifest url automatic startup'],
     ['settings-section-license', 'app', 'TLI host · explicit save', 'license licence pro key activate subscription'],
     ['debug-settings-card', 'app', 'Current browser session', 'debug logs troubleshooting errors download console'],

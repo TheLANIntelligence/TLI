@@ -20,7 +20,7 @@
   <link rel="apple-touch-icon" sizes="512x512" href="/tli-icon-512.png" />
 
   <!-- Load external CSS -->
-  <link rel="stylesheet" href="style.css?v=770eb968cfcd">
+  <link rel="stylesheet" href="style.css?v=3f173c1db51e">
   <link rel="stylesheet" href="themes.css?v=6e9c2a072031">
   <script src="js/theme-catalog.js?v=01787136ac84"></script>
   <script src="/js/premium-presentation.js?v=07021f88a1b9"></script>
@@ -45,10 +45,11 @@
 <link rel="stylesheet" href="saved-places.css?v=3c363c81dcba" />
 <link rel="stylesheet" href="storage-history.css?v=feb554eea0bb" />
 <link rel="stylesheet" href="chat-workspace.css?v=747696557ffa" />
-<link rel="stylesheet" href="settings-workspace.css?v=74b4615f2dea" />
+<link rel="stylesheet" href="settings-workspace.css?v=71d44b19735a" />
 <link rel="stylesheet" href="storage-workspace.css?v=f9b180cec9e6" />
 <link rel="stylesheet" href="network-workspace.css?v=e4f39adb29c2" />
 <link rel="stylesheet" href="peer-transfers.css?v=0e824adf206d" />
+<link rel="stylesheet" href="peer-pairing.css?v=1" />
 <link rel="stylesheet" href="ui-foundation.css?v=e84846edbf95" />
 <link rel="stylesheet" href="theme-library.css?v=24f5ffb7f762" />
 <link rel="stylesheet" href="vault-workspace.css?v=5112506d29fd" />
@@ -77,9 +78,9 @@
 <link rel="stylesheet" href="free-space-workspace.css?v=62c2de842b1d">
 <link rel="stylesheet" href="premium-workspace.css?v=c08fd5030481">
 <link rel="stylesheet" href="premium-chat.css?v=e4e5e90265f1">
-<link rel="stylesheet" href="connected-workspaces.css?v=be27a10b54d8">
+<link rel="stylesheet" href="connected-workspaces.css?v=1ef15498e2d6">
 <link rel="stylesheet" href="header-status.css?v=f75f2cab3d29">
-<link rel="stylesheet" href="onboarding.css?v=176a174d0386">
+<link rel="stylesheet" href="onboarding.css?v=934afebc6cca">
 </head>
 
 <body>
@@ -230,6 +231,14 @@
       <div class="onboarding-topline">
         <span id="onboard-step-count">01 / 05</span>
         <button id="tli-onboard-close" type="button">Finish later</button>
+      </div>
+      <div class="onboard-music" role="group" aria-label="Welcome music">
+        <button id="onboard-music-toggle" type="button" aria-label="Play onboarding music" aria-pressed="false" aria-describedby="onboard-music-status">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l11-2v13M9 8l11-2"/><ellipse cx="6" cy="18" rx="3" ry="2.5"/><ellipse cx="17" cy="16" rx="3" ry="2.5"/></svg>
+          <span><span id="onboard-music-label">Play music</span><small id="onboard-music-status" role="status" aria-live="polite">Your welcome soundtrack</small></span>
+        </button>
+        <div class="onboard-music-volume"><label for="onboard-music-volume">Volume <output id="onboard-music-level" for="onboard-music-volume" aria-hidden="true">25%</output></label><input id="onboard-music-volume" type="range" min="0" max="100" step="1" value="25" aria-valuetext="25 percent"></div>
+        <audio id="onboard-music-audio" src="/assets/tli_intro.mp3" preload="none" aria-hidden="true"></audio>
       </div>
       <div class="onboarding-progress" aria-hidden="true"><div id="tli-onboard-bar"></div></div>
       <div class="onboarding-content">
@@ -488,7 +497,7 @@
         <div class="tli-update-banner-left">
           <span class="tli-update-banner-icon">⬆</span>
           <div>
-            <span class="tli-update-banner-title">TLI update available</span>
+            <span class="tli-update-banner-title" id="tli-update-banner-title">TLI update available</span>
             <span class="tli-update-banner-version" id="tli-update-version"></span>
           </div>
           <button class="tli-update-notes-btn" id="tli-update-notes-btn">What's new</button>
@@ -498,8 +507,9 @@
             <div class="tli-update-progress-bar" id="tli-update-progress-bar"></div>
             <span class="tli-update-progress-label" id="tli-update-progress-label">0%</span>
           </div>
-          <button class="tli-update-btn" id="tli-update-apply-btn">Update Now</button>
-          <button class="tli-update-dismiss-btn" id="tli-update-dismiss-btn">✕</button>
+          <button class="tli-update-btn" id="tli-update-apply-btn">Download update</button>
+          <a class="tli-update-btn" id="tli-update-manual-link" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Get update</a>
+          <button class="tli-update-dismiss-btn" id="tli-update-dismiss-btn" aria-label="Dismiss update banner">✕</button>
         </div>
       </div>
       <!-- Update notes popover -->
@@ -1020,11 +1030,11 @@
     <div>
       <div class="card right-column-card">
         <div class="card-title">How discovery works</div>
-        <div class="card-subtitle">Automatic — no pairing needed.</div>
+        <div class="card-subtitle">Computers appear automatically. Messaging needs review on both computers.</div>
         <ul class="info-list">
-          <li>📡 TLI broadcasts a UDP beacon every 30 s on your LAN.</li>
-          <li>Any TLI on the same network appears here automatically.</li>
-          <li>Presence is live — online if seen within 90 seconds.</li>
+          <li>Select a discovered computer and choose Request connection.</li>
+          <li>Compare the code on both screens and allow messages on each computer.</li>
+          <li>A recent discovery does not confirm messaging permission or delivery.</li>
         </ul>
       </div>
 
@@ -2875,11 +2885,24 @@
                   <p id="tli-host-lifecycle-help" class="small-meta">Available from a local desktop browser on this computer.</p>
                 </div>
               </div>
+              <div class="settings-section" id="settings-section-uninstall">
+                <div class="settings-section-header" role="button" tabindex="0">
+                  <div><div class="settings-section-title">Uninstall TLI</div><div class="settings-section-subtitle">Remove this TLI installation from the computer hosting it.</div></div><span class="settings-section-chevron" aria-hidden="true">▾</span>
+                </div>
+                <div class="settings-section-body">
+                  <p>Uninstall on the computer that runs TLI. A phone or another browser viewing this page is connected to that computer.</p>
+                  <p>Before removing saved data, download and verify your Saved work and Vault backups. Keep those archives and their passwords outside the TLI installation folder. Each backup covers the current account; review other accounts separately.</p>
+                  <div class="button-row"><button id="tli-uninstall-saved-work" class="btn-outline" type="button">Saved work backups</button><button id="tli-uninstall-vault" class="btn-outline" type="button">Vault backups</button></div>
+                  <div class="button-row"><button id="tli-uninstall-show" class="btn-outline" type="button" aria-controls="tli-uninstall-guide" aria-expanded="false">Show uninstall steps</button></div>
+                  <p id="tli-uninstall-status" class="small-meta" role="status" aria-live="polite">View the removal options for this installation before continuing on its host computer.</p>
+                  <div id="tli-uninstall-guide" hidden></div>
+                </div>
+              </div>
               <div class="settings-section collapsed" id="settings-section-updates">
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">Software Updates</div>
-                    <div class="settings-section-subtitle">Check your configured release source. Online sources contact the internet.</div>
+                    <div class="settings-section-subtitle">Download a verified update, then finish installation when you are ready.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2897,6 +2920,28 @@
                       <button class="btn-outline" id="settings-check-update-btn">Check now</button>
                     </div>
                   </div>
+                  <p class="small-meta"><span id="settings-update-platform">Update platform: checking…</span> · <span id="settings-update-checked">Last checked: not yet</span></p>
+                  <p id="settings-update-message" role="status" aria-live="polite"></p>
+                  <div id="settings-update-progress-wrap" hidden>
+                    <progress id="settings-update-progress" max="100" value="0" aria-label="Update download progress"></progress>
+                    <span id="settings-update-progress-label" class="small-meta"></span>
+                  </div>
+                  <div class="button-row">
+                    <button class="btn-outline" id="settings-update-action-btn" type="button" hidden>Download update</button>
+                    <a class="btn-outline" id="settings-update-manual-link" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Download from releases</a>
+                    <button class="btn-outline" id="settings-update-notes-btn" type="button" hidden>What's new</button>
+                  </div>
+                  <div id="settings-update-ready" hidden>
+                    <p>The verified package is ready. Installation has not started.</p>
+                    <ol>
+                      <li>Open the update folder and keep it open.</li>
+                      <li id="settings-update-stop">Finish active work, then choose Quit TLI below and review the confirmation. Stop any optional Host Start helper too. Closing this browser alone does not stop TLI.</li>
+                      <li id="settings-update-installer">Run TLI_Update.bat in that folder.</li>
+                      <li>Review and select your existing TLI installation. After the update finishes, open your normal TLI launcher to prepare dependencies and start TLI.</li>
+                    </ol>
+                    <p id="settings-update-path" class="small-meta" style="overflow-wrap:anywhere"></p>
+                    <button class="btn-outline" id="settings-update-quit-btn" type="button" aria-haspopup="dialog" aria-controls="tli-host-lifecycle-dialog" hidden>Quit TLI…</button>
+                  </div>
                   <details class="tli-release-settings">
                     <summary>Running host &amp; application files</summary>
                     <p id="settings-release-state" role="status">Running application identity has not been checked.</p>
@@ -2904,16 +2949,19 @@
                     <p>These identifiers describe application code and browser assets. They do not identify your saved data or AI model.</p>
                     <button type="button" class="btn-outline" id="settings-release-recheck">Recheck running host</button>
                   </details>
-                  <label class="field-label" for="settings-update-url">Release information URL (advanced)</label>
-                  <div class="settings-url-row">
-                    <input type="text" id="settings-update-url" class="field-input"
-                      placeholder="https://raw.githubusercontent.com/you/tli-releases/main/latest.json" />
-                    <button class="btn-outline" id="settings-update-url-save">Save</button>
-                  </div>
                   <label class="settings-check-label">
-                    <input type="checkbox" id="settings-update-auto-check" checked />
+                    <input type="checkbox" id="settings-update-auto-check" disabled />
                     Check automatically on startup
                   </label>
+                  <p class="small-meta">Checks contact your release source. Downloading and installing always require your action.</p>
+                  <details class="tli-release-settings">
+                    <summary>Advanced update source</summary>
+                    <label class="field-label" for="settings-update-url">Release information URL</label>
+                    <input type="url" id="settings-update-url" class="field-input"
+                      placeholder="https://thelanintelligence.com/downloads.json" />
+                  </details>
+                  <button class="btn-outline" id="settings-update-url-save" type="button" disabled>Save</button>
+                  <p id="settings-update-save-status" class="small-meta" role="status">Loading saved update preferences…</p>
                 </div>
               </div>
 
@@ -3196,7 +3244,7 @@
         <button class="btn-icon" data-close-modal aria-label="Close About TLI">&times;</button>
       </div>
       <div class="modal-body">
-        <p><strong>Version:</strong> <span id="about-version">v1.4.0-beta</span></p>
+        <p><strong>Version:</strong> <span id="about-version">v1.4.1-beta</span></p>
         <p><strong>Purpose:</strong> Your private home console for computers, devices, files and local AI.</p>
         <p><strong>AI:</strong> Bundled local inference, optional LM Studio and connected TLI computers. Check AI &amp; chat settings for current model availability.</p>
         <p><strong>Saved work:</strong> Notes &amp; fixes holds setup details, preferences and past fixes. Vault notes use a separate passphrase.</p>
@@ -3229,7 +3277,7 @@
   <script src="/js/ui-health.js?v=f0512d10910f"></script>
   <script src="/js/local-voice.js?v=23aa2949b2d5"></script>
   <script src="/app.js?v=e1dfcfa79192"></script>
-  <script src="/js/onboarding.js?v=68d899e30edb"></script>
+  <script src="/js/onboarding.js?v=46b9b8dc4a03"></script>
   <script src="/js/lan-inference.js?v=f4d181d981ad"></script>
   <script src="/js/vault.js?v=f12ddafda69f"></script>
   <script src="/js/vault-backups.js?v=a01c7a5a5e84"></script>
@@ -3243,18 +3291,20 @@
   <script src="/js/storage-map.js?v=e0d71a2e9317"></script>
   <script src="/js/visualizer.js?v=eda07c706257"></script>
   <script src="/js/tools.js?v=70a69656ca97"></script>
-  <script src="/js/mesh.js?v=29034c526ff2"></script>
+  <script src="/js/mesh.js?v=6e3ba2be9b12"></script>
+  <script src="/js/peer-pairing.js?v=1"></script>
   <script src="/js/settings.js?v=f8f068e2d980"></script>
   <script src="/js/host-lifecycle.js?v=2832267926fd"></script>
+  <script src="/js/uninstall.js?v=0ba8c5adbe82"></script>
   <script src="/js/home-auto.js?v=29cbf030a921"></script>
   <script src="/js/satellite.js?v=31ccd65094b9"></script>
   <script src="/js/federation.js?v=56198040a905"></script>
   <script src="/js/hub.js?v=b0ad918029b2"></script>
   <script src="/js/tli-apps.js?v=3b2b0820b8bc"></script>
-  <script src="/js/tli-update.js?v=9e03d2ae7afe"></script>
+  <script src="/js/tli-update.js?v=4cb934ba048c"></script>
   <!-- app.js second-pass split (2026-04-11) -->
   <script src="/js/peer-transfers.js?v=a486068529b8"></script>
-  <script src="/js/tli-chat.js?v=39f5d08d7549"></script>
+  <script src="/js/tli-chat.js?v=f6be11e1e2d4"></script>
   <script src="/js/routine-workspace.js?v=1c80b6bd1585"></script>
   <script src="/js/automations.js?v=91f7bcfa81ab"></script>
   <script src="/js/ai-source.js?v=bfd4acaf1dd1"></script>
@@ -3526,7 +3576,7 @@
 <script src="/js/native-companion.js?v=91eaa58e1f45"></script>
 <script src="/js/chat-workspace.js?v=90c2adc4bec8"></script>
 <script src="/js/tli-experience.js?v=98b34d5179ff"></script>
-<script src="/js/settings-workspace.js?v=f895ff0f6054"></script>
+<script src="/js/settings-workspace.js?v=ad50ac7c12cf"></script>
 <script src="js/theme-library.js?v=8594ac9f72d2"></script>
 <script src="/js/storage-workspace.js?v=9b1e04e9e4e3"></script>
 <script src="/js/network-workspace.js?v=4dd891ec2eb7"></script>

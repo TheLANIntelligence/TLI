@@ -145,7 +145,7 @@ def validate_card(value):
         fail(422, "invalid_card", f"The public computer card could not be verified: {exc}")
 
 
-def local_card(address, *, capabilities=None):
+def local_card(address, *, capabilities=None, existing_only=False):
     from tls_cert import certificate_bundle
     capabilities = HOST_CAPABILITIES if capabilities is None else capabilities
     if capabilities not in (HOST_CAPABILITIES, INFERENCE_CAPABILITIES):
@@ -157,14 +157,97 @@ def local_card(address, *, capabilities=None):
         bundle = certificate_bundle(S.TLS_CERT_PATH, S.TLS_KEY_PATH, urlsplit(address).hostname)
     except ValueError as exc:
         fail(409, "certificate_unavailable", str(exc))
-    cfg = S.load_node_config()
+    if existing_only:
+        # Setup is a read: it must not initialize or replace persisted identity.
+        try:
+            cfg = S.read_node_config()
+            identity = node_identity.read_existing(S.DATA_DIR)
+        except S._security.SecurityStateUnavailable:
+            fail(409, "identity_unavailable", "This computer's saved identity is unavailable. Check TLI's data health before exchanging cards.")
+        if cfg is None or identity is None:
+            fail(409, "identity_unavailable", "This computer's saved identity is unavailable. Start TLI normally before exchanging cards.")
+        public_key, fingerprint = identity["public_key_hex"], identity["fingerprint"]
+    else:
+        cfg = S.load_node_config()
+        public_key, fingerprint = node_identity.public_key_hex(), node_identity.fingerprint()
     card = {"protocol": PROTOCOL, "node_id": cfg.node_id, "name": cfg.node_name,
-            "origin": address, "public_key": node_identity.public_key_hex(),
-            "identity_fingerprint": node_identity.fingerprint(), "certificate_der": bundle["certificate_der"],
+            "origin": address, "public_key": public_key,
+            "identity_fingerprint": fingerprint, "certificate_der": bundle["certificate_der"],
             "certificate_sha256": bundle["fingerprint"], "capabilities": list(capabilities),
             "issued_at": S.now_iso()}
-    card["signature"] = node_identity.sign(canonical(card))
+    card["signature"] = (identity["private_key"].sign(canonical(card)).hex() if existing_only
+                         else node_identity.sign(canonical(card)))
     return card
+
+
+def local_setup(request):
+    """Describe the running listener and its existing public card, without I/O to peers."""
+    from tls_cert import _local_ipv4_addresses, certificate_bundle
+
+    result = {"ok": True, "node": {"id": None, "name": None}, "ready": False,
+              "code": "identity_unavailable", "reason": None, "origins": [],
+              "selected_origin": None, "card": None}
+
+    def unavailable(code, reason):
+        result.update(code=code, reason=reason)
+        return result
+
+    try:
+        cfg = S.read_node_config()
+    except S._security.SecurityStateUnavailable:
+        cfg = None
+    if cfg is None:
+        return unavailable("identity_unavailable", "This computer's saved identity is unavailable. Check TLI's data health before exchanging cards.")
+    result["node"] = {"id": cfg.node_id, "name": cfg.node_name}
+
+    setup_help = ("Open Settings > Security & connections > Phone Companion, expand Review host startup & network settings, "
+                  "then review and save Secure home-network access. Restart TLI normally to apply it.")
+    if not S.TLS_ENABLED:
+        return unavailable("https_required", "This TLI server is running without HTTPS. " + setup_help)
+    bind = getattr(S, "SERVER_BIND_HOST", None)
+    if bind != "0.0.0.0":
+        try:
+            origin(f"https://{bind}:{S.server_port()}")
+        except HTTPException:
+            return unavailable("lan_required", "This TLI server is not listening on a supported private LAN address. " + setup_help)
+
+    candidates = set()
+    for host in _local_ipv4_addresses():
+        if bind != "0.0.0.0" and host != bind:
+            continue
+        try:
+            candidates.add(origin(f"https://{host}:{S.server_port()}"))
+        except HTTPException:
+            continue
+    if not candidates:
+        return unavailable("address_unavailable", "No private LAN IPv4 address is available on this TLI listener. Connect this computer to your home network, then check again.")
+
+    certificate_errors = []
+    for address in sorted(candidates):
+        try:
+            certificate_bundle(S.TLS_CERT_PATH, S.TLS_KEY_PATH, urlsplit(address).hostname)
+            result["origins"].append(address)
+        except (ValueError, OSError) as exc:
+            certificate_errors.append(str(exc))
+    if not result["origins"]:
+        return unavailable("certificate_unavailable", certificate_errors[0])
+
+    selected = result["origins"][0] if len(result["origins"]) == 1 else None
+    if selected is None:
+        # A browser host can select an already enumerated, certificate-covered
+        # address. It can never add a candidate or establish trust.
+        selected = next((value for value in result["origins"]
+                         if urlsplit(value).hostname == request.url.hostname), None)
+    if selected is None:
+        return unavailable("choose_address", "More than one private LAN address is available. Choose the address on the same home network as the other computer.")
+    result["selected_origin"] = selected
+    try:
+        result["card"] = local_card(selected, existing_only=True)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        return unavailable(detail.get("code", "certificate_unavailable"), detail.get("message", str(exc.detail)))
+    result.update(ready=True, code="ready")
+    return result
 
 
 def _credential(request):
@@ -248,7 +331,9 @@ def trusted(device_id, grant=None):
     if not entry:
         fail(404, "peer_missing", "This computer is no longer in the directory.")
     if entry.get("status") != "allowed":
-        fail(403, "peer_not_allowed", "This computer is pending or blocked. No peer request was sent.")
+        if entry.get("status") == "blocked":
+            fail(403, "peer_not_allowed", "This computer is blocked here. Open Computers to review its public trust card and permissions. No peer request was sent.")
+        fail(403, "peer_not_allowed", "This computer is pending review here. Open Computers to review its public trust card and permissions. No peer request was sent.")
     trust = entry.get("peer_trust")
     try:
         if (not isinstance(trust, dict) or not isinstance(trust.get("grants"), list)
@@ -266,6 +351,33 @@ def trusted(device_id, grant=None):
     if grant and grant not in trust.get("grants", []):
         fail(403, "capability_required", "This peer permission has not been reviewed on this computer.")
     return copy.deepcopy(entry), card, digest({"status": entry["status"], "trust": trust})
+
+
+def message_readiness(device_id):
+    """Local permission only; discovery and a local review cannot prove delivery."""
+    with LOCK:
+        try:
+            trusted(device_id, "messages")
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            code = detail.get("code", "review_required")
+            message = detail.get("message", "This computer needs an explicit trust review before messaging.")
+            if code == "peer_not_allowed":
+                entry = S.load_mesh_directory().get(device_id, {})
+                if entry.get("status") == "blocked":
+                    code = "peer_blocked"
+                    message = "Blocked on this computer. Open Computers to review its public trust card and Text messages permission."
+                else:
+                    code = "peer_pending"
+                    message = "Trust review needed on this computer. Open Computers, review its public trust card, and enable Text messages."
+            elif code == "review_required":
+                message = "Its identity, HTTPS certificate, or address needs review here. Open Computers and review its current public trust card with Text messages enabled."
+            elif code == "capability_required":
+                code = "messages_permission_required"
+                message = "Text messages permission has not been reviewed here. Open Computers and review its public trust card with Text messages enabled."
+            return {"available": False, "code": code, "message": message}
+    return {"available": True, "code": "reviewed_locally",
+            "message": "Text messages reviewed on this computer. The other computer must also review this computer and enable Text messages before delivery can succeed."}
 
 
 def capability(device_id):
@@ -444,6 +556,16 @@ def request(device_id, method, path, *, json_body=None, params=None, grant="coor
         fail(409, "peer_changed", "Peer trust changed while waiting. The response was not accepted.")
     if result.status_code == 401:
         fail(409, "peer_review_required", "The other computer did not accept this peer identity. Review both public cards there; your local browser session remains unchanged.")
+    if grant == "messages" and path == "/mesh/chat/receive" and result.status_code in (403, 404, 409):
+        try:
+            detail = result.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        # A 409 capability_required also rejects retired file-message payloads;
+        # that does not mean the recipient lacks text-message permission.
+        if isinstance(detail, dict) and (detail.get("code") in {"peer_missing", "peer_not_allowed", "review_required"}
+                                        or (detail.get("code") == "capability_required" and result.status_code == 403)):
+            fail(409, "peer_message_review_required", "The other computer rejected this computer's trust or Text messages permission. Open Computers on the other computer, review this computer's public trust card, and enable Text messages before deliberately retrying.")
     return result
 
 

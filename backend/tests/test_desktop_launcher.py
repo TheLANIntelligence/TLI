@@ -55,6 +55,29 @@ def test_missing_dependencies_requests_setup_without_launch(worker, monkeypatch,
     assert not stderr
 
 
+def test_optional_local_ai_warning_precedes_verified_ready(worker, monkeypatch, capsys):
+    monkeypatch.setattr(D.L, "launch", lambda *_args, **_kwargs: {
+        "backend_state": "running", "url": "http://127.0.0.1:8000",
+        "runtime_warning": "Local AI needs repair; the TLI workspace is available.",
+    })
+    assert D.main([]) == 0
+    emitted, stderr = events(capsys)
+    assert emitted == [
+        {"event": "warning", "code": "local_ai_unavailable", "message": "Local AI needs repair; the TLI workspace is available."},
+        {"event": "ready", "url": "http://127.0.0.1:8000"},
+    ]
+    assert not stderr
+
+
+def test_optional_warning_does_not_make_an_unverified_backend_ready(worker, monkeypatch, capsys):
+    monkeypatch.setattr(D.L, "launch", lambda *_args, **_kwargs: {
+        "backend_state": "starting", "url": "http://127.0.0.1:8000", "runtime_warning": "Local AI unavailable",
+    })
+    assert D.main([]) == 1
+    emitted, _ = events(capsys)
+    assert len(emitted) == 1 and emitted[0]["event"] == "error"
+
+
 @pytest.mark.parametrize("error", [RuntimeError("Model failed to load."), H.HostControlError(409, "The port belongs to another installation.")])
 def test_failure_reports_detail_once_without_dialog(worker, monkeypatch, capsys, error):
     def fail(root, *, open_browser, progress):

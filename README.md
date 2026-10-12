@@ -11,7 +11,7 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Desktop release: 1.4.0-beta.** Download the prepared
+**Desktop release: 1.4.1-beta.** Download the prepared
 [Windows and macOS packages](https://thelanintelligence.com/download/), then follow
 [START_HERE.md](START_HERE.md). Each includes the current desktop experience and
 its platform's inference runtime; Python dependencies and model weights are
@@ -70,6 +70,23 @@ build the Windows launcher with `powershell -File build_launcher.ps1`.
 The script launchers can prepare dependencies and may offer software downloads;
 complete setup before using TLI offline. Available runtime and device support
 varies by platform.
+
+### Remove TLI
+
+**Windows:** open **Settings → Apps → Installed apps**, find the TLI entry for
+the folder you want to remove, and choose **Uninstall**. Windows 10 calls this
+page **Apps & features**. You can also use **Uninstall TLI** in the Start menu
+or open `Uninstall_TLI.bat` inside that installation. Review the exact folder,
+then choose whether to keep all files or permanently delete the installation,
+including its saved data, Vault and downloaded models. Deleting requires an
+additional confirmation.
+
+Windows setup adds these entries for the current user. For an updated or source
+installation, `TLI_Setup.bat` → **10 Add or repair Windows uninstall entry** adds
+them. Older published packages do not gain the new uninstaller automatically.
+**macOS / Linux:** stop TLI, back up anything you want to keep, then move only its
+installation folder to Trash. See the [removal guide](docs/TLI_UNINSTALL.md) for
+older installations, external files and browser cleanup.
 
 Startup uses the saved address, port and HTTPS settings. The default is local
 access. **Settings → Security & connections** explains secure LAN startup; saving a
@@ -143,6 +160,7 @@ the browser does not update an installed phone app.
 - [Development commands and architecture](AGENTS.md)
 - [Contributing and local checks](CONTRIBUTING.md)
 - [Security reporting](SECURITY.md)
+- [Uninstall TLI and choose what to keep](docs/TLI_UNINSTALL.md)
 
 The frontend is served directly; there is no frontend build step. For backend
 tests, install `backend/requirements-test.txt` into the same virtual environment
@@ -159,6 +177,22 @@ backups in Settings and Vault before moving or removing an installation.
 Windows local Setup can remove its optional sign-in shortcut and stop the helper.
 No production restart, deployment or native app distribution is performed by
 source verification.
+
+## Updating an existing installation
+
+Open **Settings → Software Updates → Check now** to find and prepare an available
+desktop update. Stop TLI and its optional host-start helper, then run
+**TLI_Update.bat** (Windows) or **TLI_Update.command** (Mac) from the separately
+extracted new package. Select your original installation folder and review the
+confirmation. Start TLI again from that original folder or its existing shortcut;
+startup prepares missing dependencies when needed.
+
+The guided updater keeps saved data, settings, models and the Python environment
+in place, verifies the packaged application files, and retains replaced files for
+rollback. Users of older apps can download and extract the new package directly;
+packages without `TLI_RELEASE.json` and the update launcher cannot use this flow.
+See [Updating and recovering TLI](docs/TLI_UPDATES.md), including release-publisher
+requirements. Native phone Companion updates are distributed separately.
 
 TLI is provided under the [MIT license](LICENSE). Third-party dependencies,
 runtimes and model weights retain their own licenses.

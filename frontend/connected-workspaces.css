@@ -225,3 +225,17 @@ html[data-experience='premium'] :is(.network-device-dialog, #panel-files, #panel
   html[data-experience='premium'] #panel-visualizer .fs-observation { grid-template-columns: minmax(0, 1fr); }
   html[data-experience='premium'] #panel-visualizer .fs-observation > details { grid-column: 1; grid-row: auto; margin-top: 8px; }
 }
+/* LAN presence and permission are separate states. Keep review beside the draft. */
+#panel-tli-chat .tli-chat-message-readiness {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+#panel-tli-chat .tli-chat-message-readiness[hidden] { display: none; }
+#panel-tli-chat .tli-chat-message-readiness p { margin: 0 0 8px; }
+#panel-tli-chat .tli-chat-readiness-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+#panel-tli-chat .tli-chat-readiness-actions button { min-height: 34px; font-size: 12px; }
+#panel-tli-chat .tli-chat-buddy-identity { font-size: 10px; color: var(--text-soft); overflow-wrap: anywhere; }

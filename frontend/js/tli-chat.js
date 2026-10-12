@@ -30,6 +30,7 @@
     nodes: [],
 
     threads: new Map(),
+    drafts: new Map(),
     transfers: [],
 
     refreshTimer: null,
@@ -370,13 +371,35 @@
     return peers.map(p => ({
       id:         String(p.id || p.name || "peer"),
       name:       String(p.name || p.id || "Unknown TLI Node"),
-      role:       "TLI Node",
+      role:       p.peer_profile === 'inference_node' ? "AI compute Node" : "TLI computer",
       room:       String(p.ip || ""),
       ip:         String(p.ip || ""),
       port:       Number(p.port || 8000),
       lastSeenMs: p.last_seen ? Date.parse(p.last_seen) : 0,
+      online:     p.online === true,
       status:     p.online ? "online" : "offline",
+      accessStatus: p.status || "pending",
+      trustState: p.trust_state || "review_required",
+      peerProfile: p.peer_profile || "host",
+      messaging: p.messaging || null,
     }));
+  }
+
+  function messagingState(node) {
+    if (!node) return {available: false, code: 'peer_missing', message: 'This computer is no longer in the directory. Refresh its connection before sending.'};
+    if (node.id === '__local_loopback__') return {available: true, code: 'local', message: 'Notes stay on this computer.'};
+    if (!state.lastDirectoryOk) return {available: false, code: 'unavailable', message: 'Message permissions could not be checked. Refresh status before sending. Your draft stays here.'};
+    if (node.peerProfile === 'inference_node') return {available: false, code: 'inference_only', message: 'This TLI Node offers AI compute only. Use its models in Ask TLI.'};
+    if (node.messaging) return {...node.messaging, available: node.messaging.available === true};
+    if (node.accessStatus === 'blocked') return {available: false, code: 'peer_not_allowed', message: 'Access to this computer is blocked here. Review its identity and text-message permission to reconnect.'};
+    if (node.accessStatus !== 'allowed' || node.trustState !== 'verified') return {available: false, code: 'review_required', message: 'Text messages need a trust review here. Both computers must review each other’s identity and text-message permission.'};
+    return {available: false, code: 'permission_unknown', message: 'Text-message permission could not be checked. Update TLI on this computer, then refresh status.'};
+  }
+
+  function reviewComputer(nodeId) {
+    if (_lanLocked) return;
+    if (window.TLIPeerTrust?.open) window.TLIPeerTrust.open({deviceId: nodeId, name: state.rawNodes.find(n=>n.id===nodeId)?.name, purpose: 'messages'});
+    else window.switchPanel?.('panel-mesh');
   }
 
   // -----------------------------
@@ -511,31 +534,8 @@
     if (type === "node_online") {
       const nodeId = evt.node_id;
       if (!nodeId || nodeId === state.localNodeId) return;
-
-      const nodeData = {
-        id: nodeId,
-        name: evt.name || nodeId,
-        ip: evt.ip || "",
-        tli_port: evt.tli_port || 8000,
-        role: evt.role || "TLI Node",
-        room: evt.ip || "LAN",
-        lastSeenMs: Date.now(),
-        status: "online",
-      };
-
-      // Discovery cannot replace a different reviewed identity at the same IP.
-      const existing = state.rawNodes.find(n => n.id === nodeId);
-      if (existing) {
-        Object.assign(existing, nodeData);
-      } else {
-        // Replace loopback placeholder with first real node
-        state.rawNodes = state.rawNodes.filter(n => n.id !== "__local_loopback__");
-        state.rawNodes.push(nodeData);
-      }
-      state.nodes = applyNodeSearch(state.rawNodes);
-      renderBuddyList();
-      renderHeaderLivePill();
-      updateComposerState();
+      // Beacons report presence, not permission. Read the local reviewed state.
+      refreshNodes();
 
     } else if (type === "message_incoming") {
       const fromId = evt.from_id;
@@ -555,17 +555,11 @@
       const nodeId = evt.node_id;
       if (!nodeId) return;
 
-      state.rawNodes = state.rawNodes.filter(n => n.id !== nodeId);
+      const node = state.rawNodes.find(n => n.id === nodeId);
+      if (node) { node.online = false; node.status = 'offline'; }
       state.nodes = applyNodeSearch(state.rawNodes);
-
-      // If the open thread's node went offline, close it
-      if (state.selectedNodeId === nodeId) {
-        state.selectedNodeId = null;
-        stopChatPolling();
-        stopTypingPoll();
-        if (_isMobile()) _setChatMobileView("buddies");
-        renderThread(null);
-      }
+      // Keep the exact recipient, saved history, and draft when presence expires.
+      if (state.selectedNodeId === nodeId) renderThread(nodeId);
 
       renderBuddyList();
       renderHeaderLivePill();
@@ -698,8 +692,8 @@
   // -----------------------------
   async function refreshNodes() {
     if(_lanLocked)return;const epoch=_lanEpoch;
-    // Use /api/lan/peers — works without mesh pairing, deduped by IP, no license gate.
-    // Any TLI on the LAN auto-appears the moment it broadcasts a UDP beacon.
+    // Discovery is automatic; messaging readiness comes from reviewed local state.
+    // Different identities at the same address must remain distinct.
     let lanData = null;
     try {
       lanData = await safeFetchJson("/api/lan/peers");
@@ -710,16 +704,12 @@
     if(!_lanAlive(epoch))return;
     state.lastDirectoryOk = !!(lanData && Array.isArray(lanData.peers));
 
-    const mapped = mapLanPeersToNodes(lanData || {});
+    const mapped = state.lastDirectoryOk ? mapLanPeersToNodes(lanData) : state.rawNodes;
 
     state.rawNodes = mapped;
     state.nodes = applyNodeSearch(mapped);
 
-    // if selected node vanished, reset
-    if (state.selectedNodeId && !state.nodes.some(n => n.id === state.selectedNodeId)) {
-      state.selectedNodeId = null;
-      renderThread(null);
-    }
+    // Keep a selected recipient and its draft if discovery temporarily disappears.
 
     renderBuddyList();
     renderHeaderLivePill();
@@ -788,12 +778,17 @@
       const unreadBadge = unreadCount > 0
         ? `<span class="tli-chat-unread-badge">${unreadCount}</span>`
         : "";
+      const duplicate = state.rawNodes.some(other => other.id !== n.id && (other.name === n.name || (n.ip && other.ip === n.ip)));
+      const access = messagingState(n);
+      const accessLabel = access.available ? 'Messages reviewed here' : n.accessStatus === 'blocked' ? 'Blocked here' : n.peerProfile === 'inference_node' ? 'AI compute only' : 'Review messages';
 
       row.innerHTML = `
         <div class="tli-presence-dot ${presenceClass(n.status)}"></div>
         <div class="tli-chat-buddy-text">
           <div class="tli-chat-buddy-name">${escapeHtml(n.name)}${unreadBadge}</div>
           <div class="tli-chat-buddy-sub">${escapeHtml(`${n.room} · ${n.role}`)}</div>
+          <div class="tli-chat-buddy-sub">${escapeHtml(accessLabel)}</div>
+          ${duplicate ? `<div class="tli-chat-buddy-identity" title="${escapeHtml(n.id)}">ID ${escapeHtml(n.id)}</div>` : ''}
         </div>
         <div class="tli-chat-buddy-actions" aria-label="Node quick actions">
           <div class="tli-chat-buddy-action" title="Open Visualizer" data-action="visualizer">📊</div>
@@ -889,7 +884,7 @@
     title.innerHTML = `<span class="tchat-peer-name">${escapeHtml(peerName)}</span>`;
     if (meta) {
       const dot = `<span class="tchat-status-dot ${isOnline ? "online" : "offline"}"></span>`;
-      const statusText = isOnline ? "Online" : (node?.lastSeenMs ? "Last seen " + _fmtMsgTime(node.lastSeenMs) : "Offline");
+      const statusText = isOnline ? "Seen on LAN" : (node?.lastSeenMs ? "Last seen " + _fmtMsgTime(node.lastSeenMs) : "Offline");
       meta.innerHTML = `${dot}<span class="tchat-status-text">${statusText}</span>`;
     }
 
@@ -1041,14 +1036,47 @@
     const input = $("tli-chat-input");
 
     const hasNode = !!state.selectedNodeId;
+    const node = state.rawNodes.find(n => n.id === state.selectedNodeId);
+    const access = messagingState(node);
 
-    if (shareBtn) shareBtn.disabled = !hasNode;
-    if (sendBtn) sendBtn.disabled = !hasNode;
+    if (shareBtn) shareBtn.disabled = !hasNode || !access.available;
+    if (sendBtn) { sendBtn.disabled = !hasNode || !access.available; sendBtn.title = hasNode && !access.available ? access.message : 'Send message'; }
 
     if (input) {
       input.disabled = !hasNode;
       input.placeholder = hasNode ? "Message… or @ai ask something together" : "Select a reviewed computer to message…";
     }
+    renderMessagingNotice(node, access);
+  }
+
+  function renderMessagingNotice(node, access) {
+    const output = $('tli-chat-thread-output');
+    let notice = $('tli-chat-message-readiness');
+    if (!notice && output?.parentElement) {
+      notice = document.createElement('div'); notice.id = 'tli-chat-message-readiness'; notice.className = 'tli-chat-message-readiness';
+      output.parentElement.insertBefore(notice, output);
+    }
+    if (!notice) return;
+    notice.hidden = !state.selectedNodeId;
+    notice.replaceChildren();
+    if (notice.hidden) return;
+    const message = document.createElement('p'); message.setAttribute('role', 'status');
+    message.textContent = access.available
+      ? `Message permission is reviewed here. ${node?.name || 'The other computer'} must also review ${state.localNodeName}. Delivery is confirmed when you send.`
+      : access.message;
+    notice.appendChild(message);
+    const controls = document.createElement('div'); controls.className = 'tli-chat-readiness-actions';
+    if (!access.available && node?.accessStatus === 'pending' && node.peerProfile !== 'inference_node' && window.TLIPeerPairing) {
+      const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'btn btn-primary'; connect.textContent = 'Request connection';
+      connect.addEventListener('click', () => window.TLIPeerPairing.open({deviceId:node.id,name:node.name})); controls.appendChild(connect);
+    }
+    if (node?.peerProfile !== 'inference_node') {
+      const review = document.createElement('button'); review.type = 'button'; review.className = 'btn btn-outline'; review.textContent = 'Review computer trust';
+      review.addEventListener('click', () => reviewComputer(state.selectedNodeId)); controls.appendChild(review);
+    }
+    const refresh = document.createElement('button'); refresh.type = 'button'; refresh.className = 'btn btn-ghost'; refresh.textContent = 'Refresh status';
+    refresh.addEventListener('click', refreshNodes); controls.appendChild(refresh);
+    notice.appendChild(controls);
   }
 
   function _isMobile() { return window.innerWidth <= 768; }
@@ -1059,6 +1087,11 @@
   }
 
   function openThread(nodeId) {
+    const input = $('tli-chat-input');
+    if (state.selectedNodeId !== nodeId && input) {
+      if (state.selectedNodeId) state.drafts.set(state.selectedNodeId, input.value);
+      input.value = state.drafts.get(nodeId) || '';
+    }
     state.selectedNodeId = nodeId;
     _typingState = false;
     // Clear unread badge for this node
@@ -1076,7 +1109,6 @@
     });
     startTypingPoll(nodeId);
 
-    const input = $("tli-chat-input");
     if (input) input.focus();
   }
 
@@ -1086,6 +1118,7 @@
   async function sendCurrentMessage() {
     const input=$('tli-chat-input'),nodeId=state.selectedNodeId;
     if(_lanLocked||!input||!nodeId)return;
+    if (nodeId !== '__local_loopback__' && !messagingState(state.rawNodes.find(n => n.id === nodeId)).available) { updateComposerState(); return; }
     const text=(input.value||'').trim();if(!text)return;
     if(nodeId==='__local_loopback__'){ensureThread(nodeId).push({kind:'text',from:'me',body:text,ts:nowTs(),delivery:'local'});input.value='';renderThread(nodeId);return;}
     if(/^@ai\b/i.test(text)){await _invokeAiInThread(text,nodeId);return;}
@@ -1104,6 +1137,8 @@
   }
   async function _deliverMessage(msg,nodeId) {
     if(_lanLocked||msg._sending)return false;
+    const access = messagingState(state.rawNodes.find(n => n.id === nodeId));
+    if (!access.available) { msg.delivery = 'failed'; msg.deliveryError = access.message; updateComposerState(); renderThread(nodeId); return false; }
     const epoch=_lanEpoch;msg._sending=true;msg.delivery='pending';msg.deliveryError='';renderThread(nodeId);
     try {
       const r=await fetch('/mesh/chat/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(msg._payload)});
@@ -1112,6 +1147,7 @@
       const data=await r.json();if(!_lanAlive(epoch))return false;
       if(!r.ok||data.delivery!=='acknowledged')throw Error(typeof data.detail==='string'?data.detail:data.detail?.message||'Delivery was not acknowledged.');
       msg.delivery='acknowledged';const input=$('tli-chat-input');if(state.selectedNodeId===nodeId&&input?.value.trim()===msg._payload.body)input.value='';
+      if (state.drafts.get(nodeId)?.trim() === msg._payload.body) state.drafts.delete(nodeId);
       _chatLastTs[msg._payload.thread_id]=Math.max(_chatLastTs[msg._payload.thread_id]||0,msg.ts);return true;
     } catch(e){if(_lanAlive(epoch)){msg.delivery='failed';msg.deliveryError=e.message||'Connection interrupted. No automatic retry.';}return false;}
     finally{msg._sending=false;if(_lanAlive(epoch)&&state.selectedNodeId===nodeId)renderThread(nodeId);}
@@ -1150,7 +1186,11 @@
   function appendDelivery(bubble,m,nodeId){
     if(!m.delivery)return;const status=document.createElement('div');status.className='tchat-ts';
     status.textContent=m.delivery==='pending'?'Sending…':m.delivery==='failed'?'Not acknowledged: '+(m.deliveryError||'Connection interrupted.'):m.delivery==='local'?'Local note':'Delivered to reviewed computer';bubble.appendChild(status);
-    if(m.delivery==='failed'&&m._payload){const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Retry this message';retry.addEventListener('click',()=>_deliverMessage(m,nodeId));bubble.appendChild(retry);}
+    if(m.delivery==='failed'&&m._payload){
+      const access = messagingState(state.rawNodes.find(n => n.id === nodeId));
+      const retry=document.createElement('button');retry.type='button';retry.className='btn btn-outline';retry.textContent='Retry this message';retry.disabled=!access.available;retry.title=access.available?'Send this same message again':access.message;retry.addEventListener('click',()=>_deliverMessage(m,nodeId));bubble.appendChild(retry);
+      const review=document.createElement('button');review.type='button';review.className='btn btn-ghost';review.textContent='Review computer trust';review.addEventListener('click',()=>reviewComputer(nodeId));bubble.appendChild(review);
+    }
   }
 
   function renderAiCard(m) {
@@ -1364,6 +1404,8 @@
     const backBtn = $("tli-chat-back-btn");
     if (backBtn) {
       backBtn.addEventListener("click", () => {
+        if (state.selectedNodeId) state.drafts.set(state.selectedNodeId, $('tli-chat-input')?.value || '');
+        if ($('tli-chat-input')) $('tli-chat-input').value = '';
         state.selectedNodeId = null;
         stopChatPolling();
         _setChatMobileView("buddies");
@@ -1434,13 +1476,15 @@
     if (_panelOpen) resumePanel();
     else if (state.bound) { startBgPoll(); pollBackgroundMessages(); }
   });
+  window.addEventListener('tli-peer-trust-changed', () => { if (_panelVisible()) refreshNodes(); });
   window.addEventListener('beforeunload', () => { _panelOpen = false; pausePanel(); stopBgPoll(); });
   window.addEventListener('tli-session-locked',()=>{
     _lanLocked=true;_lanEpoch++;pausePanel();stopBgPoll();
     if(state.refreshTimer)clearInterval(state.refreshTimer);state.refreshTimer=null;
-    state.threads.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;
+    state.threads.clear();state.drafts.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;
     for(const key of Object.keys(_chatLastTs))delete _chatLastTs[key];
     const out=$('tli-chat-thread-output');if(out)out.replaceChildren();const input=$('tli-chat-input');if(input)input.value='';
+    updateComposerState();
   });
   window.addEventListener('tli-session-unlocked',()=>{
     _lanLocked=false;_lanEpoch++;

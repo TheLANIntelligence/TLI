@@ -42,7 +42,7 @@
     copy('#panel-tli-chat .tli-empty-title', 'No historical downloads');
     copy('#panel-tli-chat .tli-empty-sub', 'Use Encrypted file Inbox for new reviewed transfers.');
     const discovery = document.querySelector('#panel-tli-chat .info-list');
-    if (discovery) { discovery.replaceChildren(...['Discovered computer names and addresses need a separate identity and HTTPS trust review.', 'A computer can remain listed while its current connection is unavailable.', 'Both computers review text-message permission. Failed delivery keeps the draft and offers a deliberate retry.'].map(text => node('li', text))); }
+    if (discovery) { discovery.replaceChildren(...['Select a discovered computer and choose Request connection. Compare the code on both screens and allow messages on each computer.', 'A computer can remain listed while its current connection is unavailable. A familiar name alone does not confirm its identity.', 'Failed delivery keeps the draft and offers a deliberate retry. Manual card review remains available for advanced permissions.'].map(text => node('li', text))); }
     copy('#shelly-discover-btn', 'Find Shelly devices');
     copy('#panel-automations .page-subtitle', 'Build a manual routine, review its exact targets and choose when to run it.');
     for (const id of ['ps-print-status', 'ps-scan-status', 'devices-printers-summary']) byId(id)?.setAttribute('role', 'status');
