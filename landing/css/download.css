@@ -108,6 +108,15 @@
 .email-section form[aria-busy="true"] button { cursor: wait; }
 .email-section .form-noscript { padding: 12px 14px; margin-bottom: 0; background: var(--download-surface); border: 1px solid var(--download-border); border-radius: 8px; }
 .email-section .form-noscript a { color: var(--download-accent); }
+.email-section .email-help { font-size: 12px; margin: 12px 0 0; }
+.email-help a { color: var(--download-accent); }
+.email-honeypot { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); pointer-events: none; }
+.download-challenge { max-width: 100%; margin-top: 16px; }
+.download-challenge:empty { margin-top: 0; }
+.email-verification { border: 1px solid rgba(39,108,65,.3); border-radius: 12px; background: var(--download-surface); padding: 22px; margin-bottom: 25px; }
+.email-verification h3 { font-size: 24px; margin-bottom: 10px; }
+.email-verification .button { width: 100%; margin-top: 16px; min-height: 50px; font-size: 13px; }
+.email-verification[aria-busy="true"] button { cursor: wait; }
 .download-ready { grid-column: 1 / -1; padding: 27px; background: var(--download-surface); border: 1px solid rgba(39,108,65,.3); border-radius: 13px; }
 .download-ready-heading { display: flex; align-items: center; justify-content: space-between; gap: 26px; }
 .download-ready-heading > * { min-width: 0; }

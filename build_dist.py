@@ -147,6 +147,7 @@ SKIP_PATH_CONTAINS: list[str] = [
 # Root-level files to skip (exact filename match only at depth 1)
 SKIP_ROOT_FILES: set[str] = {
     "relay_server.py",          # stale duplicate — real one is backend/relay_server.py
+    "wrangler.toml",           # website hosting only
 }
 
 # Only reviewed, public guides ship. Other documentation stays developer-only.
@@ -184,8 +185,10 @@ def _should_skip(rel: pathlib.Path) -> tuple[bool, str]:
     posix = rel.as_posix().casefold()
     name = rel.name.casefold()
 
-    if name == ".env" or name.startswith(".env."):
+    if name == ".env" or name.startswith(".env.") or name == ".dev.vars" or name.startswith(".dev.vars."):
         return True, "skip-environment"
+    if len(parts) > 1 and parts[0].casefold() in {"website", "functions"}:
+        return True, "website-service"
     if len(parts) == 2 and parts[0] == "docs" and parts[1] in PUBLIC_GUIDES:
         return False, ""
 

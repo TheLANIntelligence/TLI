@@ -64,6 +64,9 @@ htmlcov/
 .env.*
 !.env.example
 !.env.sample
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 credentials.json
 *.p12
 *.pfx
