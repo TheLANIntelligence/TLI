@@ -177,7 +177,7 @@ test('request returns only check-email, stores a random token hash, and records 
   assert.equal(response.status, 202); assert.deepEqual(await response.json(), { status: 'check_email' });
   const sent = f.sent[0]; assert.match(sent.token, /^[a-f0-9]{64}$/);
   assert.equal(sent.email, 'First.Last+beta@googlemail.com');
-  assert.equal(sent.version, '1.4.2-beta'); assert.equal(sent.platform, 'macos');
+  assert.equal(sent.version, '1.4.3-beta'); assert.equal(sent.platform, 'macos');
   const pending = f.db.rows('pending_downloads')[0], rate = f.db.rows('download_rate_events')[0];
   assert.equal(pending.token_hash, tokenHash(sent.token)); assert.notEqual(pending.token_hash, sent.token);
   assert.equal(pending.expires_at - pending.requested_at, 20 * 60_000);
@@ -188,11 +188,11 @@ test('request returns only check-email, stores a random token hash, and records 
   const scanner = await f.handlers.verify(new Request(`${origin}/api/download/verify?token=${sent.token}`), f.env);
   await expectError(scanner, 405, 'invalid_request'); assert.equal(f.db.rows('pending_downloads').length, 1);
   const verified = await f.verify(sent.token);
-  assert.deepEqual(await verified.json(), { status: 'verified', platform: 'macos', version: '1.4.2-beta',
-    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.2-beta/TLI_1.4.2-beta_macOS.zip' });
+  assert.deepEqual(await verified.json(), { status: 'verified', platform: 'macos', version: '1.4.3-beta',
+    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.3-beta/TLI_1.4.3-beta_macOS.zip' });
   assert.equal(f.db.rows('pending_downloads').length, 0);
   const record = f.db.rows('verified_downloads')[0];
-  assert.equal(record.email, sent.email); assert.equal(record.asset_filename, 'TLI_1.4.2-beta_macOS.zip');
+  assert.equal(record.email, sent.email); assert.equal(record.asset_filename, 'TLI_1.4.3-beta_macOS.zip');
   assert.equal(record.requested_at, baseTime); assert.equal(record.verified_at, baseTime);
   await expectError(await f.verify(sent.token), 400, 'invalid_token');
   assert.equal(f.db.rows('verified_downloads').length, 1);
