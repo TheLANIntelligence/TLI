@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, Any
 from urllib.request import Request, urlopen
+from runtime_preflight import RuntimeUnavailable, check_windows_runtime, suppress_runtime_dialogs
 
 LOGGER = logging.getLogger("tli.ai")
 if not LOGGER.handlers:
@@ -517,6 +518,8 @@ class BundledAIManager:
 
     def _start_runtime(self):
         with self._proc_lock:
+            if self._manual_failure and not self._transition:
+                return False
             if self._proc and self._proc.poll() is None:
                 return self.is_healthy()
             if not self.cfg.runtime_path.exists():
@@ -524,6 +527,15 @@ class BundledAIManager:
                 return False
             if not self.cfg.model_path.exists():
                 LOGGER.error(f"[AI] Model file missing: {self.cfg.model_path}")
+                return False
+            try:
+                check_windows_runtime(self.cfg.runtime_path)
+            except RuntimeUnavailable as error:
+                # Keep the workspace available, but avoid repeated automatic
+                # attempts against a known broken optional runtime. Explicit
+                # model activation clears this latch and retries after repair.
+                self._manual_failure = True
+                LOGGER.error("[AI] Local AI unavailable: %s", error)
                 return False
 
             # Read ctx_size from preset if available
@@ -570,13 +582,14 @@ class BundledAIManager:
             if _is_port_open(self.cfg.host, self.cfg.port):
                 LOGGER.error("AI runtime port is occupied by an unowned process")
                 return False
-            self._proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.cfg.runtime_path.parent),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            )
+            with suppress_runtime_dialogs():
+                self._proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(self.cfg.runtime_path.parent),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.STDOUT,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
             self._text_capacity_launch = {"process": self._proc, "context_tokens": ctx,
                                           "model": self._active_preset, "model_path": str(self.cfg.model_path)}
             self._proc_job_binding = _assign_to_win32_job(self._proc)

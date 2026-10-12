@@ -173,6 +173,8 @@ def test_launch_records_binding_for_the_exact_popen_instance(tmp_path, monkeypat
     model.write_text("synthetic")
     instance = manager.BundledAIManager(manager.BundledAIConfig(tmp_path, runtime, model))
     process = Child()
+    # Preflight is tested separately; this fake models only the owned runtime.
+    monkeypatch.setattr(manager, "check_windows_runtime", lambda _path: None)
     monkeypatch.setattr(manager.subprocess, "Popen", lambda *a, **kw: process)
     bindings = []
     def assign(value):

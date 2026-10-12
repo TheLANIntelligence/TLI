@@ -20,6 +20,102 @@
   let selectedModel = '', presets = [], ai = null, download = null, destination = '', aiOperation = false, refreshSerial = 0;
   const isolated = new Map();
   let resume;
+  const MUSIC = 'tli_onboard_music_v1';
+  let music, musicMuted = false, musicVolume = .25, musicState = 'idle';
+  let musicEligible = false, musicAttempted = false, musicSuspended = false, musicPending = false, musicRequest = 0;
+
+  function saveMusic() { write(localStorage, MUSIC, JSON.stringify({muted:musicMuted, volume:musicVolume})); }
+  function musicAllowed() { return musicEligible && open && !locked && !document.hidden; }
+  function musicControls() {
+    if (!music) return;
+    const playing = musicState === 'playing' && !music.paused && !musicMuted && musicVolume > 0 && musicAllowed();
+    const active = musicPending || (!music.paused && musicAllowed());
+    const text = musicMuted || musicVolume === 0 ? 'Music is off' : {
+      idle:'Your welcome soundtrack', starting:'Starting your soundtrack…', playing:'Welcome soundtrack · playing',
+      buffering:'Waiting for the soundtrack…', blocked:'Press play to listen', paused:'Paused · press play to resume',
+      ended:'Soundtrack finished', error:'Music unavailable · try again',
+    }[musicState];
+    $('onboard-music-toggle').setAttribute('aria-pressed', String(playing));
+    $('onboard-music-toggle').setAttribute('aria-label', active ? 'Pause onboarding music' : 'Play onboarding music');
+    $('onboard-music-label').textContent = active ? 'Pause music' : musicState === 'ended' ? 'Replay music' : 'Play music';
+    $('onboard-music-status').textContent = text || 'Your welcome soundtrack';
+    $('onboard-music-toggle').disabled = locked || !musicEligible;
+    $('onboard-music-volume').disabled = locked || !musicEligible;
+    const percent = Math.round(musicVolume * 100);
+    $('onboard-music-volume').value = String(percent);
+    $('onboard-music-volume').setAttribute('aria-valuetext', `${percent} percent`);
+    $('onboard-music-level').textContent = `${percent}%`;
+  }
+  function pauseMusic() {
+    if (!music) return;
+    musicSuspended = true; musicRequest++; musicPending = false;
+    music.pause();
+    if (musicState !== 'ended') musicState = 'paused';
+    musicControls();
+  }
+  function playMusic({gesture = false, explicit = false} = {}) {
+    if (!music || !musicAllowed() || (musicSuspended && !gesture)) return;
+    if (!explicit && (musicMuted || musicVolume === 0 || musicState === 'ended')) return;
+    if (explicit) {
+      musicMuted = false;
+      if (musicVolume === 0) musicVolume = .25;
+      if (music.ended) music.currentTime = 0;
+      saveMusic();
+    }
+    music.muted = musicMuted; music.volume = musicVolume;
+    if (!music.paused || musicPending) { musicControls(); return; }
+    musicSuspended = false; musicPending = true; musicState = 'starting';
+    const ticket = ++musicRequest;
+    musicControls();
+    const failed = error => {
+      if (ticket !== musicRequest) return;
+      musicPending = false;
+      musicState = error?.name === 'NotAllowedError' ? 'blocked' : 'error';
+      musicControls();
+    };
+    // Keep play() in the click/input call stack, before setup's first await.
+    try {
+      if (music.error) music.load();
+      const attempt = music.play();
+      Promise.resolve(attempt).then(() => {
+        if (ticket !== musicRequest) return;
+        musicPending = false;
+        if (!musicAllowed() || musicMuted || musicVolume === 0 || musicSuspended) { pauseMusic(); return; }
+        musicState = music.paused ? 'paused' : 'playing'; musicControls();
+      }, failed);
+    } catch (error) { failed(error); }
+  }
+  function initMusic() {
+    music = $('onboard-music-audio'); if (!music) return;
+    try {
+      const saved = JSON.parse(read(localStorage, MUSIC) || '{}');
+      musicMuted = saved.muted === true;
+      if (typeof saved.volume === 'number' && Number.isFinite(saved.volume)) musicVolume = Math.min(1, Math.max(0, saved.volume));
+    } catch {}
+    music.volume = musicVolume; music.muted = musicMuted;
+    $('onboard-music-toggle').addEventListener('click', () => {
+      if (musicPending || !music.paused) { musicMuted = true; music.muted = true; saveMusic(); pauseMusic(); }
+      else playMusic({gesture:true, explicit:true});
+    });
+    $('onboard-music-volume').addEventListener('input', event => {
+      musicVolume = Number(event.target.value) / 100;
+      musicMuted = musicVolume === 0; music.volume = musicVolume; music.muted = musicMuted; saveMusic();
+      if (musicMuted) pauseMusic(); else playMusic({gesture:true, explicit:true});
+      musicControls();
+    });
+    music.addEventListener('playing', () => {
+      if (!musicAllowed() || musicMuted || musicVolume === 0 || musicSuspended) { pauseMusic(); return; }
+      musicState = 'playing'; musicControls();
+    });
+    music.addEventListener('pause', () => {
+      if (!musicPending && !['error','blocked','ended'].includes(musicState)) musicState = 'paused';
+      musicControls();
+    });
+    music.addEventListener('waiting', () => { if (musicAllowed() && !music.paused) {musicState = 'buffering'; musicControls();} });
+    music.addEventListener('ended', () => {musicRequest++; musicPending = false; musicState = 'ended'; musicControls();});
+    music.addEventListener('error', () => {musicRequest++; musicPending = false; musicState = 'error'; musicControls();});
+    musicControls();
+  }
 
   async function request(url, body, timeout = 15000) {
     const controller = new AbortController(), alarm = setTimeout(() => controller.abort(), timeout);
@@ -51,6 +147,7 @@
     $('tli-onboard-back').disabled = step === 0 || busy || initializing || locked;
     $('tli-onboard-close').disabled = busy || initializing || locked;
     overlay.setAttribute('aria-busy', String(busy || initializing));
+    musicControls();
   }
   function isolate(value) {
     for (const child of document.body.children) {
@@ -70,6 +167,7 @@
   }
   function hide() {
     open = false; epoch++; clearTimeout(timer); remember();
+    pauseMusic();
     overlay.classList.add('hidden'); overlay.setAttribute('aria-hidden', 'true');
     delete document.documentElement.dataset.tliOnboard; isolate(false);
     document.body.style.overflow = previousOverflow || '';
@@ -269,6 +367,7 @@
   async function next() {
     if (busy || initializing || locked) return;
     if (blocked) { await initialize(true); return; }
+    if (step < 4) playMusic({gesture:true});
     let ticket = epoch;
     busy = true; controls(); status();
     try {
@@ -357,7 +456,9 @@
       const node = await request('/agent/ping').catch(() => null);
       savedName = typeof node?.node_name === 'string' ? node.node_name : '';
       if (!name) name = savedName;
+      musicEligible = true;
       show(); render();
+      if (!musicAttempted && !musicSuspended) { musicAttempted = true; playMusic(); }
     } catch (error) {
       show(); render(); blocked = true;
       status(error.message, true); $('tli-onboard-next').textContent = 'Try again';
@@ -371,6 +472,7 @@
   function init() {
     overlay = $('tli-onboard'); if (!overlay) return;
     locked = $('tli-lock-screen')?.getAttribute('aria-hidden') === 'false';
+    initMusic();
     $('tli-onboard-next').addEventListener('click', next);
     $('tli-onboard-back').addEventListener('click', () => {if (!busy && !initializing && !locked && step > 0) {step--; render();}});
     $('tli-onboard-close').addEventListener('click', pause);
@@ -389,6 +491,7 @@
     });
     window.addEventListener('tli-session-locked', () => {
       locked = true; epoch++; clearTimeout(timer); overlay.inert = true;
+      pauseMusic();
       overlay.querySelectorAll('input[type="password"]').forEach(input => {input.value = '';}); controls();
     });
     window.addEventListener('tli-session-unlocked', () => {
@@ -397,9 +500,10 @@
       if (open && !busy && !initializing) { if (step === 3 || step === 4) refreshAI(); $('tli-onboard-step-title').focus({preventScroll:true}); }
     });
     document.addEventListener('visibilitychange', () => {
+      if (document.hidden) pauseMusic();
       clearTimeout(timer); if (!document.hidden && open && !locked && !busy && (step === 3 || step === 4)) refreshAI();
     });
-    window.addEventListener('pagehide', () => {clearTimeout(timer); epoch++;});
+    window.addEventListener('pagehide', () => {pauseMusic(); clearTimeout(timer); epoch++;});
     window.addEventListener('pageshow', event => {if (event.persisted && open && !locked && (step === 3 || step === 4)) refreshAI();});
     window.addEventListener('tli:theme-change', syncThemes);
     window.TLIOnboarding = {open: () => launch(false), replay: () => launch(true)};

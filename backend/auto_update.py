@@ -1,341 +1,337 @@
-# backend/auto_update.py
-# TLI Auto-Update Engine
-#
-# Checks a developer-controlled manifest URL for newer versions.
-# Downloads + verifies SHA-256 + extracts frontend files atomically.
-#
-# Update manifest format (latest.json hosted by developer):
-# {
-#   "version":        "1.0.2",
-#   "released":       "2026-04-20",
-#   "notes":          "What changed in this release",
-#   "download_url":   "https://..../TLI_dist_1.0.2.zip",
-#   "sha256":         "abcdef1234...",
-#   "frontend_only":  true       -- if false, backend restart is required
-# }
-#
-# Safety model:
-#   - Zip is downloaded to data/updates/ before anything is touched.
-#   - SHA-256 is verified before a single file is overwritten.
-#   - Files are extracted to a temp dir, then moved over atomically.
-#   - If anything fails mid-way, original files are intact.
+"""Prepare verified desktop updates without replacing running application code.
 
+The package's local updater installs after TLI is closed. Current version always
+describes this process, never a staged download.
+"""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from enum import Enum
 import hashlib
 import json
 import os
+from pathlib import Path
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
 import urllib.request
-import zipfile
-from enum import Enum
-from pathlib import Path
-from typing import Optional
+from urllib.parse import urlsplit
+import uuid
 
 import tli_state as S
+from process_utils import hidden_process_kwargs
 
-# ── Public state ─────────────────────────────────────────────────────
-class UpdateState(str, Enum):
-    IDLE        = "idle"
-    CHECKING    = "checking"
-    AVAILABLE   = "available"
-    DOWNLOADING = "downloading"
-    VERIFYING   = "verifying"
-    APPLYING    = "applying"
-    UP_TO_DATE  = "up_to_date"
-    ERROR       = "error"
-    DONE        = "done"
-
-_lock  = threading.Lock()
-_state = UpdateState.IDLE
-_info: dict = {}      # latest manifest fields
-_error: str = ""
-_progress: int = 0    # 0-100 during download
-
-def get_status() -> dict:
-    with _lock:
-        settings = _load_settings()
-        return {
-            "state":            _state.value,
-            "current_version":  S.TLI_VERSION,
-            "latest_version":   _info.get("version"),
-            "notes":            _info.get("notes"),
-            "released":         _info.get("released"),
-            "frontend_only":    _info.get("frontend_only", True),
-            "progress":         _progress,
-            "error":            _error,
-            "update_url":       settings.get("update_url", ""),
-            "auto_check":       settings.get("auto_check", True),
-        }
-
-# ── Settings ─────────────────────────────────────────────────────────
+DEFAULT_UPDATE_URL = "https://thelanintelligence.com/downloads.json"
+MANUAL_URL = "https://github.com/TheLANIntelligence/TLI/releases"
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 _SETTINGS_FILE = Path(S.DATA_DIR) / "update_settings.json"
 
-def _load_settings() -> dict:
+
+class UpdateState(str, Enum):
+    IDLE = "idle"
+    CHECKING = "checking"
+    AVAILABLE = "available"
+    DOWNLOADING = "downloading"
+    VERIFYING = "verifying"
+    PREPARING = "preparing"
+    READY = "ready"
+    UP_TO_DATE = "up_to_date"
+    ERROR = "error"
+
+
+_BUSY = {UpdateState.CHECKING, UpdateState.DOWNLOADING, UpdateState.VERIFYING, UpdateState.PREPARING}
+_lock = threading.RLock()
+_state = UpdateState.IDLE
+_info: dict = {}
+_error = ""
+_progress = 0
+_checked_at = None
+_ready_path = ""
+
+
+def _platform_name():
+    return {"win32": "windows", "darwin": "macos"}.get(sys.platform, "linux")
+
+
+def _https_url(value):
+    if not isinstance(value, str) or len(value) > 4096 or any(ord(c) < 33 for c in value):
+        raise ValueError("Use a valid HTTPS release URL.")
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("Update sources and downloads must use HTTPS without credentials or fragments.")
+    return value
+
+
+def _load_settings():
+    defaults = {"update_url": DEFAULT_UPDATE_URL, "auto_check": True}
     try:
-        if _SETTINGS_FILE.exists():
-            return json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
-    except Exception:
+        saved = json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+        if isinstance(saved, dict):
+            if isinstance(saved.get("update_url"), str):
+                defaults["update_url"] = saved["update_url"]
+            if type(saved.get("auto_check")) is bool:
+                defaults["auto_check"] = saved["auto_check"]
+    except (OSError, ValueError):
         pass
-    return {"update_url": "https://thelanintelligence.com/latest.json", "auto_check": True}
+    if defaults["update_url"].rstrip("/") == "https://thelanintelligence.com/latest.json":
+        defaults["update_url"] = DEFAULT_UPDATE_URL
+    return defaults
 
-def save_settings(update_url: str, auto_check: bool = True) -> None:
-    _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_FILE.write_text(
-        json.dumps({"update_url": update_url, "auto_check": auto_check}, indent=2),
-        encoding="utf-8",
-    )
 
-# ── Version comparison ────────────────────────────────────────────────
-def _parse_ver(v: str):
-    """Return (major, minor, patch) tuple for simple comparison.
-    Strips pre-release suffixes like -beta, -alpha, -rc1 before parsing."""
+def _write_json(path, value):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        clean = str(v).strip().lstrip("v")
-        # Drop everything from the first non-numeric, non-dot character
-        # e.g. "1.1-beta" → "1.1", "2.0.1-rc2" → "2.0.1"
-        import re as _re
-        clean = _re.split(r"[^0-9.]", clean)[0].rstrip(".")
-        parts = [int(x) for x in clean.split(".") if x]
-        while len(parts) < 3:
-            parts.append(0)
-        return tuple(parts[:3])
-    except Exception:
-        return (0, 0, 0)
+        temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
-def _is_newer(remote: str, local: str) -> bool:
+
+def save_settings(update_url: str, auto_check: bool = True):
+    if update_url:
+        _https_url(update_url)
+    with _lock:
+        _write_json(_SETTINGS_FILE, {"update_url": update_url, "auto_check": auto_check})
+
+
+def _parse_ver(value):
+    match = re.fullmatch(r"v?(\d+)\.(\d+)(?:\.(\d+))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", str(value))
+    if not match:
+        raise ValueError("The release source has an invalid version.")
+    major, minor, patch, prerelease = match.groups()
+    parts = re.findall(r"\d+|[A-Za-z-]+", prerelease) if prerelease else []
+    suffix = tuple((0, int(p)) if p.isdigit() else (1, p.lower()) for p in parts) if parts else ((2, ""),)
+    return int(major), int(minor), int(patch or 0), suffix
+
+
+def _is_newer(remote, local):
     return _parse_ver(remote) > _parse_ver(local)
 
-# ── Check ─────────────────────────────────────────────────────────────
-def check(update_url: Optional[str] = None) -> dict:
-    """
-    Fetch the remote manifest and compare against current version.
-    Returns the status dict. Safe to call from async context (runs sync).
-    """
-    global _state, _info, _error
 
-    url = update_url or _load_settings().get("update_url", "").strip()
-    if not url:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = "No update URL configured. Set one in Settings → Updates."
-        return get_status()
+def _updates_dir():
+    root = Path(S.BASE_DIR).resolve()
+    updates = Path(S.DATA_DIR).absolute() / "updates"
+    if not updates.is_relative_to(root):
+        raise ValueError("The update staging folder must be inside this TLI installation.")
+    for path in (updates, *updates.parents):
+        if path == root:
+            break
+        if path.exists() and (path.is_symlink() or bool(getattr(path.lstat(), "st_file_attributes", 0) & 0x400)):
+            raise ValueError("The update staging folder cannot use linked directories.")
+    return updates
 
-    with _lock:
-        _state = UpdateState.CHECKING
-        _error = ""
 
-    try:
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": f"TLI/{S.TLI_VERSION}"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            manifest = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = f"Could not reach update server: {e}"
-        return get_status()
-
-    remote_ver = manifest.get("version", "")
-    if not remote_ver:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = "Update manifest missing version field."
-        return get_status()
-
-    with _lock:
-        _info = manifest
-        if _is_newer(remote_ver, S.TLI_VERSION):
-            _state = UpdateState.AVAILABLE
-        else:
-            _state = UpdateState.UP_TO_DATE
-
-    return get_status()
-
-# ── Apply (runs in background thread) ────────────────────────────────
-def apply() -> bool:
-    """
-    Start the download + verify + extract pipeline in a background thread.
-    Returns True if the pipeline was started, False if already in progress.
-    """
-    global _state
-    with _lock:
-        if _state not in (UpdateState.AVAILABLE,):
-            return False
-        _state = UpdateState.DOWNLOADING
-
-    thread = threading.Thread(target=_apply_pipeline, daemon=True)
-    thread.start()
-    return True
-
-def _apply_pipeline() -> None:
-    global _state, _error, _progress
-
-    with _lock:
-        manifest = dict(_info)
-
-    download_url  = manifest.get("download_url", "")
-    expected_sha  = manifest.get("sha256", "")
-    frontend_only = manifest.get("frontend_only", True)
-    version       = manifest.get("version", "unknown")
-
-    if not download_url:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = "Manifest has no download_url."
+def _restore_prepared():
+    global _state, _info, _ready_path
+    if _state != UpdateState.IDLE:
         return
-
-    # ── Ensure updates dir ────────────────────────────────────────
-    updates_dir = Path(S.DATA_DIR) / "updates"
-    updates_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = updates_dir / f"TLI_dist_{version}.zip"
-    tmp_path = zip_path.with_suffix(".zip.tmp")
-
-    # ── Download ──────────────────────────────────────────────────
     try:
-        req = urllib.request.Request(
-            download_url,
-            headers={"User-Agent": f"TLI/{S.TLI_VERSION}"},
-        )
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            total = int(resp.headers.get("Content-Length", 0))
-            downloaded = 0
-            sha = hashlib.sha256()
-            with open(tmp_path, "wb") as f:
-                while True:
-                    chunk = resp.read(65536)
-                    if not chunk:
-                        break
-                    f.write(chunk)
-                    sha.update(chunk)
-                    downloaded += len(chunk)
-                    if total:
-                        with _lock:
-                            _progress = int(downloaded / total * 80)
-    except Exception as e:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = f"Download failed: {e}"
-        _cleanup(tmp_path)
-        return
-
-    # ── Verify SHA-256 ────────────────────────────────────────────
-    with _lock:
-        _state  = UpdateState.VERIFYING
-        _progress = 85
-
-    digest = sha.hexdigest()
-    if expected_sha and digest != expected_sha.lower():
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = f"SHA-256 mismatch. Expected {expected_sha[:16]}…, got {digest[:16]}…"
-        _cleanup(tmp_path)
-        return
-
-    tmp_path.rename(zip_path)
-
-    # ── Extract ───────────────────────────────────────────────────
-    with _lock:
-        _state    = UpdateState.APPLYING
-        _progress = 90
-
-    extract_dir = updates_dir / f"extract_{version}"
-    try:
-        if extract_dir.exists():
-            shutil.rmtree(extract_dir)
-        extract_dir.mkdir(parents=True)
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            members = zf.namelist()
-
-            if frontend_only:
-                # Only extract frontend/ entries — no restart needed
-                targets = [m for m in members if m.startswith("frontend/") and not m.endswith("/")]
-            else:
-                # Full update — exclude data/ and __pycache__ to protect user data
-                targets = [
-                    m for m in members
-                    if not m.startswith("data/")
-                    and "__pycache__" not in m
-                    and not m.endswith("/")
-                ]
-
-            for member in targets:
-                zf.extract(member, extract_dir)
-
-        # Move extracted files over the live installation
-        src_root = extract_dir
-        dst_root = Path(S.BASE_DIR)
-        moved = 0
-        for src in src_root.rglob("*"):
-            if src.is_dir():
-                continue
-            rel = src.relative_to(src_root)
-            dst = dst_root / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            moved += 1
-
-        shutil.rmtree(extract_dir, ignore_errors=True)
-
-    except Exception as e:
-        with _lock:
-            _state = UpdateState.ERROR
-            _error = f"Extraction failed: {e}"
-        shutil.rmtree(extract_dir, ignore_errors=True)
-        return
-
-    with _lock:
-        _state    = UpdateState.DONE
-        _progress = 100
-        # Bump local version in memory so the banner clears
-        S.TLI_VERSION = version
-
-    S.log_debug("update", "INFO", "Update applied successfully",
-                version=version, files=moved, frontend_only=frontend_only)
-
-    # If a full (non-frontend) update was applied, restart the backend
-    if not frontend_only:
-        _schedule_restart()
-
-def _cleanup(path: Path) -> None:
-    try:
-        if path.exists():
-            path.unlink()
-    except Exception:
+        updates = _updates_dir()
+        receipt_path = updates / "prepared.json"
+        if receipt_path.stat().st_size > 256 * 1024:
+            return
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if not _is_newer(receipt["version"], S.TLI_VERSION):
+            return
+        folder = receipt["folder"]
+        if not re.fullmatch(r"job-[a-f0-9]{32}", folder):
+            return
+        package = updates / folder / "package"
+        if package.resolve() != package or not (package / "TLI_RELEASE.json").is_file():
+            return
+        _info = {"version": receipt["version"], "notes": receipt.get("notes", ""), "can_prepare": True}
+        _ready_path = str(package)
+        _state = UpdateState.READY
+    except (OSError, ValueError, KeyError, TypeError):
         pass
 
-def _schedule_restart() -> None:
-    """Replace the current process with a fresh instance after a short delay."""
-    def _do_restart():
-        time.sleep(2)
-        try:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-        except Exception as e:
-            S.log_debug("update", "ERROR", "Restart failed", error=str(e))
 
-    threading.Thread(target=_do_restart, daemon=True).start()
+def get_status():
+    global _state, _error, _ready_path
+    with _lock:
+        _restore_prepared()
+        if _state == UpdateState.READY:
+            try:
+                package = Path(_ready_path)
+                valid = (package.resolve() == package and package.parent.parent == _updates_dir()
+                         and (package / "TLI_RELEASE.json").is_file())
+            except (OSError, ValueError):
+                valid = False
+            if not valid:
+                _state, _ready_path = UpdateState.ERROR, ""
+                _error = "The prepared update folder is no longer available. Check for updates to download it again."
+        message = _info.get("message", "")
+        if _state == UpdateState.READY:
+            launcher = "TLI_Update.bat" if _platform_name() == "windows" else "TLI_Update.command" if _platform_name() == "macos" else "TLI_Update.sh"
+            message = f"Download verified. Open the update folder, quit TLI, then run {launcher}. Review your existing TLI folder and confirm installation. Open TLI normally afterward."
+        return {
+            "state": _state.value, "current_version": S.TLI_VERSION,
+            "latest_version": _info.get("version"), "notes": _info.get("notes"),
+            "released": _info.get("released"), "frontend_only": False,
+            "progress": _progress, "error": _error, "checked_at": _checked_at,
+            "platform": _platform_name(), "update_method": "guided",
+            "can_prepare": bool(_info.get("can_prepare")),
+            "can_open": _state == UpdateState.READY and bool(_ready_path),
+            "ready_path": _ready_path, "message": message, "manual_url": MANUAL_URL,
+            **_load_settings(),
+        }
 
-# ── Auto-check on startup ─────────────────────────────────────────────
-def auto_check_on_startup() -> None:
-    """
-    Called at TLI startup. Checks for updates in a background thread
-    if auto_check is enabled and an update URL is configured.
-    """
+
+def _manifest_info(manifest):
+    if not isinstance(manifest, dict):
+        raise ValueError("The release source did not return a release object.")
+    version = manifest.get("version")
+    _parse_ver(version)
+    platform = _platform_name()
+    packages = manifest.get("platforms")
+    package = packages.get(platform) if isinstance(packages, dict) else manifest
+    result = {"version": version, "notes": str(manifest.get("notes", ""))[:32000],
+              "released": manifest.get("release_date", manifest.get("released")), "can_prepare": False}
+    if not isinstance(package, dict):
+        result["message"] = "No update package is published for this computer. See the download page for supported installations."
+        return result
+    if getattr(sys, "frozen", False):
+        result["message"] = "This installation uses a legacy native backend. Download a current package and follow its setup and update instructions."
+        return result
+    if package.get("updater", manifest.get("updater")) != "guided-v1" or manifest.get("frontend_only") is True:
+        result["message"] = "This release needs a manual download. Use an updater-equipped release to keep your existing TLI folder and saved data."
+        return result
+    url = _https_url(package.get("url", package.get("download_url")))
+    digest = package.get("sha256")
+    if not isinstance(digest, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", digest):
+        raise ValueError("This update has no valid SHA-256 checksum. No files were downloaded or changed.")
+    result.update(download_url=url, sha256=digest.lower(), can_prepare=True)
+    return result
+
+
+def _open_url(url, timeout):
+    class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            _https_url(newurl)
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+    _https_url(url)
+    request = urllib.request.Request(url, headers={"User-Agent": f"TLI/{S.TLI_VERSION}", "Cache-Control": "no-cache"})
+    return urllib.request.build_opener(HTTPSRedirect()).open(request, timeout=timeout)
+
+
+def check(update_url=None):
+    global _state, _info, _error, _progress, _checked_at
+    with _lock:
+        _restore_prepared()
+        if _state in _BUSY or _state == UpdateState.READY:
+            return get_status()
+        _state, _error, _progress, _info = UpdateState.CHECKING, "", 0, {}
+    try:
+        url = update_url if update_url is not None else _load_settings()["update_url"]
+        if not url:
+            raise ValueError("No update URL configured. Restore the release source in Settings → Software Updates.")
+        with _open_url(url, 15) as response:
+            raw = response.read(MAX_MANIFEST_BYTES + 1)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            raise ValueError("The release source returned too much data.")
+        info = _manifest_info(json.loads(raw.decode("utf-8")))
+        with _lock:
+            _info = info
+            _state = UpdateState.AVAILABLE if _is_newer(info["version"], S.TLI_VERSION) else UpdateState.UP_TO_DATE
+    except Exception as error:
+        with _lock:
+            _state, _error = UpdateState.ERROR, f"Could not check for updates: {error}"
+    finally:
+        with _lock:
+            _checked_at = datetime.now(timezone.utc).isoformat()
+    return get_status()
+
+
+def apply():
+    """Prepare a package. This never changes installed code or stops the host."""
+    global _state, _progress, _error
+    with _lock:
+        if _state != UpdateState.AVAILABLE or not _info.get("can_prepare"):
+            return False
+        manifest = dict(_info)
+        _state, _progress, _error = UpdateState.DOWNLOADING, 0, ""
+    try:
+        threading.Thread(target=_apply_pipeline, args=(manifest,), daemon=True).start()
+    except Exception as error:
+        with _lock:
+            _state, _error = UpdateState.ERROR, f"Could not start the download: {error}"
+        return False
+    return True
+
+
+def _apply_pipeline(manifest):
+    global _state, _progress, _error, _ready_path
+    job = None
+    try:
+        import update_install
+        updates = _updates_dir()
+        updates.mkdir(parents=True, exist_ok=True)
+        job = updates / ("job-" + uuid.uuid4().hex)
+        job.mkdir()
+        archive = job / "release.zip"
+        sha, downloaded = hashlib.sha256(), 0
+        with _open_url(manifest["download_url"], 120) as response:
+            total = int(response.headers.get("Content-Length", 0))
+            if total < 0 or total > MAX_DOWNLOAD_BYTES:
+                raise ValueError("The update package exceeds the download limit.")
+            if total and shutil.disk_usage(updates).free < total * 2 + 256 * 1024 * 1024:
+                raise ValueError("Free more disk space before downloading this update.")
+            with archive.open("xb") as output:
+                while chunk := response.read(1024 * 1024):
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_BYTES:
+                        raise ValueError("The update package exceeds the download limit.")
+                    output.write(chunk)
+                    sha.update(chunk)
+                    with _lock:
+                        _progress = min(80, int(downloaded / total * 80)) if total else 0
+            if total and downloaded != total:
+                raise ValueError("The download was incomplete. Check your connection and try again.")
+        with _lock:
+            _state, _progress = UpdateState.VERIFYING, 85
+        if sha.hexdigest() != manifest["sha256"]:
+            raise ValueError("The download checksum does not match this release. No application files were changed.")
+        with _lock:
+            _state, _progress = UpdateState.PREPARING, 90
+        package = job / "package"
+        inventory = update_install.extract_archive(archive, package, expected_version=manifest["version"], expected_platform=_platform_name())
+        update_install.require_full_release(inventory, _platform_name())
+        _write_json(package / "update-target.json", {"target": str(Path(S.BASE_DIR).resolve())})
+        _write_json(updates / "prepared.json", {"version": manifest["version"], "folder": job.name,
+                    "sha256": manifest["sha256"], "notes": manifest.get("notes", "")})
+        archive.unlink()
+        with _lock:
+            _state, _progress, _ready_path = UpdateState.READY, 100, str(package)
+    except Exception as error:
+        with _lock:
+            _state, _error = UpdateState.ERROR, f"Update preparation failed: {error}"
+        if job is not None:
+            shutil.rmtree(job, ignore_errors=True)
+
+
+def open_prepared_folder():
+    with _lock:
+        status = get_status()
+        if not status["can_open"]:
+            raise ValueError("No verified update folder is ready. Check for updates first.")
+        path = Path(_ready_path)
+        updates = _updates_dir()
+        if path.resolve() != path or path.parent.parent != updates or not (path / "TLI_RELEASE.json").is_file():
+            raise ValueError("The prepared update folder is no longer available. Download it again.")
+    args = ["explorer.exe", str(path)] if sys.platform == "win32" else ["open" if sys.platform == "darwin" else "xdg-open", str(path)]
+    subprocess.Popen(args, shell=False, **hidden_process_kwargs())
+
+
+def auto_check_on_startup():
     settings = _load_settings()
-    if not settings.get("auto_check", True):
+    if not settings["auto_check"] or not settings["update_url"]:
         return
-    url = settings.get("update_url", "").strip()
-    if not url:
-        return
-
-    def _bg():
-        time.sleep(5)   # Wait for startup to settle
-        check(url)
-
-    threading.Thread(target=_bg, daemon=True).start()
+    def background():
+        time.sleep(5)
+        check()
+    threading.Thread(target=background, daemon=True).start()

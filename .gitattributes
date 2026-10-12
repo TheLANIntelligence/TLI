@@ -1,0 +1,2 @@
+# The public installer is piped directly into macOS Bash, including after a Windows checkout.
+landing/install_mac.sh text eol=lf

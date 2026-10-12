@@ -55,6 +55,7 @@ def source(tmp_path):
         "frontend/js/new-panel.js": "// untracked source is intended",
         "frontend/css/performance-workspace.css": ".perf { color: inherit; }",
         "frontend/assets/intro.mp3": "fake bundled audio",
+        "frontend/assets/fonts/Inter-LICENSE.txt": "synthetic bundled font license",
         "frontend/manifest.json": "{}",
         "frontend/history/early-dashboard.html": "<section>Inert synthetic source exhibit</section>",
         "frontend/history/provenance.json": "{}",
@@ -106,7 +107,7 @@ def source(tmp_path):
         "backend/ai/runtime/llama-bench.exe", "backend/ai/runtime/private.key", "backend/ai/runtime/keys/fake.dll",
         "backend/tli_model_config.json", "backend/vault_meta.json", "backend/credentials.json", "backend/routers/printers_snmp.json",
         "mobile/src/secrets.yaml", "mobile/modules/tli-transport/credentials.yml", "backend/id_ed25519",
-        "backend/pin.key", "backend/random-private.json", "mobile/credentials.json", "mobile/private.keystore",
+        "backend/pin.key", "backend/random-private.json", "mobile/credentials.json", "mobile/private.keystore", "frontend/assets/fonts/private-notes.txt",
         "mobile/.env.local", "mobile/node_modules/library/index.js", "mobile/.expo/cache.ts", "mobile/android/generated.kt",
         "mobile/ios/generated.swift", "mobile/build-inspect/private.json", "frontend/index.html.bak", "frontend/assets/private-unreviewed.json",
         "backend/dist_build/main.py", "backend/.venv/lib/source.py", "frontend/coverage/result.js",
@@ -138,14 +139,21 @@ def test_snapshot_contains_current_uncommitted_source_and_complete_mobile_inputs
 
 def test_host_launchers_and_named_public_guides_ship_without_unlisted_documents(tmp_path):
     assert snapshot.PUBLIC_GUIDES == packager.PUBLIC_GUIDES
-    included = ["TLI_Setup.bat", "TLI_Setup.ps1", "TLI_Diagnostics.bat",
+    included = ["LICENSE", "SECURITY.md", "TLI_Setup.bat", "TLI_Setup.ps1", "TLI_Diagnostics.bat",
+                "TLI_Bootstrap.ps1", "START_HERE.md",
+                "TLI_Update.bat", "TLI_Update.ps1", "TLI_Update.command", "TLI_Update.sh", "docs/TLI_UPDATES.md",
+                "Uninstall_TLI.bat", "TLI_Uninstall.ps1", "Uninstall_TLI.command", "Uninstall_TLI.sh", "docs/TLI_UNINSTALL.md",
                 "TLI.exe", "build_launcher.ps1", "desktop/TliLauncher.cs", "desktop/tli.ico",
                 "docs/TLI_HOST_START.md", "docs/HOST_START.md", "docs/TLI_SMART_HUB_REFINEMENT.md",
-                "docs/RELEASE_1.4.0_BETA.md"]
+                "docs/RELEASE_1.4.0_BETA.md", "docs/RELEASE_1.4.1_BETA.md",
+                "backend/ai/runtime/LICENSE-llama.cpp.txt", "backend/ai/runtime/LICENSE-LLVM-OpenMP.txt",
+                "backend/ai/runtime/macos-arm64/LICENSE-jsonhpp.txt", "backend/ai/runtime/macos-arm64/LICENSE-cpp-httplib.txt",
+                "backend/ai/runtime/macos-x64/LICENSE", "backend/ai/runtime/macos-x64/RUNTIME-NOTICES.txt"]
     for name in included:
         write(tmp_path, name, "public source")
     for name in ["docs/private.md", "docs/credentials.json", "docs/archive/TLI_HOST_START.md",
-                 "desktop/unreviewed.exe", "desktop/other.cs", "desktop/TLI.lnk", "TLI.lnk"]:
+                 "desktop/unreviewed.exe", "desktop/other.cs", "desktop/TLI.lnk", "TLI.lnk",
+                 "TLI_RELEASE.json", "backend/ai/runtime/private-notes.txt"]:
         write(tmp_path, name, "PRIVATE_CANARY_DO_NOT_COPY")
     result = snapshot.create_snapshot(tmp_path)
     copied = Path(result["snapshot_root"])
@@ -308,7 +316,8 @@ def test_desktop_package_uses_frozen_source_and_leaves_harness_and_mobile_out(so
 def test_cli_create_and_verify_use_only_the_explicit_synthetic_root(source):
     root, _, _ = source
     tool = str(REPO / "scripts/release_snapshot.py")
-    result = subprocess.run([sys.executable, tool, "create", "--repo", str(root)], capture_output=True, text=True, check=True)
+    flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+    result = subprocess.run([sys.executable, tool, "create", "--repo", str(root)], capture_output=True, text=True, check=True, **flags)
     value = json.loads(result.stdout)
-    verified = subprocess.run([sys.executable, tool, "verify", "--snapshot", value["snapshot_root"], "--manifest", value["manifest_path"], "--source", str(root)], capture_output=True, text=True, check=True)
+    verified = subprocess.run([sys.executable, tool, "verify", "--snapshot", value["snapshot_root"], "--manifest", value["manifest_path"], "--source", str(root)], capture_output=True, text=True, check=True, **flags)
     assert json.loads(verified.stdout)["fingerprint"] == value["fingerprint"]

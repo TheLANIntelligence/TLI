@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Menu','CreateShortcuts','EnableHostStart','DisableHostStart','StartHelper','StopHelper','StopTLI','Status','EnableSignIn','DisableSignIn')]
+    [ValidateSet('Menu','CreateShortcuts','RegisterUninstall','EnableHostStart','DisableHostStart','StartHelper','StopHelper','StopTLI','Status','EnableSignIn','DisableSignIn')]
     [string]$Action = 'Menu',
     [ValidateRange(1024,65535)][int]$HelperPort = 8001
 )
@@ -15,6 +15,44 @@ $tliHash = [Security.Cryptography.SHA256]::Create()
 $tliSuffix = ([BitConverter]::ToString($tliHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($tliRoot.ToLowerInvariant())))).Replace('-','').Substring(0,12)
 $tliHash.Dispose()
 $tliStartupLink = Join-Path ([Environment]::GetFolderPath('Startup')) "TLI Host Start $tliSuffix.lnk"
+function Get-TliUninstallRegistration {
+    $tliUninstaller = Join-Path $tliRoot 'TLI_Uninstall.ps1'
+    if (!(Test-Path -LiteralPath $tliUninstaller -PathType Leaf)) { throw 'TLI_Uninstall.ps1 is missing. Extract the complete TLI release, then try again.' }
+    $tliPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $tliArguments = '-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $tliUninstaller + '"'
+    $tliVersion = 'unknown'
+    $tliStateFile = Join-Path $tliRoot 'backend\tli_state.py'
+    if (Test-Path -LiteralPath $tliStateFile -PathType Leaf) {
+        $tliVersionMatch = [regex]::Match([IO.File]::ReadAllText($tliStateFile), '(?m)^TLI_VERSION\s*=\s*["'']([^"'']+)["'']')
+        if ($tliVersionMatch.Success) { $tliVersion = $tliVersionMatch.Groups[1].Value }
+    }
+    return [pscustomobject]@{
+        KeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\TLI-' + $tliSuffix
+        Target = $tliPowerShell
+        Arguments = $tliArguments
+        Values = @{
+            DisplayName = 'TLI - ' + (Split-Path -Leaf $tliRoot) + ' (' + $tliSuffix + ')'
+            DisplayVersion = $tliVersion
+            Publisher = 'TheLANIntelligence'
+            InstallLocation = $tliRoot
+            UninstallString = '"' + $tliPowerShell + '" ' + $tliArguments
+        }
+    }
+}
+function Register-TliUninstall {
+    $tliRegistration = Get-TliUninstallRegistration
+    New-Item -Path $tliRegistration.KeyPath -Force | Out-Null
+    foreach ($tliValue in $tliRegistration.Values.GetEnumerator()) {
+        New-ItemProperty -LiteralPath $tliRegistration.KeyPath -Name $tliValue.Key -Value $tliValue.Value -PropertyType String -Force | Out-Null
+    }
+    foreach ($tliName in @('NoModify', 'NoRepair')) {
+        New-ItemProperty -LiteralPath $tliRegistration.KeyPath -Name $tliName -Value 1 -PropertyType DWord -Force | Out-Null
+    }
+    $tliPrograms = Join-Path ([Environment]::GetFolderPath('Programs')) 'TLI'
+    New-Item -ItemType Directory -Path $tliPrograms -Force | Out-Null
+    $tliShortcut = Get-TliShortcutPath $tliPrograms 'Uninstall TLI' $tliRegistration.Target $tliRegistration.Arguments
+    New-TliShortcut $tliShortcut $tliRegistration.Target $tliRegistration.Arguments ('Review removal of TLI from ' + $tliRoot) '' 1
+}
 function Invoke-TliControl([string]$Operation) {
     if (!(Test-Path -LiteralPath $tliPython) -or !(Test-Path -LiteralPath $tliPythonw)) {
         throw 'Open TLI.exe to prepare this installation, then reopen setup.'
@@ -60,8 +98,10 @@ function Invoke-TliSetup([string]$Selected) {
                 $tliShortcut = Get-TliShortcutPath $tliDirectory 'TLI' $tliApp ''
                 New-TliShortcut $tliShortcut $tliApp '' 'Open TLI - your private AI on this computer and network.' $tliApp 1
             }
-            Write-Host 'TLI is now on your Desktop and in the Start menu.'
+            Register-TliUninstall
+            Write-Host 'TLI is now on your Desktop and in the Start menu. Remove it through Windows Installed apps or Uninstall TLI in the Start menu.'
         }
+        'RegisterUninstall' { Register-TliUninstall; Write-Host 'This installation is now listed in Windows Installed apps and has an Uninstall TLI Start menu shortcut.' }
         'EnableHostStart' { Invoke-TliControl 'enable' }
         'DisableHostStart' { Invoke-TliControl 'disable'; if (Test-Path -LiteralPath $tliStartupLink) { Remove-Item -LiteralPath $tliStartupLink }; Write-Host 'Phone host start and its sign-in shortcut are disabled.' }
         'StartHelper' { Invoke-TliControl 'start' }
@@ -83,8 +123,9 @@ while ($true) {
     Write-Host '1 Desktop & Start menu app   2 Enable phone host start   3 Start helper'
     Write-Host '4 Status   5 Stop helper   6 Disable phone host start'
     Write-Host '7 Start helper at sign-in   8 Remove sign-in shortcut   9 Stop TLI   0 Exit'
+    Write-Host '10 Add or repair Windows uninstall entry'
     $tliChoice = Read-Host 'Choose'
-    $tliActions = @{'1'='CreateShortcuts';'2'='EnableHostStart';'3'='StartHelper';'4'='Status';'5'='StopHelper';'6'='DisableHostStart';'7'='EnableSignIn';'8'='DisableSignIn';'9'='StopTLI'}
+    $tliActions = @{'1'='CreateShortcuts';'2'='EnableHostStart';'3'='StartHelper';'4'='Status';'5'='StopHelper';'6'='DisableHostStart';'7'='EnableSignIn';'8'='DisableSignIn';'9'='StopTLI';'10'='RegisterUninstall'}
     if ($tliChoice -eq '0') { break }
     if ($tliActions.ContainsKey($tliChoice)) { try { Invoke-TliSetup $tliActions[$tliChoice] } catch { Write-Host $_.Exception.Message -ForegroundColor Red } }
 }

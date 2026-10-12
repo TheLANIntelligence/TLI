@@ -5,6 +5,7 @@ import pytest
 
 import host_control as H
 import host_launcher as L
+import runtime_preflight as preflight
 
 
 class Clock:
@@ -195,7 +196,7 @@ def test_windows_runtime_probe_is_fixed_hidden_bounded_and_explains_repair(tmp_p
     runtime.parent.mkdir(parents=True)
     runtime.write_bytes(b"synthetic, never executed")
     monkeypatch.setattr(L.sys, "platform", "win32")
-    monkeypatch.setattr(L, "hidden_process_kwargs", lambda: {"creationflags": 0x08000000})
+    monkeypatch.setattr(preflight, "hidden_process_kwargs", lambda: {"creationflags": 0x08000000})
     calls = []
     def run(command, **options):
         calls.append(command)
@@ -218,15 +219,65 @@ def test_windows_runtime_probe_is_fixed_hidden_bounded_and_explains_repair(tmp_p
         assert "Visual C++ v14" in failure.value.detail and "(x64)" in failure.value.detail
         assert "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/" in failure.value.detail
         assert "reopen TLI" in failure.value.detail
+        expected = {"missing-dll": "3221225781 (0xC0000135)", "start-error": "synthetic loader error", "timeout": "within 5 seconds"}
+        assert expected[outcome] in failure.value.detail
+        assert "\n\n" in failure.value.detail
     assert len(calls) == 1
 
 
-def test_failed_runtime_prevents_backend_probe_spawn_or_ready_browser(desktop, monkeypatch):
+def test_failed_optional_runtime_still_opens_verified_backend_and_returns_warning(desktop, monkeypatch):
     def reject(_root):
-        H._fail("Synthetic runtime prerequisite is missing", 503)
+        raise L.PackagedRuntimeUnavailable(503, "Synthetic runtime prerequisite is missing")
     monkeypatch.setattr(L, "check_packaged_runtime", reject)
-    monkeypatch.setattr(L, "inspect_backend", lambda *_args: pytest.fail("Do not probe a backend after failed runtime setup"))
-    with pytest.raises(H.HostControlError, match="runtime prerequisite"):
-        L.launch(desktop.root, progress=desktop.report)
+    monkeypatch.setattr(L, "inspect_backend", lambda *_args: ("running", "Owned proof") if desktop.spawned else ("stopped", "No listener"))
+    result = L.launch(desktop.root, progress=desktop.report)
+    assert result["backend_state"] == "running"
+    assert result["runtime_warning"] == "Synthetic runtime prerequisite is missing"
+    assert len(desktop.spawned) == len(desktop.opened) == 1
+    assert H.read_json(H.path_for(desktop.root, "desktop-child.json")) == desktop.child
+    assert any("Local AI needs attention" in message for _, message in desktop.progress)
+
+
+@pytest.mark.parametrize("state", ["running", "starting"])
+def test_existing_backend_does_not_require_an_optional_runtime_probe(desktop, monkeypatch, state):
+    states = iter([(state, "Owned process"), ("running", "Owned proof")])
+    monkeypatch.setattr(L, "inspect_backend", lambda *_args: next(states))
+    monkeypatch.setattr(L, "check_packaged_runtime", lambda *_args: pytest.fail("Existing workspace needs no AI runtime probe"))
+    result = L.launch(desktop.root)
+    assert result["backend_state"] == "running" and "runtime_warning" not in result
+    assert not desktop.spawned and len(desktop.opened) == 1
+
+
+def test_optional_runtime_warning_cannot_bypass_release_identity_failure(desktop, monkeypatch):
+    monkeypatch.setattr(L, "inspect_backend", lambda *_args: ("running", "Owned proof") if desktop.spawned else ("stopped", "No listener"))
+    def reject_runtime(_root):
+        raise L.PackagedRuntimeUnavailable(503, "Optional AI unavailable")
+    def reject_release(*_args):
+        H._fail("Running release identity did not match", 409)
+    monkeypatch.setattr(L, "check_packaged_runtime", reject_runtime)
+    monkeypatch.setattr(L, "verify_release", reject_release)
+    with pytest.raises(H.HostControlError, match="release identity"):
+        L.launch(desktop.root)
+    assert len(desktop.spawned) == 1 and not desktop.opened
+
+
+def test_unrelated_preflight_error_is_never_downgraded_to_advisory(desktop, monkeypatch):
+    monkeypatch.setattr(L, "inspect_backend", lambda *_args: ("stopped", "No listener"))
+    def reject(_root):
+        H._fail("Saved host state is corrupt", 503)
+    monkeypatch.setattr(L, "check_packaged_runtime", reject)
+    with pytest.raises(H.HostControlError, match="host state is corrupt"):
+        L.launch(desktop.root)
     assert not desktop.spawned and not desktop.opened
-    assert not H.path_for(desktop.root, "desktop-child.json").exists()
+
+
+def test_explicit_runtime_diagnostic_still_exits_unsuccessfully(monkeypatch, capsys):
+    monkeypatch.setattr(L.sys, "argv", ["host_launcher.py", "--check-runtime"])
+    def reject(_root):
+        raise L.PackagedRuntimeUnavailable(503, "Optional AI runtime needs repair")
+    monkeypatch.setattr(L, "check_packaged_runtime", reject)
+    monkeypatch.setattr(L, "launch", lambda *_args, **_kwargs: pytest.fail("A diagnostic must not launch the host"))
+    with pytest.raises(SystemExit) as result:
+        L.main()
+    assert result.value.code == 1
+    assert "runtime needs repair" in capsys.readouterr().err

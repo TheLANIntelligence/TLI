@@ -72,6 +72,8 @@ with pytest.MonkeyPatch.context() as _bootstrap:
 import peer_trust as _peer_trust
 _isolation.setattr(_peer_trust, "_exchange", _no_network)
 _isolation.setattr(_peer_trust, "_stream_exchange", _no_network)
+import peer_pairing as _peer_pairing
+_isolation.setattr(_peer_pairing, "_exchange", _no_network)
 import lan_inference as _lan_inference
 _isolation.setattr(_lan_inference, "_local_response", _no_network)
 

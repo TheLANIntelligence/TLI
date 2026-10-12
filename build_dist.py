@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -25,6 +27,12 @@ import sys
 import zipfile
 
 ROOT = pathlib.Path(__file__).parent.resolve()
+
+# Load the standalone updater policy without importing application state or
+# depending on the caller's working directory / Python import path.
+_policy_spec = importlib.util.spec_from_file_location("tli_package_update_policy", ROOT / "backend/update_install.py")
+_policy = importlib.util.module_from_spec(_policy_spec)
+_policy_spec.loader.exec_module(_policy)
 
 
 # ── Version detection ────────────────────────────────────────────────
@@ -93,6 +101,8 @@ SKIP_EXTENSIONS: set[str] = {
 
 # Exact filenames (anywhere in the tree) that must be excluded
 SKIP_FILENAMES: set[str] = {
+    # Generated per-package inventory and local staged-update destination.
+    "TLI_RELEASE.json", "update-target.json",
     # OS junk
     "desktop.ini", "Thumbs.db", ".DS_Store",
     # AI runtime: dev/bench tools not needed by end users
@@ -155,12 +165,14 @@ PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",
-                "RELEASE_1.4.0_BETA.md"}
+                "RELEASE_1.4.0_BETA.md", "RELEASE_1.4.1_BETA.md", "TLI_UPDATES.md", "TLI_UNINSTALL.md"}
 
 PLATFORM_ROOT_FILES = {
     "windows": {"TLI.exe", "TLI_Start.bat", "TLI_Diagnostics.bat", "TLI_Bootstrap.ps1",
-                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1"},
-    "macos": {"TLI_Start.command", "TLI_Start.sh"},
+                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1",
+                "TLI_Update.bat", "TLI_Update.ps1", "Uninstall_TLI.bat", "TLI_Uninstall.ps1"},
+    "macos": {"TLI_Start.command", "TLI_Start.sh", "TLI_Update.command", "TLI_Update.sh",
+              "Uninstall_TLI.command", "Uninstall_TLI.sh"},
 }
 COMMON_ROOT_FILES = {"README.md", "START_HERE.md", "LICENSE", "SECURITY.md", "TLI_MANUAL.md"}
 
@@ -281,6 +293,8 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
             if abs_path.resolve() == out_path.resolve():
                 continue
             skip, reason = _should_skip(rel)
+            if not _policy.is_application_path(rel.as_posix()):
+                skip, reason = True, "not-reviewed-application-file"
             if _is_linked_path(abs_path):
                 skip, reason = True, "skip-linked-file"
             if frontend_only and rel.parts[0] != "frontend":
@@ -294,8 +308,8 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
     included.sort()
 
     if platform != "all":
-        required = {"backend/main.py", "backend/requirements.txt", "frontend/index.html",
-                    "START_HERE.md", "LICENSE"} | PLATFORM_ROOT_FILES[platform]
+        required = {"backend/main.py", "backend/requirements.txt", "backend/update_install.py", "frontend/index.html",
+                    "START_HERE.md", "LICENSE", "docs/TLI_UNINSTALL.md"} | PLATFORM_ROOT_FILES[platform]
         required |= ({"backend/ai/runtime/llama_server.exe"} if platform == "windows" else {
             "backend/ai/runtime/macos-arm64/llama-server", "backend/ai/runtime/macos-x64/llama-server"})
         missing = required - {rel.as_posix() for rel in included}
@@ -310,6 +324,7 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
         print("=== INCLUDED ===")
         for p in included:
             print(f"  + {p.as_posix()}")
+        print("  + TLI_RELEASE.json (generated verified-file inventory)")
         print()
         print("=== EXCLUDED ===")
         for p, r in skipped:
@@ -318,7 +333,6 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
 
     # Unix execute permission bits — applied to shell scripts so they are
     # immediately runnable on macOS/Linux after unzip without chmod.
-    _EXEC_PERMS = 0o755 << 16   # stored in ZipInfo.external_attr upper 16 bits
     _EXEC_EXTS  = {".sh", ".command"}
 
     def _needs_exec(rel: pathlib.Path) -> bool:
@@ -334,6 +348,7 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
 
     # Write zip
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    inventory = []
     with zipfile.ZipFile(out_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for rel in included:
             abs_path = ROOT / rel
@@ -344,10 +359,22 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
                 data = data.replace(b"\r\n", b"\n")
             info = zipfile.ZipInfo.from_file(abs_path, rel)
             info.compress_type = zipfile.ZIP_DEFLATED
-            if _needs_exec(rel):
-                info.create_system = 3  # Unix permissions must survive a Windows-built zip.
-                info.external_attr = _EXEC_PERMS
+            mode = 0o755 if _needs_exec(rel) else 0o644
+            info.create_system = 3  # Unix permissions must survive a Windows-built zip.
+            info.external_attr = (stat.S_IFREG | mode) << 16
             zf.writestr(info, data)
+            inventory.append({"path": rel.as_posix(), "size": len(data),
+                              "sha256": hashlib.sha256(data).hexdigest(), "mode": mode})
+        manifest = {"schema_version": 1, "version": version, "platform": platform, "files": inventory}
+        info = zipfile.ZipInfo("TLI_RELEASE.json")
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.create_system = 3
+        info.external_attr = (stat.S_IFREG | 0o644) << 16
+        zf.writestr(info, json.dumps(manifest, indent=2).encode("utf-8") + b"\n")
+
+    # The published archive must satisfy the same path, size and hash contract
+    # that an existing installation will enforce before preparing its update.
+    _policy.validate_archive(out_path, expected_version=version, expected_platform=platform)
 
     # SHA-256 of the zip file itself — matches what auto_update.py verifies
     sha = hashlib.sha256()
@@ -367,16 +394,18 @@ def build(out_path: pathlib.Path, dry_run: bool = False, frontend_only: bool = F
     print(f"  {digest}")
     print()
     if platform != "all":
-        print("Fresh-install package: publish the verified checksum in landing/downloads.json.")
-        print("Do not point the legacy application updater at this platform package.")
+        print("Publish the verified checksum in landing/downloads.json after release verification.")
+        print("Existing users: extract separately, stop TLI, then run the included TLI_Update launcher.")
+        print("The legacy application updater must not copy this package over running application files.")
         return
-    print("Paste this into your latest.json when you publish the release:")
+    print("Frontend-only legacy channel metadata:" if frontend_only else "Verified source-package metadata:")
     print(f'  "version":      "{version}",')
     print(f'  "sha256":       "{digest}",')
     print(f'  "frontend_only": {str(frontend_only).lower()}')
     if not frontend_only:
-        print("Full source update: install the included requirements and restart the backend.")
-        print("Validate the matching platform installer separately before distribution.")
+        print("Existing users: extract separately, stop TLI, then run the included TLI_Update launcher.")
+        print("Validate matching platform packages and publish their checksums with updater: guided-v1.")
+        print("Do not publish a full package to the legacy direct-copy update channel.")
 
 
 def main():

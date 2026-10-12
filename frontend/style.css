@@ -13204,6 +13204,11 @@ tr.vis4-protected:hover { background: transparent !important; cursor: default; }
    ============================================================ */
 
 .tli-update-banner[hidden] { display: none !important; }
+.tli-update-banner [hidden],
+#settings-section-updates [hidden] { display: none !important; }
+#settings-update-progress { width: min(100%, 20rem); accent-color: var(--accent); vertical-align: middle; }
+#settings-update-ready li { margin-block: 8px; }
+#settings-section-updates .settings-update-state { display: block; margin: 4px 0 0; }
 .tli-update-banner {
   display: flex;
   align-items: center;
@@ -13259,6 +13264,7 @@ tr.vis4-protected:hover { background: transparent !important; cursor: default; }
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  text-decoration: none;
   transition: opacity .15s;
 }
 .tli-update-btn:hover { opacity: .85; }
@@ -13298,7 +13304,7 @@ tr.vis4-protected:hover { background: transparent !important; cursor: default; }
   border-radius: 2px;
   transition: width .3s ease;
 }
-/* JS sets width directly via style.width, so no CSS var needed */
+/* The track stays full width; JavaScript sets the fill via --w. */
 .tli-update-progress-label {
   font-size: 11px;
   color: var(--text-muted);

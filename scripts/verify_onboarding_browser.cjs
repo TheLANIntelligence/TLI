@@ -32,15 +32,27 @@ function json(body, status = 200) { return { status, contentType: 'application/j
 function mutations(run, pathname) { return run.calls.filter(c => c.method === 'POST' && (!pathname || c.path === pathname)); }
 function count(run, pathname, method = 'POST') { return run.calls.filter(c => c.method === method && c.path === pathname).length; }
 const next = page => page.locator('#tli-onboard-next');
+const music = page => page.locator('#onboard-music-audio');
+async function musicPlaying(run) {
+  await run.page.waitForFunction(() => {
+    const player = document.querySelector('#onboard-music-audio');
+    return player && !player.paused && player.readyState >= 2 && player.currentTime > 0 && document.querySelector('#onboard-music-toggle')?.getAttribute('aria-pressed') === 'true';
+  });
+  assert.equal(await run.page.locator('#onboard-music-toggle').getAttribute('aria-pressed'), 'true');
+}
+async function musicStopped(run) {
+  await run.page.waitForFunction(() => document.querySelector('#onboard-music-audio')?.paused === true && document.querySelector('#onboard-music-toggle')?.getAttribute('aria-pressed') === 'false');
+  assert.equal(await run.page.locator('#onboard-music-toggle').getAttribute('aria-pressed'), 'false');
+}
 
 // The existing anniversary makePage intentionally marks onboarding complete and
 // rejects mutations. Share its real-SPA fixtures and layout checks, but preserve
 // fresh-install semantics here and allow only explicit synthetic setup requests.
 async function makePage(browser, options = {}) {
-  const { width = 1440, theme = 'midnight', seen = false, complete = false, pinEnabled = false, aiReady = false, installed = false, overrides = {}, height = 1000 } = options;
+  const { width = 1440, theme = 'midnight', seen = false, complete = false, pinEnabled = false, aiReady = false, installed = false, overrides = {}, height = 1000, mediaMode = 'native' } = options;
   const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce', serviceWorkers: 'block' });
   const state = { complete, started: false, pinEnabled, aiReady, name: 'Studio', download: { ok: true, status: 'idle', state: 'idle', in_progress: false, active: false } };
-  const run = { context, state, calls: [], errors: [], unknown: [], external: [], overrides };
+  const run = { context, state, calls: [], errors: [], unknown: [], external: [], overrides, mediaUnavailable: mediaMode === 'network-failure' };
   await context.addInitScript(({ theme, seen }) => {
     if (localStorage.getItem('fixture_initialized')) return;
     localStorage.setItem('fixture_initialized', '1');
@@ -48,15 +60,61 @@ async function makePage(browser, options = {}) {
     localStorage.setItem('tli_settings', JSON.stringify({ defaultTheme: theme, searchEnabled: false, defaultBrain: 'bundled' }));
     sessionStorage.setItem('tli_session_unlocked', '1');
   }, { theme, seen });
+  await context.addInitScript(({ mode }) => {
+    // Observe the actual browser player. Only policy/error fixtures replace play;
+    // the normal suite still loads and decodes the repository's real MP3.
+    const nativePlay = HTMLMediaElement.prototype.play;
+    const nativePause = HTMLMediaElement.prototype.pause;
+    const players = new Set();
+    // CDP evaluation can itself mark userActivation active. Require an actual
+    // trusted input event as well so polling never unlocks this policy fixture.
+    let trustedGestureSeen = false;
+    for (const type of ['pointerdown','mousedown','keydown','click']) {
+      window.addEventListener(type, event => { if (event.isTrusted) trustedGestureSeen = true; }, true);
+    }
+    const fixture = { playCalls: [], pauseCalls: [], snapshot: () => [...players].map(player => ({
+      src: player.currentSrc || player.src, paused: player.paused, muted: player.muted,
+      volume: player.volume, duration: player.duration, readyState: player.readyState,
+      currentTime: player.currentTime, error: player.error?.code || null,
+    })) };
+    const isIntro = player => /(?:^|\/)tli_intro\.mp3(?:\?|$)/.test(player.currentSrc || player.src || '');
+    HTMLMediaElement.prototype.play = function () {
+      if (!isIntro(this)) return nativePlay.call(this);
+      players.add(this);
+      const gesture = trustedGestureSeen && navigator.userActivation.isActive;
+      fixture.playCalls.push({ gesture, mode });
+      if (mode === 'blocked-until-gesture' && !gesture) {
+        return Promise.reject(new DOMException('Synthetic autoplay policy requires a user gesture.', 'NotAllowedError'));
+      }
+      if (mode === 'failed') return Promise.reject(new DOMException('Synthetic media decode failure.', 'NotSupportedError'));
+      return nativePlay.call(this);
+    };
+    HTMLMediaElement.prototype.pause = function () {
+      if (isIntro(this)) { players.add(this); fixture.pauseCalls.push({ time: this.currentTime }); }
+      return nativePause.call(this);
+    };
+    window.__onboardMedia = fixture;
+  }, { mode: mediaMode });
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), pathname = decodeURIComponent(url.pathname);
     let body = null;
     try { body = request.postDataJSON(); } catch {}
-    const call = { method: request.method(), path: pathname, body, at: Date.now() };
+    const call = { method: request.method(), path: pathname, body, at: Date.now(), ...(request.headers().range ? {range:request.headers().range} : {}) };
     run.calls.push(call);
     if (url.hostname !== 'tli-ui.test') { run.external.push(url.origin + pathname); return route.abort('blockedbyclient'); }
+    if (run.mediaUnavailable && pathname === '/assets/tli_intro.mp3') {
+      return route.fulfill({status:404, contentType:'audio/mpeg', body:'Synthetic missing media'});
+    }
     const file = path.resolve(source, 'frontend', '.' + (pathname === '/' ? '/index.html' : pathname));
     if (['GET', 'HEAD'].includes(call.method) && file.startsWith(path.join(source, 'frontend') + path.sep) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      if (path.extname(file) === '.mp3' && call.range) {
+        const match = /^bytes=(\d+)-(\d*)$/.exec(call.range);
+        if (match) {
+          const data = fs.readFileSync(file), start = Number(match[1]), end = Math.min(match[2] ? Number(match[2]) : data.length - 1, data.length - 1);
+          if (start > end) return route.fulfill({status:416, headers:{'content-range':`bytes */${data.length}`}, body:''});
+          return route.fulfill({status:206, contentType:'audio/mpeg', headers:{'accept-ranges':'bytes','content-range':`bytes ${start}-${end}/${data.length}`}, body:data.subarray(start, end + 1)});
+        }
+      }
       return route.fulfill({ status: 200, contentType: mime[path.extname(file)] || 'application/octet-stream', body: fs.readFileSync(file) });
     }
     const override = run.overrides[`${call.method} ${pathname}`] ?? run.overrides[pathname];
@@ -151,7 +209,8 @@ async function runCase(browser, name, options, work) {
     report.error = error.stack || error.message;
     await run.page.screenshot({ path: path.join(output, `${name}-failure.png`), fullPage: true }).catch(() => {});
   } finally {
-    Object.assign(report, { calls: run.calls, errors: run.errors, unknown: [...new Set(run.unknown)], blockedExternal: [...new Set(run.external)] });
+    const media = await run.page.evaluate(() => ({players:window.__onboardMedia.snapshot(), playCalls:window.__onboardMedia.playCalls, pauseCalls:window.__onboardMedia.pauseCalls})).catch(() => null);
+    Object.assign(report, { calls: run.calls, errors: run.errors, unknown: [...new Set(run.unknown)], blockedExternal: [...new Set(run.external)], media });
     reports.push(report);
     await run.context.close();
     console.log(`${report.passed ? 'PASS' : 'FAIL'} ${name}${report.error ? '\n' + report.error : ''}`);
@@ -174,7 +233,8 @@ async function assertFocusTrap(page) {
 
 async function main() {
   const hashesAtStart = fingerprintFiles(source);
-  const browser = await chromium.launch({ channel: 'msedge', headless: true });
+  // Exercise real playback while explicitly suppressing all desktop audio output.
+  const browser = await chromium.launch({ channel: 'msedge', headless: true, args:['--mute-audio','--autoplay-policy=no-user-gesture-required'] });
   try {
     await runCase(browser, 'fresh-install-without-ai', {}, async run => {
       assert.equal(mutations(run).length, 0, 'Welcome must not mutate host settings');
@@ -383,6 +443,128 @@ async function main() {
         assert.equal(count(run, '/api/ai/models/check'), 0);
       });
     }
+    await runCase(browser, 'music-native-autoplay-and-single-player', {}, async run => {
+      await musicPlaying(run);
+      const playback = await music(run.page).evaluate(player => ({duration:player.duration, volume:player.volume, time:player.currentTime, loop:player.loop}));
+      assert.ok(Number.isFinite(playback.duration) && playback.duration > 1, 'Bundled MP3 metadata decodes in the real browser');
+      assert.ok(playback.volume > 0 && playback.volume <= 0.5, 'Music starts at a restrained volume');
+      assert.equal(playback.loop, false, 'The intro ends naturally without an automatic replay');
+      await run.page.waitForTimeout(150);
+      assert.ok(await music(run.page).evaluate(player => player.currentTime) > playback.time, 'Real media playback advances');
+      await reachLaunch(run);
+      assert.ok(await music(run.page).evaluate(player => player.currentTime) > playback.time, 'Step changes do not restart the track');
+      const observed = await run.page.evaluate(() => window.__onboardMedia.snapshot());
+      assert.equal(observed.length, 1, 'Step changes reuse the same audio instance');
+      assert.equal(observed.filter(player => !player.paused).length, 1, 'Exactly one soundtrack is playing');
+      assert.equal(await run.page.locator('audio[src*="tli_intro.mp3"]').count(), 1);
+      await next(run.page).click(); await run.page.locator('#tli-onboard').waitFor({state:'hidden'});
+      await musicStopped(run);
+    });
+    await runCase(browser, 'music-blocked-autoplay-first-gesture', {mediaMode:'blocked-until-gesture'}, async run => {
+      await run.page.waitForFunction(() => window.__onboardMedia.playCalls.length > 0);
+      await musicStopped(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls[0].gesture), false);
+      assert.match(await run.page.locator('#onboard-music-status').innerText(), /play|start|begin|music/i);
+      await next(run.page).click(); await waitStep(run, 1); await musicPlaying(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls.some(call => call.gesture)), true, 'The retry occurs within the trusted click gesture');
+      assert.equal(mutations(run).filter(call => aiMutation.test(call.path)).length, 0);
+    });
+    await runCase(browser, 'music-user-pause-persists', {}, async run => {
+      await musicPlaying(run); await run.page.locator('#onboard-music-toggle').click(); await musicStopped(run);
+      assert.equal(await run.page.evaluate(() => JSON.parse(localStorage.getItem('tli_onboard_music_v1')).muted), true);
+      const attempts = await run.page.evaluate(() => window.__onboardMedia.playCalls.length);
+      await next(run.page).click(); await waitStep(run, 1);
+      await run.page.locator('#tli-onboard-back').click(); await waitStep(run, 0);
+      await musicStopped(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls.length), attempts, 'Navigation respects a deliberate pause');
+      await run.page.locator('#tli-onboard-close').click();
+      await run.page.evaluate(() => window.TLIOnboarding.open()); await waitStep(run, 0); await musicStopped(run);
+      await run.page.reload({waitUntil:'load'}); await waitStep(run, 0); await musicStopped(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls.length), 0, 'Reload respects saved music preference');
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+      assert.equal(await run.page.evaluate(() => JSON.parse(localStorage.getItem('tli_onboard_music_v1')).muted), false);
+    });
+    await runCase(browser, 'music-volume-and-zero-volume', {}, async run => {
+      await musicPlaying(run);
+      const volume = run.page.locator('#onboard-music-volume');
+      await volume.focus(); await volume.press('Home');
+      assert.equal(await music(run.page).evaluate(player => player.volume), 0, 'Minimum slider value silences the soundtrack');
+      await volume.press('End');
+      assert.equal(await music(run.page).evaluate(player => player.volume), 1);
+      assert.equal(await run.page.evaluate(() => JSON.parse(localStorage.getItem('tli_onboard_music_v1')).volume), 1);
+      await run.page.reload({waitUntil:'load'}); await waitStep(run, 0);
+      assert.equal(await volume.inputValue(), '100');
+      assert.equal(await music(run.page).evaluate(player => player.volume), 1);
+    });
+    await runCase(browser, 'music-close-and-reopen-waits-for-gesture', {}, async run => {
+      await musicPlaying(run);
+      await run.page.locator('#tli-onboard-close').click();
+      await run.page.locator('#tli-onboard').waitFor({state:'hidden'}); await musicStopped(run);
+      await run.page.evaluate(() => window.TLIOnboarding.open()); await waitStep(run, 0);
+      await musicStopped(run);
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.snapshot().length), 1);
+    });
+    await runCase(browser, 'music-tab-hide-stops-until-gesture', {}, async run => {
+      await musicPlaying(run);
+      await run.page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', {configurable:true, get:()=>true});
+        Object.defineProperty(document, 'visibilityState', {configurable:true, get:()=> 'hidden'});
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await musicStopped(run);
+      await run.page.evaluate(() => {
+        Object.defineProperty(document, 'hidden', {configurable:true, get:()=>false});
+        Object.defineProperty(document, 'visibilityState', {configurable:true, get:()=> 'visible'});
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      await musicStopped(run);
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+    });
+    await runCase(browser, 'music-lock-stops-until-gesture', {pinEnabled:true}, async run => {
+      await musicPlaying(run);
+      await run.page.evaluate(() => window.dispatchEvent(new CustomEvent('tli-session-locked')));
+      await run.page.locator('#tli-lock-screen').waitFor({state:'visible'}); await musicStopped(run);
+      await run.page.locator('#tli-lock-input').fill('123456'); await run.page.locator('#tli-lock-submit').click();
+      await run.page.locator('#tli-lock-screen').waitFor({state:'hidden'}); await musicStopped(run);
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+    });
+    for (const mediaMode of ['failed', 'network-failure']) {
+      await runCase(browser, `music-${mediaMode}-is-nonblocking`, {mediaMode}, async run => {
+        await run.page.waitForFunction(() => /unavailable|could not|cannot|unable|failed/i.test(document.querySelector('#onboard-music-status')?.textContent || ''));
+        await musicStopped(run);
+        assert.equal(await run.page.locator('#onboard-music-status').isVisible(), true);
+        await reachLaunch(run); await next(run.page).click();
+        await run.page.locator('#tli-onboard').waitFor({state:'hidden'});
+        assert.equal(count(run, '/system/onboarding/complete'), 1, 'Audio failure does not block setup completion');
+      });
+    }
+    await runCase(browser, 'music-network-recovery-explicit-retry', {mediaMode:'network-failure'}, async run => {
+      await run.page.waitForFunction(() => /unavailable/i.test(document.querySelector('#onboard-music-status')?.textContent || ''));
+      await musicStopped(run);
+      run.mediaUnavailable = false;
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+      assert.ok(count(run, '/assets/tli_intro.mp3', 'GET') >= 2, 'Explicit retry reloads an asset that failed earlier');
+    });
+    await runCase(browser, 'music-natural-end-needs-explicit-replay', {}, async run => {
+      await musicPlaying(run);
+      await music(run.page).evaluate(player => { player.currentTime = player.duration - 0.1; });
+      await run.page.waitForFunction(() => document.querySelector('#onboard-music-audio').ended);
+      await musicStopped(run);
+      assert.match(await run.page.locator('#onboard-music-toggle').innerText(), /replay/i);
+      const attempts = await run.page.evaluate(() => window.__onboardMedia.playCalls.length);
+      await next(run.page).click(); await waitStep(run, 1); await musicStopped(run);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls.length), attempts, 'Continue does not restart a finished intro');
+      await run.page.locator('#onboard-music-toggle').click(); await musicPlaying(run);
+      assert.equal(await music(run.page).evaluate(player => player.currentTime < player.duration / 2), true);
+    });
+    await runCase(browser, 'music-completed-install-is-silent', {complete:true}, async run => {
+      await run.page.waitForTimeout(150);
+      assert.equal(await run.page.locator('#tli-onboard').isVisible(), false);
+      assert.equal(await music(run.page).evaluate(player => player.paused), true);
+      assert.equal(await run.page.evaluate(() => window.__onboardMedia.playCalls.length), 0);
+      assert.equal(count(run, '/assets/tli_intro.mp3', 'GET'), 0, 'Completed installs do not fetch onboarding audio');
+    });
     const widths = process.argv.includes('--quick') ? [1440, 390] : [1440, 768, 390, 320];
     for (const width of widths) for (const theme of ['emeraldLight', 'midnight']) {
       await runCase(browser, `layout-${width}-${theme}`, { width, theme, height: width < 500 ? 844 : 1000 }, async run => {
@@ -393,6 +575,8 @@ async function main() {
           assert.deepEqual(check.overflow, [], `Controls overflow on step ${step}`);
           assert.ok(check.documentWidth <= check.width + 2, `Page overflows on step ${step}`);
           assert.deepEqual(check.duplicateIds, [], `Duplicate IDs on step ${step}`);
+          assert.equal(await run.page.locator('#onboard-music-toggle').isVisible(), true, 'Music control remains available on each step');
+          assert.equal(await run.page.locator('#onboard-music-volume').isVisible(), true, 'Volume control remains available at this width');
           await assertFocusTrap(run.page);
           assert.equal(await run.page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches), true);
           const accessibility = await run.page.locator('#tli-onboard').evaluate(root => {

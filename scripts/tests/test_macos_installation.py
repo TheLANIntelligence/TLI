@@ -112,6 +112,110 @@ class MacInstallerTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 INSTALL["validate_manifest"]({"version": VERSION, "platforms": {"macos": {**asset, key: value}}})
 
+    def test_guided_update_and_uninstall_launchers_remain_executable(self):
+        launchers = {"TLI_Update.command", "TLI_Update.sh", "Uninstall_TLI.command", "Uninstall_TLI.sh"}
+        archive, digest = self.archive({name: "#!/bin/bash\nexit 0\n" for name in launchers})
+        target = self.install(archive, digest)
+        self.assertTrue(launchers.issubset(INSTALL["EXECUTABLES"]))
+        for name in launchers:
+            self.assertTrue((target / name).is_file())
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE((target / name).stat().st_mode), 0o755)
+
+
+@unittest.skipUnless(BASH and Path(BASH).is_file(), "Bash is required for installer checks")
+class MacInstallerShellTests(unittest.TestCase):
+    """Exercise the actual piped shell entry point without network or installs."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="tli-installer-shell-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "Synthetic Mac With Spaces"
+        self.root.mkdir()
+        self.python = self.root / "python3"
+        self.python.write_text('''#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> "$TEST_PYTHON_LOG"
+if [ "${PYTHONHOME+x}" = x ] || [ "${PYTHONPATH+x}" = x ]; then
+    printf 'Unexpected inherited Python configuration\\n' >&2
+    exit 47
+fi
+if [ "$1" = "-c" ]; then exit 0; fi
+if [ "$1" = "-" ]; then cat > "$TEST_PYTHON_SOURCE"; exit 0; fi
+exit 48
+''', encoding="utf-8", newline="\n")
+        self.python.chmod(0o755)
+        self.env = {**os.environ, "TEST_PYTHON": self.python.as_posix(),
+                    "TEST_PYTHON_LOG": (self.root / "python-calls.txt").as_posix(),
+                    "TEST_PYTHON_SOURCE": (self.root / "received.py").as_posix(),
+                    "TEST_OS": "Darwin", "TEST_ARCH": "arm64",
+                    "TEST_MAC_VERSION": "14.0", "TEST_PYTHON_AVAILABLE": "1"}
+
+    def run_installer(self):
+        # Isolate OS/interpreter discovery even on a real Mac: absolute Homebrew
+        # and python.org fallback paths must never select the host's interpreter.
+        # Everything after this prelude is the unchanged downloaded shell script.
+        prelude = '''
+uname() { if [ "$1" = "-s" ]; then echo "$TEST_OS"; else echo "$TEST_ARCH"; fi; }
+sw_vers() { echo "$TEST_MAC_VERSION"; }
+command() {
+    if [ "$#" = 2 ] && [ "$1" = "-v" ]; then
+        case "$2" in
+            python3|*/python3)
+                if [ "$2" = python3 ] && [ "$TEST_PYTHON_AVAILABLE" = 1 ]; then
+                    printf '%s\\n' "$TEST_PYTHON"
+                    return 0
+                fi
+                return 1 ;;
+        esac
+    fi
+    builtin command "$@"
+}
+'''
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+        return subprocess.run([BASH, "--noprofile", "--norc"], input=prelude + INSTALLER,
+                              cwd=self.root, env=self.env, capture_output=True,
+                              text=True, encoding="utf-8", timeout=30, **options)
+
+    def test_piped_installer_delivers_complete_embedded_python(self):
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "received.py").read_text(encoding="utf-8"),
+                         PYTHON_SOURCE + "\n")
+        calls = (self.root / "python-calls.txt").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].startswith("-c "))
+        self.assertEqual(calls[1], "-")
+
+    def test_stale_python_environment_is_cleared_before_candidate_check(self):
+        self.env.update(PYTHONHOME="/unrelated/missing-python", PYTHONPATH="/unrelated/modules")
+        result = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "received.py").read_text(encoding="utf-8"),
+                         PYTHON_SOURCE + "\n")
+
+    def test_missing_python_explains_prerequisite_without_running_installer(self):
+        self.env["TEST_PYTHON_AVAILABLE"] = "0"
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Install Python 3.10 or newer", result.stderr)
+        self.assertFalse((self.root / "python-calls.txt").exists())
+        self.assertFalse((self.root / "received.py").exists())
+
+    def test_unsupported_platform_stops_before_python_or_network(self):
+        for system, architecture, version, message in (
+                ("Linux", "x86_64", "14.0", "for macOS"),
+                ("Darwin", "arm64", "13.9", "macOS 14 or newer"),
+                ("Darwin", "x86_64", "13.2", "macOS 13.3 or newer"),
+                ("Darwin", "arm64", "unknown", "Could not determine")):
+            with self.subTest(system=system, architecture=architecture, version=version):
+                self.env.update(TEST_OS=system, TEST_ARCH=architecture, TEST_MAC_VERSION=version)
+                result = self.run_installer()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((self.root / "python-calls.txt").exists())
+                self.assertFalse((self.root / "received.py").exists())
+
 
 @unittest.skipUnless(BASH and Path(BASH).is_file(), "Bash is required for launcher checks")
 class SourceLauncherTests(unittest.TestCase):

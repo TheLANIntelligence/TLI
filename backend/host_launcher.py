@@ -18,7 +18,7 @@ import webbrowser
 
 import host_control as H
 import startup_config
-from process_utils import hidden_process_kwargs
+from runtime_preflight import RuntimeUnavailable, check_windows_runtime
 
 
 def _loopback(settings):
@@ -46,7 +46,17 @@ def runtime_paths(root):
 def matches_process(root, process, script_name):
     commands, executables = runtime_paths(root)
     command = process.cmdline()
-    if len(command) < 2 or not _fixed_arguments(script_name, command[2:]) or str(Path(command[0]).resolve()).casefold() not in commands or process.exe().casefold() not in executables:
+    if len(command) < 2 or not _fixed_arguments(script_name, command[2:]):
+        return False
+    argv_python, executable = Path(command[0]), Path(process.exe())
+    if not argv_python.is_absolute() or not executable.is_absolute():
+        return False
+    argv_python, executable = str(argv_python.resolve()).casefold(), str(executable.resolve()).casefold()
+    # Python 3.12's Windows venv redirector rewrites argv[0] to the configured
+    # base executable. Newer versions preserve the venv command. Both refer to
+    # the same owned interpreter; an arbitrary Python path is never sufficient.
+    if executable not in executables or not (
+            argv_python in commands or (argv_python == executable and executable in executables - commands)):
         return False
     script = Path(command[1])
     if not script.is_absolute():
@@ -69,7 +79,8 @@ def pending_backend(root):
         for process in psutil.process_iter(['exe', 'cmdline', 'cwd']):
             try:
                 info = process.info
-                if str(info.get('exe') or '').casefold() not in executables:
+                executable = info.get('exe')
+                if not executable or str(Path(executable).resolve()).casefold() not in executables:
                     continue
                 if matches_process(root, process, 'main.py'):
                     return True
@@ -207,25 +218,43 @@ def spawn_fixed(root, script_name, arguments=(), *, settings=None):
         child = subprocess.Popen([str(python_path(root, windowless=True)), str(script), *arguments],
                                  stdout=stream, stderr=stream, **kwargs)
     import psutil
-    process = psutil.Process(child.pid)
-    commands, executables = runtime_paths(root)
-    # Record the real interpreter generation, not Windows' venv redirector PID.
-    # It is reached only through the child we just spawned, never by port/PID guessing.
-    if os.name == 'nt' and len(executables - commands):
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            candidates = [proc for proc in process.children() if matches_process(root, proc, script_name)]
-            if len(candidates) == 1:
-                process = candidates[0]
-                break
-            if process.exe().casefold() in executables - commands:
-                break
-            time.sleep(0.02)
-        else:
-            H._fail('The owned interpreter process could not be identified. Inspect logs; no automatic second start.', 503)
-    if not matches_process(root, process, script_name):
-        H._fail('The launched interpreter identity could not be confirmed.', 503)
-    return {"pid": process.pid, "created_at": process.create_time(), "script": script_name}
+    def capture_failed(message):
+        H._fail(message + "\n\nOpen logs to review " + str(log)
+                + ". No second process was started.", 503)
+
+    try:
+        process = psutil.Process(child.pid)
+        commands, executables = runtime_paths(root)
+        # Record the real interpreter generation, not Windows' venv redirector PID.
+        # Reach it through the exact Popen child, never by port or process-name guessing.
+        if os.name == 'nt' and executables - commands:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                exit_code = child.poll()
+                if exit_code is not None:
+                    capture_failed(f"TLI's background process stopped during startup (exit code {exit_code}).")
+                try:
+                    candidates = [proc for proc in process.children() if matches_process(root, proc, script_name)]
+                    if len(candidates) > 1:
+                        capture_failed("More than one background interpreter matched this launch. TLI could not safely choose one.")
+                    if len(candidates) == 1:
+                        process = candidates[0]
+                        break
+                    if str(Path(process.exe()).resolve()).casefold() in executables - commands:
+                        break
+                except (OSError, ValueError, psutil.Error):
+                    pass  # Windows may not expose the new child's metadata immediately.
+                time.sleep(0.02)
+            else:
+                capture_failed("Windows has not confirmed the identity of TLI's background process.")
+        if not matches_process(root, process, script_name):
+            capture_failed("The launched interpreter did not match this TLI installation.")
+        return {"pid": process.pid, "created_at": process.create_time(), "script": script_name}
+    except (OSError, ValueError, psutil.Error):
+        exit_code = child.poll()
+        if exit_code is not None:
+            capture_failed(f"TLI's background process stopped before startup could be confirmed (exit code {exit_code}).")
+        capture_failed("Windows could not inspect TLI's background process.")
 
 
 def child_alive(root, child):
@@ -271,42 +300,24 @@ def spawn_backend(root, settings):
     return spawn_fixed(root, "main.py", settings=settings)
 
 
+class PackagedRuntimeUnavailable(H.HostControlError):
+    """Only a failed optional inference prerequisite can become a launch advisory."""
+
+
 def check_packaged_runtime(root):
-    """Probe a prepared Windows runtime without a model or automatic installation."""
-    runtime = Path(root) / "backend/ai/runtime/llama_server.exe"
-    if sys.platform != "win32" or not runtime.exists():
-        return  # Source installations and external AI providers need no bundled runtime.
-    message = (
-        "The packaged local AI runtime could not start. Windows may need the Microsoft Visual C++ v14 "
-        "Redistributable (x64). Install or repair the x64 package from Microsoft's official page: "
-        "https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/ . "
-        "Then reopen TLI or run TLI_Diagnostics.bat to retry. If it still fails, extract the complete "
-        "release into a new folder. TLI did not install system software or start a backend."
-    )
-    previous_error_mode = None
+    """Strict diagnostic check; everyday launch handles this optional failure."""
     try:
-        if os.name == "nt":
-            import ctypes
-            # Child processes inherit this mode, preventing missing-DLL crash dialogs.
-            previous_error_mode = ctypes.windll.kernel32.SetErrorMode(0x0001 | 0x0002 | 0x8000)
-        result = subprocess.run([str(runtime), "--version"], cwd=str(runtime.parent),
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                timeout=5, check=False, **hidden_process_kwargs())
-        if result.returncode != 0:
-            H._fail(message, 503)
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise H.HostControlError(503, message) from error
-    finally:
-        if previous_error_mode is not None:
-            ctypes.windll.kernel32.SetErrorMode(previous_error_mode)
+        check_windows_runtime(Path(root) / "backend/ai/runtime/llama_server.exe")
+    except RuntimeUnavailable as error:
+        raise PackagedRuntimeUnavailable(503, str(error)) from error
 
 
 def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings=None):
     root = H.root_path(root)
     report = progress or (lambda message: None)
-    check_packaged_runtime(root)
     report("Checking whether TLI is already running...")
     child = None
+    runtime_warning = None
     with H.FileLock(H.path_for(root, "launch.lock")):
         H.installation(root, create=True)
         settings = startup_config.resolve(root)["effective_next"] if settings is None else startup_config.validate(settings)
@@ -314,6 +325,11 @@ def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings
         if state == "unavailable":
             H._fail(reason)
         if state == "stopped":
+            try:
+                check_packaged_runtime(root)
+            except PackagedRuntimeUnavailable as error:
+                runtime_warning = error.detail
+                report("Local AI needs attention. Opening TLI so you can continue setup.")
             report("Starting TLI. Local AI can take a few minutes to load; this window will show progress.")
             child = spawn_backend(root, settings)
             H.write_json(H.path_for(root, "desktop-child.json"), child)
@@ -347,7 +363,10 @@ def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings
     if open_browser:
         if not webbrowser.open(url):
             report("Your browser did not open automatically. Open the address above to use TLI.")
-    return {"backend_state": state, "reason": reason, "url": url}
+    result = {"backend_state": state, "reason": reason, "url": url}
+    if runtime_warning:
+        result["runtime_warning"] = runtime_warning
+    return result
 
 
 def recorded_backend_children(root):
