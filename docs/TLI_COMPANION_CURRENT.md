@@ -6,6 +6,10 @@ changes, and bounded alternative-route checks for reviewed hosts. Shared Chat,
 documents, conversation settings, Tools and Builder remain available through the
 home TLI workspace. Physical release acceptance remains open.
 
+Published for testing with [TLI 1.4.5-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.5-beta)
+on the [production download page](https://thelanintelligence.com/download/).
+Update the home host first, then install the APK over the existing Companion Beta.
+
 ## Get the candidate
 
 - [EAS build 13](https://expo.dev/accounts/sergeantseven/projects/tli-companion/builds/a0dc87dd-931e-4dc6-839e-ad94c23879a3).
