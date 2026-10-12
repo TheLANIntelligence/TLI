@@ -30,6 +30,7 @@ class SourceHygieneTests(unittest.TestCase):
             "mobile/modules/tli-transport/android/src/main/java/example/Transport.kt",
             "mobile/modules/tli-transport/ios/Transport.swift", "desktop/TliLauncher.cs",
             ".env.example", "mobile/.env.sample", "backend/.env.template",
+            ".dev.vars.example", "website/download-verification.mjs",
         ):
             with self.subTest(path=path):
                 self.assertIsNone(hygiene.forbidden_reason(path))
@@ -46,6 +47,7 @@ class SourceHygieneTests(unittest.TestCase):
             ".codex/settings.json", ".claude/settings.local.json", ".aws/credentials", "build_work/report.json",
             "dist_build/package.txt", "artifacts/report.json", "TLI_Installer/bundle/frontend/index.html",
             ".env", "mobile/.env.production", "mobile/.env.example.local", "keys/server.pem",
+            ".dev.vars", ".dev.vars.production", "website/.dev.vars.preview",
             "signing/release.keystore", "certificates/server.crt", "certificates/server.der",
             "signing/apple.p8", "keys/id_ed25519",
             "TLI.exe", "backend/ai/runtime/llama-server", "backend/ai/runtime/extra/README.md",

@@ -9,42 +9,42 @@ const html = fs.readFileSync(path.join(landing, 'download/index.html'), 'utf8');
 const source = fs.readFileSync(path.join(landing, 'js/download.js'), 'utf8');
 const release = {
   version: '1.4.0-beta',
-  windows: { url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip', filename: 'TLI_1.4.0-beta_Windows.zip', sha256: 'a'.repeat(64) },
-  macos: { url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip', filename: 'TLI_1.4.0-beta_macOS.zip', sha256: 'b'.repeat(64), command: 'curl -fsSL https://thelanintelligence.com/install_mac.sh | bash', installerUrl: 'https://thelanintelligence.com/install_mac.sh' },
+  windows: { url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_Windows.zip', sha256: 'a'.repeat(64) },
+  macos: { url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip', sha256: 'b'.repeat(64) },
 };
 const email = 'synthetic-reader@example.test';
+const token = 'a1'.repeat(32);
+const config = { enabled: true, turnstileSiteKey: 'synthetic-public-sitekey' };
+const verified = platform => ({ status: 'verified', platform, version: release.version, url: release[platform].url });
+const flush = async () => { for (let count = 0; count < 16; count++) await Promise.resolve(); };
 
 function attributes(tag) {
-  const result = {};
-  for (const match of tag.matchAll(/\s([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
-    result[match[1]] = match[2] ?? match[3] ?? match[4] ?? '';
-  }
-  return result;
+  return Object.fromEntries([...tag.matchAll(/\s([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)]
+    .map(match => [match[1], match[2] ?? match[3] ?? match[4] ?? '']));
 }
-
 function tagWithId(id) {
   return [...html.matchAll(/<[a-z][^>]*>/gi)].map(match => ({ tag: match[0], attrs: attributes(match[0]) }))
     .find(value => value.attrs.id === id);
 }
-
-function reply({ status = 200, body = { next: '/thanks' }, badJSON = false } = {}) {
-  return { ok: status >= 200 && status < 300, status, json: async () => {
-    if (badJSON) throw new SyntaxError('Synthetic malformed response');
-    return body;
-  } };
+function reply(body, status = 200) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
-function fixture() {
-  const nodes = {}, calls = [], autoClicks = [], timers = new Map(), privateSideEffects = [];
-  let nextTimer = 0, handler = async () => reply();
+function fixture(options = {}) {
+  const nodes = {}, calls = [], autoClicks = [], timers = new Map(), privateSideEffects = [], historyCalls = [], timeline = [], scripts = [], scrolls = [];
+  let nextTimer = 0, widgetOptions, resetCount = 0;
+  const handlers = {
+    '/api/download/config': options.configHandler || (async () => reply(config)),
+    '/api/download/request': async () => reply({ status: 'check_email' }, 202),
+    '/api/download/verify': async () => reply(verified('windows')),
+  };
   const document = { activeElement: null };
   function element(id, initial = {}) {
-    const attrs = { ...(tagWithId(id)?.attrs || {}), ...initial };
-    const listeners = new Map();
+    const attrs = { ...(tagWithId(id)?.attrs || {}), ...initial }, listeners = new Map();
     const node = {
       id, attrs, dataset: {}, value: attrs.value || '', href: attrs.href || '', hidden: 'hidden' in attrs,
-      disabled: 'disabled' in attrs, required: 'required' in attrs, type: attrs.type || '',
-      name: attrs.name || '', textContent: '', innerHTML: '', style: {}, customValidity: '',
+      disabled: 'disabled' in attrs, required: 'required' in attrs, type: attrs.type || '', name: attrs.name || '',
+      textContent: '', innerHTML: '', style: {},
       addEventListener(type, callback) { const group = listeners.get(type) || []; group.push(callback); listeners.set(type, group); },
       async fire(type, extra = {}) {
         const event = { target: this, currentTarget: this, defaultPrevented: false,
@@ -53,118 +53,116 @@ function fixture() {
         return event;
       },
       click() { autoClicks.push(id); return this.fire('click'); },
-      focus() { document.activeElement = this; }, scrollIntoView() {},
-      setAttribute(name, value) { attrs[name] = String(value); if (name === 'href') this.href = String(value); if (name === 'hidden') this.hidden = true; },
+      focus() { document.activeElement = this; }, scrollIntoView(settings) { scrolls.push({ id, settings }); },
+      setAttribute(name, value) { attrs[name] = String(value); if (name === 'href') this.href = String(value); },
       getAttribute(name) { return Object.hasOwn(attrs, name) ? attrs[name] : null; },
-      removeAttribute(name) { delete attrs[name]; if (name === 'href') this.href = ''; if (name === 'hidden') this.hidden = false; },
-      setCustomValidity(value) { this.customValidity = value; },
-      checkValidity() {
-        if (this.customValidity || this.required && !this.value) return false;
-        return this.type !== 'email' || !this.value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.value.trim());
-      },
+      removeAttribute(name) { delete attrs[name]; if (name === 'href') this.href = ''; },
+      checkValidity() { return !(this.required && !this.value) && (this.type !== 'email' || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(this.value.trim())); },
       reportValidity() { return this.checkValidity(); },
-      querySelector(selector) { return selector.includes('submit') ? nodes['download-submit'] : null; },
     };
-    Object.defineProperty(node, 'validity', { get() { return { valid: this.checkValidity() }; } });
     nodes[id] = node;
     return node;
   }
-  for (const id of ['download-email-form', 'download-email', 'download-platform', 'download-submit', 'email-status',
-    'download-ready', 'download-file', 'mac-installer', 'copy-status', 'windows-sha256', 'macos-sha256', 'access']) element(id);
-  Object.assign(nodes['download-email'], { type: 'email', name: 'email', required: true });
-  Object.assign(nodes['download-platform'], { name: 'platform', required: true });
+  for (const id of ['download-email-form', 'download-email', 'download-platform', 'download-website', 'download-submit', 'email-status',
+    'download-ready', 'download-file', 'mac-installer', 'copy-status', 'windows-sha256', 'macos-sha256', 'access',
+    'email-verification', 'verify-email', 'verify-status', 'challenge-status', 'download-challenge']) element(id);
   const form = nodes['download-email-form'];
-  form.action = tagWithId('download-email-form')?.attrs.action || 'https://formspree.io/f/xlgarvnq';
-  form.elements = { email: nodes['download-email'], platform: nodes['download-platform'] };
   form.reportValidity = () => nodes['download-email'].reportValidity() && nodes['download-platform'].reportValidity();
-  form.reset = () => { nodes['download-email'].value = ''; nodes['download-platform'].value = ''; };
   const anchors = ['windows', 'macos'].flatMap(platform => [0, 1].map(index => {
     const anchor = element(`${platform}-${index}`, { href: '#access' });
-    anchor.dataset[`${platform}Download`] = '';
     return Object.assign(anchor, { platform });
   }));
   document.getElementById = id => nodes[id] || null;
-  document.querySelectorAll = selector => {
-    if (selector === '[data-copy]') return [];
-    return anchors.filter(anchor => selector.includes(`[data-${anchor.platform}-download]`));
-  };
-  document.querySelector = selector => selector.startsWith('#') ? nodes[selector.slice(1)] : document.querySelectorAll(selector)[0] || null;
+  document.querySelectorAll = selector => selector === '[data-copy]' ? []
+    : anchors.filter(anchor => selector.includes(`[data-${anchor.platform}-download]`));
+  document.createElement = tag => element(`${tag}-${scripts.length}`);
+  document.head = { append(script) {
+    scripts.push(script); timeline.push('script');
+    if (options.scriptLoad !== false) queueMicrotask(() => script.fire(options.scriptError ? 'error' : 'load'));
+  } };
   const forbid = kind => (...values) => { privateSideEffects.push({ kind, values }); throw new Error(`Forbidden ${kind}`); };
-  const location = {};
-  for (const name of ['href', 'search', 'hash']) Object.defineProperty(location, name, {
-    get: () => name === 'href' ? 'https://thelanintelligence.com/download/' : '', set: forbid(`location.${name}`),
-  });
-  Object.assign(location, { pathname: '/download/', origin: 'https://thelanintelligence.com', assign: forbid('location.assign'), replace: forbid('location.replace') });
+  let hash = options.hash || '';
+  const location = { pathname: '/download/', search: '', origin: 'https://thelanintelligence.com', assign: forbid('location.assign'), replace: forbid('location.replace') };
+  Object.defineProperty(location, 'hash', { get: () => hash, set: forbid('location.hash') });
+  Object.defineProperty(location, 'href', { get: () => location.origin + location.pathname + hash, set: forbid('location.href') });
   const storage = { getItem: forbid('storage.read'), setItem: forbid('storage.write'), removeItem: forbid('storage.remove') };
   const window = {
-    isSecureContext: true, location, localStorage: storage, sessionStorage: storage,
-    open: forbid('window.open'), history: { pushState: forbid('history'), replaceState: forbid('history') },
+    isSecureContext: true, location, localStorage: storage, sessionStorage: storage, open: forbid('window.open'),
+    history: { replaceState(state, title, url) {
+      if (options.historyFails) throw new Error('Synthetic history error');
+      historyCalls.push({ state, title, url }); timeline.push('scrub'); hash = '';
+    }, pushState: forbid('history.pushState') },
+    turnstile: {
+      render(selector, settings) { widgetOptions = settings; return 'synthetic-widget'; },
+      reset() { resetCount++; },
+    },
     setTimeout(callback, delay) { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
   };
-  class FakeFormData extends Map {
-    constructor(currentForm) {
-      super();
-      if (currentForm) {
-        this.set('email', nodes['download-email'].value);
-        this.set('platform', nodes['download-platform'].value);
-        this.set('_subject', 'TLI public beta download registration');
-      }
-    }
-    set(key, value) { return super.set(String(key), String(value)); }
-    append(key, value) { return this.set(key, value); }
-  }
-  const fetch = async (url, options) => { calls.push({ url, options }); return handler(url, options); };
-  const ctx = vm.createContext({ document, window, location, navigator: {}, fetch, PUBLIC_RELEASE: release,
-    FormData: FakeFormData, AbortController, URL, URLSearchParams,
+  const fetch = async (url, request) => {
+    calls.push({ url, options: request }); timeline.push(url);
+    assert.ok(Object.hasOwn(handlers, url), 'Only the documented same-origin APIs may be fetched');
+    return handlers[url](url, request);
+  };
+  const context = vm.createContext({ document, window, navigator: {}, fetch, PUBLIC_RELEASE: release, AbortController,
     setTimeout: window.setTimeout, clearTimeout: window.clearTimeout,
-    localStorage: storage, sessionStorage: storage,
     console: Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map(name => [name, forbid(`console.${name}`)])),
   });
-  vm.runInContext(source.replace(/^\s*import\s+\{\s*PUBLIC_RELEASE\s*\}\s+from\s+['"][^'"]+['"];?\s*/m, ''), ctx);
-  return { nodes, anchors, calls, timers, privateSideEffects, autoClicks, document,
-    respond(callback) { handler = callback; },
+  vm.runInContext(source.replace(/^\s*import\s+\{\s*PUBLIC_RELEASE\s*\}\s+from\s+['"][^'"]+['"];?\s*/m, ''), context);
+  return { nodes, anchors, calls, timers, privateSideEffects, autoClicks, document, historyCalls, timeline, scripts, location, scrolls,
+    get widgetOptions() { return widgetOptions; }, get resetCount() { return resetCount; },
+    respond(api, callback) { handlers[`/api/download/${api}`] = callback; },
     fill(platform = 'windows', address = email) { nodes['download-email'].value = address; nodes['download-platform'].value = platform; },
-    submit: () => form.fire('submit'),
+    solve(value = 'synthetic-challenge') { widgetOptions.callback(value); },
+    submit: () => form.fire('submit'), verify: () => nodes['verify-email'].fire('click'),
     async change(id, value, event = id === 'download-email' ? 'input' : 'change') { nodes[id].value = value; await nodes[id].fire(event); },
   };
 }
 
 function assertLocked(f) {
-  assert.equal(f.nodes['download-ready'].hidden, true, 'The ready panel must remain hidden');
-  assert.equal(f.nodes['mac-installer'].hidden, true, 'The installer command must remain hidden');
-  assert.ok(!Object.values(release).some(asset => asset.url && asset.url === f.nodes['download-file'].href), 'No package href may remain usable');
-  assert.ok(f.anchors.every(anchor => anchor.href === '#access'), 'Platform links must continue to lead to registration');
-  assert.equal(f.autoClicks.length, 0, 'No automatic package click');
-  assert.deepEqual(f.privateSideEffects, [], 'Registration does not write PII to storage, URLs or logs');
+  assert.equal(f.nodes['download-ready'].hidden, true);
+  assert.equal(f.nodes['mac-installer'].hidden, true);
+  assert.equal(f.nodes['download-file'].href, '');
+  assert.ok(f.anchors.every(anchor => anchor.href === '#access'));
+  assert.equal(f.autoClicks.length, 0);
+  assert.deepEqual(f.privateSideEffects, [], 'No email or token in browser storage, navigation or logs');
 }
+const posts = f => f.calls.filter(call => call.options.method === 'POST');
+async function usable(options) { const f = fixture(options); await flush(); f.fill(); f.solve(); return f; }
 
-test('static HTML requires email and platform while all four package links lead to registration', () => {
+test('static page is gated, accessible and has no third-party form fallback', () => {
   const links = [...html.matchAll(/<a\b[^>]*>/gi)].map(match => attributes(match[0]));
   const downloads = links.filter(attrs => 'data-windows-download' in attrs || 'data-macos-download' in attrs);
   assert.equal(downloads.length, 4);
   assert.ok(downloads.every(attrs => attrs.href === '#access'));
-  assert.ok(!links.some(attrs => /\/releases\/download\//.test(attrs.href || '')), 'No static ZIP link bypasses the form');
-  const form = tagWithId('download-email-form');
-  assert.ok(form);
-  assert.equal(form.attrs.method.toLowerCase(), 'post');
-  assert.match(form.attrs.action, /^https:\/\/formspree\.io\/f\/[a-z0-9]+$/i);
-  for (const id of ['download-email', 'download-platform']) {
-    assert.ok(Object.hasOwn(tagWithId(id)?.attrs || {}, 'required'), `${id} must be required`);
-  }
+  assert.ok(!links.some(attrs => /\/releases\/download\//.test(attrs.href || '')));
+  assert.equal(tagWithId('download-email-form').attrs.action, '/api/download/request');
+  assert.doesNotMatch(html + source, /formspree/i);
+  for (const id of ['download-email', 'download-platform']) assert.ok('required' in tagWithId(id).attrs);
   assert.equal(tagWithId('download-email').attrs.type, 'email');
-  assert.equal(tagWithId('download-submit').attrs.type, 'submit');
+  assert.ok('disabled' in tagWithId('download-submit').attrs);
+  assert.ok('disabled' in tagWithId('verify-email').attrs);
+  assert.equal(tagWithId('verify-email').attrs.type, 'button');
   const select = html.match(/<select\b[^>]*id="download-platform"[^>]*>([\s\S]*?)<\/select>/i);
-  assert.ok(select, 'Platform must be an explicit select');
   assert.deepEqual([...select[1].matchAll(/<option\b[^>]*>/gi)].map(match => attributes(match[0]).value).filter(Boolean).sort(), ['macos', 'windows']);
-  for (const id of ['download-ready', 'mac-installer']) assert.ok(Object.hasOwn(tagWithId(id)?.attrs || {}, 'hidden'));
-  assert.ok(!/\.zip(?:\?|$)/.test(tagWithId('download-file')?.attrs.href || ''));
+  assert.equal(tagWithId('download-website').attrs.tabindex, '-1');
+  assert.equal(tagWithId('download-website').attrs.autocomplete, 'off');
+  assert.match(html, /class="email-honeypot" aria-hidden="true"/);
+  for (const id of ['download-ready', 'mac-installer', 'email-verification']) assert.ok('hidden' in tagWithId(id).attrs);
+  assert.ok(!('href' in tagWithId('download-file').attrs));
+  assert.match(html, /<noscript>/);
 });
 
-test('page load is locked and each platform link selects its form value and focuses email', async () => {
+test('configuration and a Cloudflare token are required; platform controls retain focus behavior', async () => {
   const f = fixture();
-  assertLocked(f);
-  assert.equal(f.calls.length, 0);
+  assertLocked(f); assert.equal(f.nodes['download-submit'].disabled, true);
+  await flush();
+  assert.equal(f.calls.length, 1); assert.equal(f.calls[0].url, '/api/download/config');
+  assert.equal(f.scripts[0].src, 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+  assert.equal(f.widgetOptions.action, 'download_email');
+  assert.equal(f.widgetOptions.sitekey, config.turnstileSiteKey);
+  assert.equal(f.nodes['download-submit'].disabled, true);
+  f.solve(); assert.equal(f.nodes['download-submit'].disabled, false);
   for (const anchor of f.anchors) {
     await anchor.fire('click');
     assert.equal(f.nodes['download-platform'].value, anchor.platform);
@@ -173,151 +171,190 @@ test('page load is locked and each platform link selects its form value and focu
   }
 });
 
-test('invalid email and unapproved platform never submit or unlock', async () => {
+test('disabled, missing or failed config never loads Turnstile, sends email or permits verification', async () => {
+  for (const configHandler of [async () => reply({ enabled: false }), async () => reply({ enabled: true }),
+    async () => reply({ enabled: true, turnstileSiteKey: ' ' }), async () => reply({ error: 'unavailable' }, 503),
+    async () => { throw new Error('offline'); }, async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad JSON'); } })]) {
+    const f = fixture({ configHandler, hash: '#verify=' + token }); await flush(); f.fill();
+    await f.submit(); await f.verify();
+    assert.equal(posts(f).length, 0); assert.equal(f.scripts.length, 0);
+    assert.equal(f.nodes['download-submit'].disabled, true); assert.equal(f.nodes['verify-email'].disabled, true);
+    assert.match(f.nodes['email-status'].textContent, /unavailable/); assertLocked(f);
+  }
+});
+
+test('challenge load error or expiration stays gated and clears any previously accepted challenge token', async () => {
+  const broken = fixture({ scriptError: true }); await flush(); broken.fill();
+  await broken.submit(); assert.equal(posts(broken).length, 0); assertLocked(broken);
+  for (const callback of ['expired-callback', 'error-callback']) {
+    const f = await usable(); f.widgetOptions[callback](); await f.submit();
+    assert.equal(f.nodes['download-submit'].disabled, true); assert.equal(posts(f).length, 0);
+    assertLocked(f); f.solve(); await f.submit(); assert.equal(posts(f).length, 1);
+  }
+});
+
+test('invalid email, missing challenge and unsupported platform cannot request a link', async () => {
   for (const [address, platform] of [['', 'windows'], ['not-an-email', 'macos'], [email, ''], [email, 'linux'], [email, '__proto__']]) {
-    const f = fixture(); f.fill(platform, address);
-    await f.submit();
-    assert.equal(f.calls.length, 0, `${address || 'empty email'} / ${platform || 'empty platform'}`);
-    assertLocked(f);
+    const f = await usable(); f.fill(platform, address); await f.submit();
+    assert.equal(posts(f).length, 0); assertLocked(f);
   }
+  const f = fixture(); await flush(); f.fill(); await f.submit(); assert.equal(posts(f).length, 0);
 });
 
-test('confirmed registration sends the selected release metadata and reveals only an explicit download link', async () => {
+test('request acknowledgement only says check inbox; never reveals or starts a package download', async () => {
   for (const platform of ['windows', 'macos']) {
-    const f = fixture(); f.fill(platform);
-    await f.submit();
-    assert.equal(f.calls.length, 1);
-    const { url, options } = f.calls[0];
-    assert.equal(url, f.nodes['download-email-form'].action);
-    assert.equal(options.method, 'POST');
-    assert.equal(options.headers.Accept, 'application/json');
-    assert.equal(options.credentials, 'omit');
-    for (const [key, expected] of Object.entries({ email, platform, release_version: release.version,
-      asset_filename: release[platform].filename, request_kind: 'desktop_download_request', source_page: '/download/' })) {
-      assert.equal(options.body.get(key), expected, key);
-    }
-    assert.ok(options.body.get('_subject'));
-    assert.deepEqual([...options.body.keys()].sort(), ['_subject', 'asset_filename', 'email', 'platform', 'release_version', 'request_kind', 'source_page']);
-    assert.equal(f.nodes['download-ready'].hidden, false);
-    assert.equal(f.nodes['download-file'].href, release[platform].url);
-    assert.equal(f.nodes['mac-installer'].hidden, platform !== 'macos');
-    assert.equal(f.nodes['download-submit'].disabled, false);
-    assert.equal(f.autoClicks.length, 0);
-    assert.ok(f.anchors.every(anchor => anchor.href === '#access'));
-    assert.equal(f.timers.size, 0);
-    assert.deepEqual(f.privateSideEffects, []);
-    assert.ok(!String(url).includes(email) && !f.nodes['download-file'].href.includes(email));
+    const f = await usable(); f.fill(platform, '  ' + email + '  '); await f.submit();
+    assert.equal(posts(f).length, 1);
+    const { url, options } = posts(f)[0];
+    assert.equal(url, '/api/download/request');
+    assert.deepEqual(JSON.parse(options.body), { email, platform, turnstileToken: 'synthetic-challenge', website: '' });
+    assert.equal(options.headers['Content-Type'], 'application/json');
+    assert.equal(options.credentials, 'omit'); assert.equal(options.cache, 'no-store');
+    assert.equal(options.redirect, 'error'); assert.equal(options.referrerPolicy, 'no-referrer');
+    assert.match(f.nodes['email-status'].textContent, /Check your inbox/);
+    assert.equal(f.resetCount, 1); assert.equal(f.nodes['download-submit'].disabled, true); assertLocked(f);
   }
 });
 
-test('non-2xx, malformed JSON, network failure and unacknowledged responses preserve input and remain locked', async () => {
-  const responses = [() => reply({ status: 400 }), () => reply({ status: 503 }), () => reply({ badJSON: true }),
-    ...[{}, null, [], 'accepted', { ok: true }, { next: '' }, { next: 1 },
-      { next: '/thanks', error: null }, { next: '/thanks', errors: [] }].map(body => () => reply({ body })),
-    () => { throw new Error('Synthetic network failure'); }];
-  for (const respond of responses) {
-    const f = fixture(); f.fill('macos'); f.respond(respond);
-    await f.submit();
+test('request rejection, unexpected success body and transport errors never imply a sent email', async () => {
+  for (const handler of [async () => reply({ error: 'disposable_email' }, 400), async () => reply({ error: 'rate_limited' }, 429),
+    async () => reply({ error: 'delivery_failed' }, 503), async () => reply({ status: 'verified', url: release.windows.url }, 202),
+    async () => reply({ status: 'check_email' }, 200), async () => { throw new Error('network'); }]) {
+    const f = await usable(); f.respond('request', handler); await f.submit();
+    assert.doesNotMatch(f.nodes['email-status'].textContent, /Check your inbox/);
+    assert.equal(f.nodes['download-email'].value, email); assertLocked(f);
+  }
+});
+
+test('honeypot value is sent to the server for rejection and never treated as verification', async () => {
+  const f = await usable(); f.nodes['download-website'].value = 'synthetic-bot'; await f.submit();
+  assert.equal(JSON.parse(posts(f)[0].options.body).website, 'synthetic-bot'); assertLocked(f);
+});
+
+test('email token is scrubbed before config or widget load and requires an explicit verification press', async () => {
+  const f = fixture({ hash: '#verify=' + token });
+  assert.deepEqual(f.historyCalls, [{ state: null, title: '', url: '/download/' }]);
+  assert.equal(f.timeline[0], 'scrub'); assert.equal(f.location.hash, '');
+  await flush(); assert.equal(posts(f).length, 0); assertLocked(f);
+  assert.equal(f.nodes['email-verification'].hidden, false); assert.equal(f.nodes['verify-email'].disabled, false);
+  assert.ok(!Object.values(f.nodes).some(node => (node.textContent + node.innerHTML + node.value).includes(token)));
+  await f.verify(); assert.deepEqual(JSON.parse(posts(f)[0].options.body), { token });
+});
+
+test('only documented token fragments are accepted; malformed verification fragments are scrubbed', async () => {
+  for (const hash of ['#verify=short', '#verify=' + token + '&platform=macos', '#verify=' + token + '0', '#verify=%61'.repeat(8)]) {
+    const f = fixture({ hash }); await flush(); await f.verify();
+    assert.equal(f.location.hash, ''); assert.equal(posts(f).length, 0); assertLocked(f);
+    assert.match(f.nodes['verify-status'].textContent, /invalid/);
+  }
+  const other = fixture({ hash: '#windows' }); await flush();
+  assert.equal(other.historyCalls.length, 0); assert.equal(other.nodes['email-verification'].hidden, true);
+  const failed = fixture({ hash: '#verify=' + token, historyFails: true }); await flush(); await failed.verify();
+  assert.equal(posts(failed).length, 0); assertLocked(failed);
+});
+
+test('email links reveal their verification panel and platform shortcuts preserve the pending token', async () => {
+  let configure;
+  const f = fixture({ hash: '#verify=' + token.toUpperCase(),
+    configHandler: () => new Promise(resolve => { configure = resolve; }) });
+  assert.equal(f.scrolls.at(-1).id, 'email-verification');
+  for (const anchor of f.anchors) {
+    await anchor.fire('click');
+    assert.equal(f.nodes['email-verification'].hidden, false);
+    assert.equal(f.nodes['download-platform'].value, '', 'Shortcut does not replace the emailed platform');
     assertLocked(f);
-    assert.equal(f.nodes['download-email'].value, email);
-    assert.equal(f.nodes['download-platform'].value, 'macos');
-    assert.equal(f.nodes['download-submit'].disabled, false);
-    assert.ok(f.nodes['email-status'].textContent.trim(), 'Failure must be visible');
-    assert.equal(f.timers.size, 0);
-    assert.deepEqual(f.privateSideEffects, []);
   }
-});
-
-test('acknowledged next URL is never followed and cannot choose a different download', async () => {
-  const f = fixture(); f.fill('macos');
-  f.respond(() => reply({ status: 201, body: { next: `https://untrusted.example/redirect?email=${email}` } }));
-  await f.submit();
-  assert.equal(f.nodes['download-ready'].hidden, false);
+  configure(reply(config)); await flush();
+  assert.equal(f.document.activeElement, f.nodes['verify-email']);
+  assert.equal(f.scrolls.at(-1).id, 'email-verification');
+  for (const anchor of f.anchors) {
+    await anchor.fire('click');
+    assert.equal(f.document.activeElement, f.nodes['verify-email']);
+    assert.equal(f.nodes['download-platform'].value, '');
+    assert.equal(posts(f).length, 0, 'Shortcuts do not consume the token');
+  }
+  f.respond('verify', async () => reply(verified('macos')));
+  await f.verify();
+  assert.deepEqual(JSON.parse(posts(f)[0].options.body), { token });
   assert.equal(f.nodes['download-file'].href, release.macos.url);
-  assert.equal(f.autoClicks.length, 0);
-  assert.deepEqual(f.privateSideEffects, []);
-  assert.equal(f.calls.length, 1);
 });
 
-test('an in-flight duplicate submission is coalesced and never unlocks before acknowledgement', async () => {
-  const f = fixture(); f.fill();
-  let finish;
-  f.respond(() => new Promise(resolve => { finish = resolve; }));
-  const pending = f.submit();
-  await f.submit();
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.nodes['download-submit'].disabled, true);
-  assertLocked(f);
-  finish(reply()); await pending;
-  assert.equal(f.nodes['download-ready'].hidden, false);
-  assert.equal(f.nodes['download-submit'].disabled, false);
-});
-
-test('timeout aborts the bounded request, retains values, and requires an explicit retry', async () => {
-  const f = fixture(); f.fill();
-  f.respond((_url, options) => new Promise((_resolve, reject) => {
-    options.signal.addEventListener('abort', () => reject(new Error('Synthetic timeout')), { once: true });
-  }));
-  const pending = f.submit();
-  assert.equal(f.timers.size, 1);
-  const timer = [...f.timers.values()][0];
-  assert.ok(timer.delay > 0 && timer.delay <= 30000);
-  timer.callback(); await pending;
-  assert.equal(f.calls[0].options.signal.aborted, true);
-  assertLocked(f);
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.nodes['download-email'].value, email);
-  assert.equal(f.nodes['download-platform'].value, 'windows');
-  assert.equal(f.nodes['download-submit'].disabled, false);
-  f.respond(() => reply()); await f.submit();
-  assert.equal(f.calls.length, 2);
+test('platform shortcuts during verification do not invalidate an in-flight email confirmation', async () => {
+  const f = fixture({ hash: '#verify=' + token }); await flush(); let confirm;
+  f.respond('verify', () => new Promise(resolve => { confirm = resolve; }));
+  const running = f.verify(); await flush();
+  for (const anchor of f.anchors) await anchor.fire('click');
+  assert.equal(posts(f).length, 1); assert.equal(f.nodes['email-verification'].hidden, false);
+  confirm(reply(verified('windows'))); await running;
+  assert.equal(f.nodes['download-file'].href, release.windows.url);
   assert.equal(f.nodes['download-ready'].hidden, false);
 });
 
-test('editing email or changing platform revokes a previously confirmed link and installer', async () => {
-  for (const [id, value] of [['download-email', 'second-reader@example.test'], ['download-platform', 'windows']]) {
-    const f = fixture(); f.fill('macos'); await f.submit();
+test('successful explicit verification reveals only the server-confirmed matching release and platform', async () => {
+  for (const platform of ['windows', 'macos']) {
+    const f = fixture({ hash: '#verify=' + token }); await flush();
+    f.respond('verify', async () => reply(verified(platform))); await f.verify();
+    assert.equal(f.nodes['download-file'].href, release[platform].url);
     assert.equal(f.nodes['download-ready'].hidden, false);
-    await f.change(id, value);
-    assertLocked(f);
-    assert.equal(f.calls.length, 1, 'Changing input does not send a registration automatically');
+    assert.equal(f.nodes['mac-installer'].hidden, platform !== 'macos');
+    assert.equal(f.nodes['download-platform'].value, platform);
+    assert.equal(f.nodes['email-verification'].hidden, true);
+    assert.equal(f.document.activeElement, f.nodes['download-file']);
+    assert.equal(f.autoClicks.length, 0); assert.deepEqual(f.privateSideEffects, []);
+    await f.verify(); assert.equal(posts(f).length, 1, 'Consumed in-memory token cannot be resubmitted');
+    await f.change('download-email', email); assertLocked(f);
   }
 });
 
-test('late success cannot unlock after input changes, even when changed back before the response', async () => {
-  for (const [id, changed, restored] of [['download-email', 'second-reader@example.test', email], ['download-platform', 'macos', 'windows']]) {
-    for (const changeBack of [false, true]) {
-      const f = fixture(); f.fill(); let finish;
-      f.respond(() => new Promise(resolve => { finish = resolve; }));
-      const pending = f.submit();
-      await f.change(id, changed);
-      if (changeBack) await f.change(id, restored);
-      finish(reply()); await pending;
-      assertLocked(f);
-      assert.equal(f.nodes[id].value, changeBack ? restored : changed);
-      assert.equal(f.calls.length, 1);
-      assert.equal(f.nodes['download-submit'].disabled, false);
-    }
+test('verification rejects arbitrary URLs, mismatched platform/version, malformed JSON and failures', async () => {
+  const invalid = [
+    { ...verified('windows'), url: 'https://untrusted.example/file.zip' },
+    { ...verified('windows'), url: release.macos.url },
+    { ...verified('windows'), platform: '__proto__' },
+    { ...verified('windows'), version: '0.0.0' },
+    { ...verified('windows'), status: 'check_email' }, null,
+  ];
+  const handlers = invalid.map(body => async () => reply(body));
+  handlers.push(async () => reply({ error: 'invalid_token' }, 400), async () => reply({ error: 'expired_token' }, 410),
+    async () => reply({ error: 'unavailable' }, 503), async () => { throw new Error('offline'); },
+    async () => ({ ok: true, status: 200, json: async () => { throw new Error('bad JSON'); } }));
+  for (const handler of handlers) {
+    const f = fixture({ hash: '#verify=' + token }); await flush(); f.respond('verify', handler); await f.verify();
+    assertLocked(f); assert.ok(f.nodes['verify-status'].textContent);
   }
 });
 
-test('a platform-link click during a request invalidates the old selected-package response', async () => {
-  const f = fixture(); f.fill('windows'); let finish;
-  f.respond(() => new Promise(resolve => { finish = resolve; }));
-  const pending = f.submit();
-  await f.anchors.find(anchor => anchor.platform === 'macos').fire('click');
-  finish(reply()); await pending;
-  assert.equal(f.nodes['download-platform'].value, 'macos');
-  assertLocked(f);
+test('duplicate requests are coalesced and edited forms cannot accept late acknowledgement', async () => {
+  const f = await usable(); let complete;
+  f.respond('request', () => new Promise(resolve => { complete = resolve; }));
+  const running = f.submit(); await flush(); await f.submit(); assert.equal(posts(f).length, 1);
+  assert.equal(f.nodes['download-submit'].disabled, true);
+  await f.change('download-email', 'changed@example.test'); await f.change('download-email', email);
+  complete(reply({ status: 'check_email' }, 202)); await running;
+  assert.doesNotMatch(f.nodes['email-status'].textContent, /Check your inbox/); assertLocked(f);
 });
 
-test('input changes during JSON decoding cannot expose a stale acknowledged link', async () => {
-  const f = fixture(); f.fill(); let finishJSON;
-  f.respond(() => ({ ok: true, status: 200, json: () => new Promise(resolve => { finishJSON = resolve; }) }));
-  const pending = f.submit();
-  await new Promise(setImmediate);
-  assert.equal(typeof finishJSON, 'function');
-  await f.change('download-email', 'second-reader@example.test');
-  finishJSON({ next: '/thanks' }); await pending;
-  assertLocked(f);
+test('duplicate verification is coalesced and changes during response decoding invalidate old tokens', async () => {
+  const f = fixture({ hash: '#verify=' + token }); await flush(); let decoded;
+  f.respond('verify', async () => ({ ok: true, status: 200, json: () => new Promise(resolve => { decoded = resolve; }) }));
+  const running = f.verify(); await flush(); await f.verify(); assert.equal(posts(f).length, 1);
+  await f.change('download-platform', 'macos'); decoded(verified('windows')); await running;
+  assertLocked(f); assert.equal(f.nodes['verify-email'].disabled, true);
+});
+
+test('request timeout aborts, stays locked and needs a fresh challenge before retry', async () => {
+  const f = await usable();
+  f.respond('request', (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => reject(new Error('timeout')));
+  }));
+  const running = f.submit(); await flush();
+  assert.equal(f.timers.size, 1); [...f.timers.values()][0].callback(); await running;
+  assert.match(f.nodes['email-status'].textContent, /could not confirm/);
+  assert.equal(f.nodes['download-submit'].disabled, true); assertLocked(f);
+});
+
+test('valid email links can still be verified when the separate request challenge is unavailable', async () => {
+  const f = fixture({ hash: '#verify=' + token, scriptError: true }); await flush();
+  assert.equal(f.nodes['download-submit'].disabled, true); assert.equal(f.nodes['verify-email'].disabled, false);
+  await f.verify(); assert.equal(f.nodes['download-file'].href, release.windows.url);
 });

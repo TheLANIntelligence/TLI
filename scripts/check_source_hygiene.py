@@ -86,6 +86,8 @@ def forbidden_reason(path: str) -> str | None:
         return "private configuration or legacy runtime state"
     if name == ".env" or (name.startswith(".env.") and name not in {".env.example", ".env.sample", ".env.template"}):
         return "local environment settings"
+    if name == ".dev.vars" or (name.startswith(".dev.vars.") and name != ".dev.vars.example"):
+        return "local Worker secrets"
     suffix = PurePosixPath(name).suffix
     if name in PRIVATE_KEY_NAMES or suffix in CERTIFICATE_SUFFIXES:
         return "certificate or private signing material"

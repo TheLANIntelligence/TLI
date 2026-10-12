@@ -1,0 +1,27 @@
+name = "thelanintelligence"
+compatibility_date = "2026-04-12"
+pages_build_output_dir = "./landing"
+
+# Public configuration only. Secret values belong in Pages environment secrets.
+# The widget is restricted to the production and preview hostnames.
+[vars]
+DOWNLOAD_SITE_ORIGIN = "https://thelanintelligence.com"
+DOWNLOAD_FROM_EMAIL = "TLI Downloads <downloads@notify.thelanintelligence.com>"
+TURNSTILE_SITE_KEY = "0x4AAAAAAFULFiVwT65K76oa"
+
+[[d1_databases]]
+binding = "DOWNLOAD_DB"
+database_name = "tli-download-verification"
+database_id = "7c66e612-eef5-4dfb-b296-1cf082d35e67"
+migrations_dir = "website/migrations"
+
+[env.preview.vars]
+DOWNLOAD_SITE_ORIGIN = "https://email-verification-preview.thelanintelligence.pages.dev"
+DOWNLOAD_FROM_EMAIL = "TLI Downloads <downloads@notify.thelanintelligence.com>"
+TURNSTILE_SITE_KEY = "0x4AAAAAAFULFiVwT65K76oa"
+
+[[env.preview.d1_databases]]
+binding = "DOWNLOAD_DB"
+database_name = "tli-download-verification-preview"
+database_id = "a21d4094-1bc3-4cca-8ed2-fb46fe3c25fc"
+migrations_dir = "website/migrations"
