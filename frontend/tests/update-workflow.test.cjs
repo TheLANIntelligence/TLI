@@ -70,6 +70,77 @@ test('idle startup discovers a delayed background result and keeps polling visib
   await f.event('pagehide'); assert.equal(f.timers.size, 0);
 });
 
+test('dismissed releases stay quiet through repeated checks and errors while a different release prompts again', async () => {
+  const f = fixture(); await f.start(); await f.nodes['tli-update-dismiss-btn'].click();
+  await f.poll(15000);
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  f.setStatus({ ...available, latest_version: 'v1.3.5', last_check_error: 'Release source unavailable' });
+  await f.poll(60000);
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  assert.match(f.nodes['settings-update-message'].textContent, /Automatic update check could not finish.*Release source unavailable/);
+  f.setStatus({ ...available, state: 'error', latest_version: '', error: 'Release source unavailable' });
+  await f.poll(60000);
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Retry check');
+  f.handler(url => url === '/update/status' ? { ok: false, status: 503, json: async () => ({ detail: 'Host unavailable' }) } : undefined);
+  await f.poll(60000);
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  f.handler(() => undefined); f.setStatus(available); await f.visibility(false);
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  assert.equal(f.nodes['settings-update-action-btn'].hidden, false);
+  assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Download update');
+  f.setStatus({ ...available, latest_version: '1.3.6' }); await f.poll(60000);
+  assert.equal(f.nodes['tli-update-banner'].hidden, false);
+  assert.equal(f.nodes['tli-update-version'].textContent, 'v1.3.6');
+  assert.ok(f.calls.every(call => call.url === '/update/status' && !call.method));
+  assert.equal(f.toasts.length, 0); assert.equal(f.lifecycle.length, 0);
+});
+
+test('manual Settings checks keep a same-release dismissal while retaining the download action', async () => {
+  const f = fixture(); await f.start(); await f.nodes['tli-update-dismiss-btn'].click();
+  await f.nodes['settings-check-update-btn'].click();
+  assert.equal(f.nodes['tli-update-banner'].hidden, true);
+  assert.equal(f.nodes['settings-update-action-btn'].hidden, false);
+  assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Download update');
+  assert.equal(f.calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(f.calls.at(-1).url, '/update/check');
+});
+
+test('failed automatic checks stay in Settings without unsolicited attention banners or downloads', async () => {
+  for (const state of ['idle', 'up_to_date', 'available']) {
+    const f = fixture({ ...available, state, latest_version: state === 'available' ? available.latest_version : '' });
+    await f.start();
+    f.setStatus({ ...available, state, latest_version: state === 'available' ? available.latest_version : '', last_check_error: 'Release source unavailable' });
+    await f.poll(15000);
+    assert.match(f.nodes['settings-update-message'].textContent, /Automatic update check could not finish.*Release source unavailable/);
+    assert.equal(f.nodes['tli-update-banner'].hidden, state !== 'available');
+    assert.equal(f.nodes['tli-update-banner-title'].textContent, 'TLI update available');
+    assert.equal(f.nodes['settings-update-manual-link'].hidden, false);
+    assert.equal(f.nodes['settings-update-manual-link'].href, 'https://github.com/TheLANIntelligence/TLI/releases');
+    f.setStatus({ ...available, state, latest_version: state === 'available' ? available.latest_version : '' });
+    await f.poll(60000);
+    assert.equal(f.nodes['settings-update-manual-link'].hidden, true);
+    assert.ok(f.calls.every(call => call.url === '/update/status' && !call.method));
+    assert.equal(f.toasts.length, 0); assert.equal(f.lifecycle.length, 0);
+  }
+});
+
+test('the saved disabled automatic-check preference survives polling and release-source changes', async () => {
+  const f = fixture(); await f.start();
+  assert.equal(f.nodes['settings-update-auto-check'].checked, false);
+  f.setStatus({ ...available, latest_version: '1.3.6' }); await f.poll(15000);
+  assert.equal(f.nodes['settings-update-auto-check'].checked, false);
+  f.nodes['settings-update-url'].value = 'https://custom.example/releases.json';
+  await f.nodes['settings-update-url-save'].click();
+  assert.deepEqual(JSON.parse(f.calls.at(-1).body), { update_url: 'https://custom.example/releases.json', auto_check: false });
+  assert.match(f.nodes['settings-update-save-status'].textContent, /applies immediately/);
+  assert.doesNotMatch(f.nodes['settings-update-save-status'].textContent, /next time|restart/);
+  assert.equal(f.calls.filter(call => call.method === 'POST').length, 1);
+  assert.equal(f.calls.at(-1).url, '/update/settings');
+  assert.match(html, /Check automatically for updates/);
+  assert.match(html, /at startup and every six hours while TLI runs/);
+});
+
 test('download submits JSON once, shows Settings progress and exposes pending installation without changing the running version', async () => {
   const f = fixture(); await f.start(); await f.nodes['tli-update-dismiss-btn'].click();
   let finish;
@@ -106,10 +177,38 @@ test('preparation errors offer a fresh check instead of resubmitting apply, then
   await f.nodes['settings-update-action-btn'].click();
   assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Retry check');
   assert.match(f.nodes['settings-update-message'].textContent, /Download interrupted.*Retry/);
+  assert.equal(f.nodes['settings-update-manual-link'].hidden, false);
   await f.nodes['settings-update-action-btn'].click();
   assert.equal(f.calls.filter(call => call.url === '/update/apply').length, 1);
   assert.equal(f.calls.filter(call => call.url === '/update/check').length, 1);
   assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Download update');
+  assert.equal(f.nodes['settings-update-manual-link'].hidden, true);
+});
+
+test('TLS failures offer only the fixed manual release link without reviving dismissed banners or bypassing host gating', async () => {
+  for (const options of [{}, { url: 'https://192.168.1.4:8000/' }]) {
+    const f = fixture(available, options); await f.start(); await f.nodes['tli-update-dismiss-btn'].click();
+    f.setStatus({ ...available, state: 'error', error: 'TLS could not verify the release certificate. Download in your browser and run the update script.', manual_url: 'https://untrusted.example/download' });
+    await f.poll(15000);
+    assert.match(f.nodes['settings-update-message'].textContent, /TLS could not verify.*Download in your browser/);
+    assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Retry check');
+    assert.equal(f.nodes['tli-update-banner'].hidden, true);
+    const before = f.calls.length;
+    for (const id of ['settings-update-manual-link', 'tli-update-manual-link']) {
+      assert.equal(f.nodes[id].hidden, false);
+      assert.equal(f.nodes[id].href, 'https://github.com/TheLANIntelligence/TLI/releases');
+      await f.nodes[id].click();
+    }
+    assert.equal(f.calls.length, before, 'Manual links never trigger update API requests');
+    assert.ok(f.calls.every(call => call.url === '/update/status' && !call.method));
+    assert.equal(f.lifecycle.length, 0);
+    f.setStatus(available); await f.nodes['settings-update-action-btn'].click();
+    assert.equal(f.nodes['settings-update-manual-link'].hidden, true);
+    assert.equal(f.nodes['tli-update-banner'].hidden, true);
+    assert.equal(f.nodes['settings-update-action-btn'].hidden, !!options.url, 'Remote browsers still cannot download onto the host');
+    assert.equal(f.calls.filter(call => call.method === 'POST').length, 1);
+    assert.equal(f.calls.at(-1).url, '/update/check');
+  }
 });
 
 test('opening a verified folder is retriable without losing ready state or automatically quitting TLI', async () => {
@@ -175,8 +274,11 @@ test('status refresh failure can retry while preparation was previously active',
   await f.poll(1500);
   assert.match(f.nodes['settings-update-message'].textContent, /Host unavailable/);
   assert.equal(f.nodes['settings-update-action-btn'].disabled, false);
+  assert.equal(f.nodes['settings-update-manual-link'].hidden, false);
+  assert.equal(f.nodes['settings-update-manual-link'].href, 'https://github.com/TheLANIntelligence/TLI/releases');
   f.handler(() => undefined); f.setStatus(available); await f.nodes['settings-update-action-btn'].click();
   assert.equal(f.nodes['settings-update-action-btn'].textContent, 'Download update');
+  assert.equal(f.nodes['settings-update-manual-link'].hidden, true);
 });
 
 test('an older passive GET cannot overwrite a newer user check', async () => {

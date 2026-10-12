@@ -179,9 +179,8 @@ S.log_debug("identity", "INFO", "Node identity loaded",
 from routers.relay_routes import autostart as _relay_autostart
 _relay_autostart()
 
-# Schedule background update check (runs 5 s after startup if URL is configured)
+# The update checker starts and stops with the host lifecycle below.
 import auto_update as _auto_update
-_auto_update.auto_check_on_startup()
 
 # Load node identity
 NODE_CONFIG = S.load_node_config()
@@ -587,6 +586,7 @@ import lan_discovery
 @app.on_event("startup")
 async def on_startup():
     _validate_startup()
+    _auto_update.auto_check_on_startup()
     _event_bus.start_activity_history(S.DATA_DIR)
     import asyncio as _asyncio
     loop = _asyncio.get_running_loop()
@@ -642,6 +642,7 @@ async def on_startup():
 
 @app.on_event("shutdown")
 def on_shutdown():
+    _auto_update.stop_auto_check()
     from storage_jobs import shutdown as _storage_jobs_shutdown
     _storage_jobs_shutdown()
     _event_bus.unregister_post_emit_hook(_dp_on_event)

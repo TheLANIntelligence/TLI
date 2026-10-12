@@ -13,13 +13,17 @@ import os
 from pathlib import Path
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
 import uuid
+
+import certifi
 
 import tli_state as S
 from process_utils import hidden_process_kwargs
@@ -28,6 +32,8 @@ DEFAULT_UPDATE_URL = "https://thelanintelligence.com/downloads.json"
 MANUAL_URL = "https://github.com/TheLANIntelligence/TLI/releases"
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
+AUTO_CHECK_INTERVAL = 6 * 60 * 60
+AUTO_START_DELAY = 5
 _SETTINGS_FILE = Path(S.DATA_DIR) / "update_settings.json"
 
 
@@ -51,6 +57,13 @@ _error = ""
 _progress = 0
 _checked_at = None
 _ready_path = ""
+_checking = False
+_last_attempt = None
+_last_check_error = ""
+_settings_revision = 0
+_auto_thread = None
+_auto_stop = threading.Event()
+_auto_wake = threading.Event()
 
 
 def _platform_name():
@@ -93,10 +106,16 @@ def _write_json(path, value):
 
 
 def save_settings(update_url: str, auto_check: bool = True):
+    global _settings_revision, _last_attempt
     if update_url:
         _https_url(update_url)
     with _lock:
+        previous = _load_settings()
         _write_json(_SETTINGS_FILE, {"update_url": update_url, "auto_check": auto_check})
+        if previous != _load_settings():
+            _settings_revision += 1
+            _last_attempt = None
+            _auto_wake.set()
 
 
 def _parse_ver(value):
@@ -174,6 +193,7 @@ def get_status():
             "latest_version": _info.get("version"), "notes": _info.get("notes"),
             "released": _info.get("released"), "frontend_only": False,
             "progress": _progress, "error": _error, "checked_at": _checked_at,
+            "last_check_error": _last_check_error,
             "platform": _platform_name(), "update_method": "guided",
             "can_prepare": bool(_info.get("can_prepare")),
             "can_open": _state == UpdateState.READY and bool(_ready_path),
@@ -209,6 +229,15 @@ def _manifest_info(manifest):
     return result
 
 
+def _https_context():
+    # urllib does not use requests' bundled CAs. Some Python installations have
+    # only a partial system trust store, so include Mozilla's roots as well.
+    # Keep platform/administrator roots, hostname checks and strict TLS defaults.
+    context = ssl.create_default_context()
+    context.load_verify_locations(cafile=certifi.where())
+    return context
+
+
 def _open_url(url, timeout):
     class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -216,18 +245,40 @@ def _open_url(url, timeout):
             return super().redirect_request(req, fp, code, msg, headers, newurl)
     _https_url(url)
     request = urllib.request.Request(url, headers={"User-Agent": f"TLI/{S.TLI_VERSION}", "Cache-Control": "no-cache"})
-    return urllib.request.build_opener(HTTPSRedirect()).open(request, timeout=timeout)
+    return urllib.request.build_opener(
+        HTTPSRedirect(), urllib.request.HTTPSHandler(context=_https_context()),
+    ).open(request, timeout=timeout)
 
 
-def check(update_url=None):
+def _failure_message(prefix, error):
+    reason = error.reason if isinstance(error, urllib.error.URLError) else error
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        detail = getattr(reason, "verify_message", None) or str(reason)
+        return (f"{prefix}: TLI could not verify the update server's HTTPS certificate ({detail}). "
+                "Check this computer's date and time. Use Download from releases to get the release "
+                "in your browser, then follow its TLI_Update instructions. "
+                "No application files were changed.")
+    return f"{prefix}: {error}"
+
+
+def check(update_url=None, *, automatic=False):
     global _state, _info, _error, _progress, _checked_at
+    global _checking, _last_attempt, _last_check_error
     with _lock:
         _restore_prepared()
-        if _state in _BUSY or _state == UpdateState.READY:
+        if _checking or _state in _BUSY or _state == UpdateState.READY:
             return get_status()
-        _state, _error, _progress, _info = UpdateState.CHECKING, "", 0, {}
+        settings = _load_settings()
+        if automatic and (not settings["auto_check"] or not settings["update_url"]):
+            return get_status()
+        url = update_url if update_url is not None else settings["update_url"]
+        generation = _settings_revision
+        previous = (_state, _info, _error, _progress)
+        _checking, _last_attempt = True, time.monotonic()
+        if not automatic:
+            _state, _error, _progress, _info = UpdateState.CHECKING, "", 0, {}
+    info, failure = None, ""
     try:
-        url = update_url if update_url is not None else _load_settings()["update_url"]
         if not url:
             raise ValueError("No update URL configured. Restore the release source in Settings → Software Updates.")
         with _open_url(url, 15) as response:
@@ -235,15 +286,26 @@ def check(update_url=None):
         if len(raw) > MAX_MANIFEST_BYTES:
             raise ValueError("The release source returned too much data.")
         info = _manifest_info(json.loads(raw.decode("utf-8")))
-        with _lock:
-            _info = info
-            _state = UpdateState.AVAILABLE if _is_newer(info["version"], S.TLI_VERSION) else UpdateState.UP_TO_DATE
     except Exception as error:
-        with _lock:
-            _state, _error = UpdateState.ERROR, f"Could not check for updates: {error}"
+        failure = _failure_message("Could not check for updates", error)
     finally:
         with _lock:
-            _checked_at = datetime.now(timezone.utc).isoformat()
+            _checking = False
+            # A changed preference or an explicitly started download wins over
+            # an older background response. Never replace its selected manifest.
+            if generation != _settings_revision:
+                if not automatic and _state == UpdateState.CHECKING:
+                    _state, _info, _error, _progress = previous
+                _auto_wake.set()
+            elif _state not in {UpdateState.DOWNLOADING, UpdateState.VERIFYING, UpdateState.PREPARING, UpdateState.READY}:
+                _checked_at = datetime.now(timezone.utc).isoformat()
+                _last_check_error = failure
+                if failure:
+                    if not automatic:
+                        _state, _error = UpdateState.ERROR, failure
+                else:
+                    _info, _error, _progress = info, "", 0
+                    _state = UpdateState.AVAILABLE if _is_newer(info["version"], S.TLI_VERSION) else UpdateState.UP_TO_DATE
     return get_status()
 
 
@@ -309,7 +371,7 @@ def _apply_pipeline(manifest):
             _state, _progress, _ready_path = UpdateState.READY, 100, str(package)
     except Exception as error:
         with _lock:
-            _state, _error = UpdateState.ERROR, f"Update preparation failed: {error}"
+            _state, _error = UpdateState.ERROR, _failure_message("Update preparation failed", error)
         if job is not None:
             shutil.rmtree(job, ignore_errors=True)
 
@@ -328,10 +390,48 @@ def open_prepared_folder():
 
 
 def auto_check_on_startup():
-    settings = _load_settings()
-    if not settings["auto_check"] or not settings["update_url"]:
+    """One cancellable, preference-aware checker for each running host."""
+    global _auto_thread, _auto_stop, _auto_wake, _last_attempt
+    with _lock:
+        if _auto_thread is not None and _auto_thread.is_alive() and not _auto_stop.is_set():
+            return
+        _auto_stop, _auto_wake = threading.Event(), threading.Event()
+        _last_attempt = None
+        _auto_thread = threading.Thread(target=_automatic_loop, args=(_auto_stop, _auto_wake),
+                                        name="tli-update-check", daemon=True)
+        _auto_thread.start()
+
+
+def _automatic_delay():
+    with _lock:
+        settings = _load_settings()
+        if not settings["auto_check"] or not settings["update_url"]:
+            return AUTO_CHECK_INTERVAL
+        if _last_attempt is None:
+            return 0
+        return max(0, AUTO_CHECK_INTERVAL - (time.monotonic() - _last_attempt))
+
+
+def _automatic_loop(stop, wake):
+    if stop.wait(AUTO_START_DELAY):
         return
-    def background():
-        time.sleep(5)
-        check()
-    threading.Thread(target=background, daemon=True).start()
+    while not stop.is_set():
+        wake.clear()
+        if stop.is_set():
+            return
+        delay = _automatic_delay()
+        if delay <= 0:
+            check(automatic=True)
+            # Busy downloads/checks are revisited locally without another request.
+            delay = max(60, _automatic_delay())
+        if not stop.is_set():
+            wake.wait(delay)
+
+
+def stop_auto_check():
+    """Wake the scheduler on host shutdown without waiting for a network timeout."""
+    global _settings_revision
+    with _lock:
+        _settings_revision += 1
+        _auto_stop.set()
+        _auto_wake.set()

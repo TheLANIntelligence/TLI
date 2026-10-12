@@ -7,9 +7,13 @@ It does not update an installed native phone Companion or an old frozen backend.
 
 ## Update from TLI
 
-1. Open **Settings → Software Updates → Check now** in your existing app. Review
-   the version and release notes. Automatic startup checks only check; they do not
-   install updates.
+1. With **Check automatically for updates** enabled, TLI checks at startup and
+   every six hours while the host runs. A banner offers the newer release and its
+   release notes without interrupting your work. You can also open **Settings →
+   Software Updates → Check for updates** at any time. Checks never download or
+   install an update by themselves. Changing the saved preference takes effect
+   immediately. Dismissing the banner hides that release for this page session;
+   a newer release can still appear, and Settings keeps the update available.
 2. Prepare the offered desktop update. TLI downloads and verifies the archive,
    then shows the extracted package. Your running application is unchanged at
    this point. An older app can instead download the matching Windows or Mac ZIP
@@ -58,6 +62,16 @@ or package changes made to the Python environment.
 
 ## If an update cannot finish
 
+- **HTTPS certificate verification failed:** check the computer's date and time.
+  If downloading inside an older TLI still fails, open the
+  [official TLI releases](https://github.com/TheLANIntelligence/TLI/releases)
+  in your browser, download the matching platform ZIP and follow steps 2–5 above.
+  This uses the updater from the downloaded package and keeps your original
+  installation and saved data. Do not ignore browser certificate warnings.
+  Current source uses the system's trusted certificates plus certifi's Mozilla
+  root bundle for release checks and downloads, including HTTPS redirects;
+  certificate and hostname verification remain required. An already installed
+  release needs the corrected code before its in-app download behavior changes.
 - **TLI is still running:** return to the original installation, finish active
   work, stop the host and helper, then rerun the update launcher. The updater
   does not forcibly terminate processes.

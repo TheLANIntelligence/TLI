@@ -37,7 +37,7 @@ async function run() {
           if (pathname === '/update/status') return respond(status);
           if (pathname === '/update/check') { status = { ...available }; return respond(status); }
           if (pathname === '/update/apply') {
-            if (failApply) return respond({ detail: 'Synthetic download interruption' }, 503);
+            if (failApply) return respond({ detail: "Update preparation failed: TLI could not verify the update server's HTTPS certificate (unable to get local issuer certificate). Check this computer's date and time. Use Download from releases to get the release in your browser, then follow its TLI_Update instructions. No application files were changed." }, 503);
             status = { ...available, state: 'downloading', progress: 47 };
             return respond({ ok: true });
           }
@@ -119,11 +119,15 @@ async function run() {
           status = { ...available }; await refresh('Update available'); failApply = true;
           await page.locator('#settings-update-action-btn').click();
           await page.waitForFunction(() => document.getElementById('settings-update-action-btn').textContent === 'Retry check');
-          assert.match(await page.locator('#settings-update-message').innerText(), /Synthetic download interruption/);
+          assert.match(await page.locator('#settings-update-message').innerText(), /HTTPS certificate/);
+          assert.equal(await page.locator('#settings-update-manual-link').isVisible(), true);
+          assert.equal(await page.locator('#settings-update-manual-link').getAttribute('href'), 'https://github.com/TheLANIntelligence/TLI/releases');
+          assert.ok(await page.locator('#settings-section-updates').evaluate(element => element.scrollWidth <= element.clientWidth + 2), 'Certificate recovery guidance must fit the viewport');
           await capture('retry');
           const before = report.requests.filter(r => r.width === width && r.path === '/update/apply').length;
           await page.locator('#settings-update-action-btn').click();
           await page.waitForFunction(() => document.getElementById('settings-update-action-btn').textContent === 'Download update');
+          assert.equal(await page.locator('#settings-update-manual-link').isVisible(), false);
           assert.equal(report.requests.filter(r => r.width === width && r.path === '/update/apply').length, before);
           assert.equal(report.requests.filter(r => r.width === width && r.path === '/update/check').length, 1);
         });

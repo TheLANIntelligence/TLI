@@ -88,6 +88,9 @@ _isolation.setattr(file_routes, "send2trash", _no_real_trash)
 @pytest.fixture(autouse=True)
 def isolated_background_services(monkeypatch):
     """Lifecycle tests exercise wiring without touching LAN, disks, or models."""
+    from types import SimpleNamespace
+    monkeypatch.setattr(_main, "_auto_update", SimpleNamespace(
+        auto_check_on_startup=lambda: None, stop_auto_check=lambda: None))
     monkeypatch.setattr(_main, "start_background_loops", lambda: None)
     monkeypatch.setattr(_main, "_cleanup_start", lambda: None)
     monkeypatch.setattr(_main, "_cleanup_stop", lambda: None)

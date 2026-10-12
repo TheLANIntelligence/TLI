@@ -2,7 +2,9 @@
 import hashlib
 import io
 import json
+import ssl
 import threading
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -32,6 +34,11 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(U, "_ready_path", "")
     monkeypatch.setattr(U, "_checked_at", None)
     monkeypatch.setattr(U, "_progress", 0)
+    monkeypatch.setattr(U, "_checking", False)
+    monkeypatch.setattr(U, "_last_attempt", None)
+    monkeypatch.setattr(U, "_last_check_error", "")
+    monkeypatch.setattr(U, "_settings_revision", 0)
+    monkeypatch.setattr(U, "_auto_wake", threading.Event())
     monkeypatch.setattr(U, "_platform_name", lambda: "windows")
     monkeypatch.setattr(U, "_open_url", lambda *a: pytest.fail("Unexpected network access"))
 
@@ -111,6 +118,64 @@ def test_failed_check_can_be_retried(monkeypatch):
     result = serve_manifest(monkeypatch, manifest())
     assert result["state"] == "available"
     assert result["error"] == ""
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_certificate_failure_has_recovery_guidance_and_can_retry(monkeypatch, tmp_path, wrapped):
+    error = ssl.SSLCertVerificationError(1, "unable to get local issuer certificate")
+    if wrapped:
+        error = urllib.error.URLError(error)
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(U, "_open_url", fail)
+    status = U.check()
+    assert status["state"] == "error"
+    assert "could not verify the update server's HTTPS certificate" in status["error"]
+    assert "unable to get local issuer certificate" in status["error"]
+    assert "Download from releases" in status["error"]
+    assert "TLI_Update" in status["error"]
+    assert not (tmp_path / "data/updates").exists()
+    assert serve_manifest(monkeypatch, manifest())["state"] == "available"
+
+
+def test_certificate_failure_during_download_cleans_staging_and_preserves_install(monkeypatch, tmp_path):
+    existing = tmp_path / "frontend/index.html"
+    existing.parent.mkdir()
+    existing.write_text("original application")
+    saved = tmp_path / "data/conversations.json"
+    saved.parent.mkdir()
+    saved.write_text("saved conversations")
+    serve_manifest(monkeypatch, manifest())
+
+    def fail(*args):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate has expired"))
+
+    monkeypatch.setattr(U, "_open_url", fail)
+    U._apply_pipeline(dict(U._info))
+    status = U.get_status()
+    assert status["state"] == "error"
+    assert "certificate has expired" in status["error"]
+    assert "date and time" in status["error"]
+    assert "No application files were changed" in status["error"]
+    assert status["can_open"] is False
+    assert existing.read_text() == "original application"
+    assert saved.read_text() == "saved conversations"
+    assert not list((tmp_path / "data/updates").iterdir())
+
+
+def test_automatic_certificate_failure_remains_nonintrusive(monkeypatch):
+    serve_manifest(monkeypatch, manifest())
+
+    def fail(*args):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "unable to get local issuer certificate"))
+
+    monkeypatch.setattr(U, "_open_url", fail)
+    status = U.check(automatic=True)
+    assert status["state"] == "available"
+    assert not status["error"]
+    assert "HTTPS certificate" in status["last_check_error"]
 
 
 def test_bad_checksum_never_extracts_or_changes_application(monkeypatch, tmp_path):

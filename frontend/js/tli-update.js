@@ -5,7 +5,9 @@
   const states = ['idle', 'checking', 'up_to_date', 'available', 'downloading', 'verifying', 'preparing', 'ready', 'error'];
   const working = ['checking', 'downloading', 'verifying', 'preparing'];
   const manualURL = 'https://github.com/TheLANIntelligence/TLI/releases';
-  let status = null, busy = false, dismissed = false, timer = null, refreshing = false;
+  let status = null, busy = false, timer = null, refreshing = false, lastKnownVersion = '';
+  const dismissedVersions = new Set();
+  const releaseVersion = version => typeof version === 'string' ? version.trim().replace(/^v/i, '') : '';
   let startupPoll = true, stopped = false, revision = 0, actionError = '', connectionError = '';
   let settingsConfirmed = false, savedAutoCheck = null;
   const set = (id, value) => { if ($(id)) $(id).textContent = value; };
@@ -70,6 +72,7 @@
     }
     if (!settingsConfirmed) { try { loadPreferences(data); } catch (error) { preferencesUnavailable(error); } }
     if (status?.state !== data.state || status?.latest_version !== data.latest_version) actionError = '';
+    if (releaseVersion(data.latest_version)) lastKnownVersion = releaseVersion(data.latest_version);
     status = data;
     connectionError = '';
     render();
@@ -94,7 +97,8 @@
     set('settings-update-platform', 'Update platform: ' + platform);
     const checked = typeof d.checked_at === 'string' ? new Date(d.checked_at) : null;
     set('settings-update-checked', checked && Number.isFinite(checked.getTime()) ? 'Last checked: ' + checked.toLocaleString() : 'Last checked: not yet');
-    let message = connectionError || actionError || (state === 'error' ? d.error : '') || d.message || '';
+    const checkError = typeof d.last_check_error === 'string' && d.last_check_error ? 'Automatic update check could not finish: ' + d.last_check_error : '';
+    let message = connectionError || actionError || (state === 'error' ? d.error : '') || checkError || d.message || '';
     if (!message && state === 'available') message = d.can_prepare === true ? 'Download the verified package here. Finish installation after quitting TLI.' : 'Get this release from the download page and follow its update instructions.';
     if (state === 'available' && d.can_prepare === true && !localDesktop()) message = 'Open TLI in a local desktop browser on the host computer (localhost) to download this update and finish installation.';
     if (ready && !localDesktop()) message += ' Open TLI in a local desktop browser on the host computer (localhost) to open the update folder and finish installation.';
@@ -117,7 +121,7 @@
       $('settings-check-update-btn').disabled = busy || active;
       $('settings-check-update-btn').textContent = state === 'checking' ? 'Checking…' : 'Check for updates';
     }
-    const manual = state === 'available' && d.can_prepare !== true;
+    const manual = (state === 'available' && d.can_prepare !== true) || state === 'error' || !!checkError || !!connectionError;
     for (const id of ['settings-update-manual-link', 'tli-update-manual-link']) {
       hide(id, !manual);
       if ($(id)) $(id).href = manualURL;
@@ -127,7 +131,7 @@
     set('settings-update-progress-label', labels[state]);
     if ($('tli-update-progress-bar')) $('tli-update-progress-bar').style.setProperty('--w', progress + '%');
     set('tli-update-progress-label', labels[state]);
-    hide('tli-update-banner', dismissed || !['available', 'downloading', 'verifying', 'preparing', 'ready', 'error'].includes(state));
+    hide('tli-update-banner', dismissedVersions.has(releaseVersion(d.latest_version) || lastKnownVersion) || !['available', 'downloading', 'verifying', 'preparing', 'ready', 'error'].includes(state));
     set('tli-update-banner-title', ready ? 'TLI update ready to install' : state === 'error' ? 'TLI update needs attention' : active ? 'Preparing TLI update' : 'TLI update available');
     set('tli-update-version', version);
     for (const id of ['tli-update-notes-btn', 'settings-update-notes-btn']) hide(id, !d.latest_version);
@@ -154,7 +158,6 @@
     revision++;
     actionError = '';
     clearTimeout(timer);
-    if (kind === 'check') dismissed = false;
     render();
     try {
       const data = await request(kind === 'prepare' ? '/update/apply' : kind === 'open' ? '/update/open' : '/update/check', 'POST');
@@ -180,7 +183,7 @@
       const data = await request('/update/settings', 'POST', { update_url: url, auto_check: auto });
       if (data.ok !== true) throw Error('The host did not confirm the save.');
       savedAutoCheck = auto;
-      settingsMessage('Update preferences saved on this host. Startup checks use this choice the next time TLI starts.');
+      settingsMessage('Update preferences saved on this host. Your choice applies immediately to automatic checks.');
       if (button) { button.textContent = 'Saved ✓'; setTimeout(() => { button.textContent = 'Save'; }, 2000); }
     } catch (error) {
       if (button) button.textContent = 'Save';
@@ -191,7 +194,7 @@
   for (const id of ['settings-update-action-btn', 'tli-update-apply-btn']) $(id)?.addEventListener('click', () => runAction(action()));
   $('settings-check-update-btn')?.addEventListener('click', () => runAction('check'));
   $('settings-update-url-save')?.addEventListener('click', savePreferences);
-  $('tli-update-dismiss-btn')?.addEventListener('click', () => { dismissed = true; render(); });
+  $('tli-update-dismiss-btn')?.addEventListener('click', () => { dismissedVersions.add(releaseVersion(status?.latest_version) || lastKnownVersion); render(); });
   $('settings-update-quit-btn')?.addEventListener('click', event => {
     if (!busy && status?.state === 'ready' && ['windows', 'win32'].includes(status.platform) && localDesktop()) window.TLIHostLifecycle?.open?.('quit', event.currentTarget);
   });

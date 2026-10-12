@@ -1,6 +1,8 @@
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 requests>=2.31.0
+# Public update HTTPS uses these roots in addition to the OS certificate store.
+certifi>=2026.1.4
 # Explicit related-note requests use bounded HTTPX transports at runtime.
 httpx>=0.28.1,<0.29
 pydantic>=2.0.0
