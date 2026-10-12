@@ -1,4 +1,4 @@
-# Welcome to TLI 1.4.1-beta
+# Welcome to TLI 1.4.2-beta
 
 This is the new TLI desktop experience: Ask TLI, the refreshed workspace,
 appearance themes, Files, Vault, reviewed LAN connections and small-app Builder.
@@ -12,9 +12,10 @@ checks its signature before running it. Windows may ask you to approve that
 Microsoft installer. Setup never restarts your computer automatically.
 
 1. Extract the **entire** Windows ZIP into a new, writable folder, such as
-   `Documents\TLI-1.4.1-beta`. Do not run it inside the ZIP or copy it over an old TLI.
+   `Documents\TLI-1.4.2-beta`. Do not run it inside the ZIP or copy it over an old TLI.
 2. Open **TLI.exe** and choose **Set up TLI** when prompted. Progress stays in
-   the TLI window; internet access is needed the first time. Your browser opens
+   the TLI window. Internet is only needed to download missing Python or TLI
+   components; a prepared installation can start offline. Your browser opens
    automatically when this installation is ready, including when optional local
    AI still needs attention. TLI then welcomes you with appearance, optional PIN
    and AI setup, accompanied by the welcome soundtrack. If the browser blocks
@@ -41,14 +42,15 @@ Closing the browser leaves the Windows host running; use Local Setup to stop it.
 Requires **macOS 14 or newer on Apple Silicon**, or **macOS 13.3 or newer on
 Intel**, for the bundled inference runtime.
 
-1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.1-beta`.
+1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.2-beta`.
 2. Install Python 3.10 or newer from
    [python.org](https://www.python.org/downloads/macos/) if it is not already present.
    For a python.org installation, run **Install Certificates.command** from the
    Python folder under Applications before first setup.
 3. Open **TLI_Start.command**. If macOS displays **“TLI_Start.command” Not Opened**
    and says Apple could not verify it, follow the steps below. First setup
-   prepares this installation's Python environment and needs internet access.
+   prepares this installation's Python environment. Internet is only needed
+   if missing components must be downloaded.
 4. Keep Terminal open while TLI is running. Press **Control+C** there to stop TLI.
 
 The Mac package contains Apple Silicon and Intel inference runtimes and chooses
@@ -78,10 +80,12 @@ notarize the package and is not a repair for a damaged or malware-blocked file.
 
 ## Start a conversation
 
-The package includes the llama.cpp inference runtime, but **model weights are a
-separate download**. Use TLI's model settings to select and download a model that
-fits your computer, or select a configured LM Studio local server. Initial model
-downloads need internet access. Speed depends on your model and hardware; the
+Welcome setup works offline and does not require an AI download. You can use an
+existing compatible model or local provider, or finish setup and configure AI
+later. The package includes the llama.cpp inference runtime; model weights are
+separate. Download a model only if you need one, or use TLI's model settings to
+select a model you already have or a configured LM Studio local server. Model
+downloads need internet access; using an installed local model does not. Speed depends on your model and hardware; the
 Windows bundled runtime uses the CPU.
 
 ## Already installed an older TLI?
@@ -137,4 +141,4 @@ externally stored models, browser data and the separate phone Companion are
 not removed with the desktop folder.
 
 Release notes, checksums and support:
-[TLI 1.4.1-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.1-beta).
+[TLI 1.4.2-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.2-beta).

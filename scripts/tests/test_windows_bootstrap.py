@@ -55,14 +55,43 @@ catch { if (!$_.Exception.Message.Contains('were preserved')) { throw }; Write-O
     assert "preserved environment" in output
 
 
-@pytest.mark.parametrize("failure_phase", [None, "pip", "--check-dependencies", "--check-runtime"])
-def test_prepare_only_verifies_dependencies_before_any_backend_launch(tmp_path, failure_phase):
+@pytest.mark.parametrize("failure_phase", [None, "--check-runtime"])
+def test_prepared_environment_skips_packages_and_network_before_prepare_only(tmp_path, failure_phase):
     source = '''
 New-Item -ItemType Directory -Path (Join-Path $env:TLI_FIXTURE_ROOT 'backend/.venv') | Out-Null
 $script:Calls = @()
 function Get-TliPythonInfo { return @{ executable=$env:TLI_TEST_PYTHON } }
+function Find-TliPython { throw 'Must not install or replace Python' }
+function Invoke-WebRequest { throw 'Ready components must not require a package network request' }
+function Invoke-TliPython([string]$Python,[string[]]$Arguments) {
+    if ($Arguments -contains 'pip') { throw 'Ready components must not invoke pip' }
+    $script:Calls += ,$Arguments
+    if ($Arguments -contains 'FAILURE_PHASE') { throw 'Synthetic optional runtime failure' }
+}
+Invoke-TliBootstrap $env:TLI_FIXTURE_ROOT -PrepareOnly
+ConvertTo-Json -Depth 4 -Compress -InputObject $script:Calls
+'''.replace("FAILURE_PHASE", failure_phase or "no-synthetic-failure")
+    output = run_setup(tmp_path, source)
+    calls = json.loads(output.strip().splitlines()[-1])
+    assert [call[-1] for call in calls] == ["--check-dependencies", "--check-runtime"]
+    assert "TLI setup completed." in output
+    assert "Downloading missing TLI components" not in output
+    assert "First-time setup needs internet" not in output
+    assert ("Local AI needs attention" in output) is (failure_phase == "--check-runtime")
+
+
+@pytest.mark.parametrize("failure_phase", [None, "pip", "--check-dependencies", "--check-runtime"])
+def test_missing_dependencies_install_and_verify_before_any_backend_launch(tmp_path, failure_phase):
+    source = '''
+New-Item -ItemType Directory -Path (Join-Path $env:TLI_FIXTURE_ROOT 'backend/.venv') | Out-Null
+$script:Calls = @(); $script:DependencyChecks = 0
+function Get-TliPythonInfo { return @{ executable=$env:TLI_TEST_PYTHON } }
 function Invoke-TliPython([string]$Python,[string[]]$Arguments) {
     $script:Calls += ,$Arguments
+    if ($Arguments -contains '--check-dependencies') {
+        $script:DependencyChecks++
+        if ($script:DependencyChecks -eq 1) { throw 'Synthetic missing dependencies' }
+    }
     if ($Arguments -contains 'FAILURE_PHASE') { throw 'Synthetic setup failure' }
 }
 try { Invoke-TliBootstrap $env:TLI_FIXTURE_ROOT -PrepareOnly }
@@ -71,13 +100,18 @@ ConvertTo-Json -Depth 4 -Compress -InputObject $script:Calls
 '''.replace("FAILURE_PHASE", failure_phase or "no-synthetic-failure")
     output = run_setup(tmp_path, source)
     calls = json.loads(output.strip().splitlines()[-1])
-    assert len(calls) == {"pip": 1, "--check-dependencies": 2}.get(failure_phase, 3)
-    assert calls[0][:4] == ["-I", "-m", "pip", "install"]
+    assert len(calls) == {"pip": 2, "--check-dependencies": 3}.get(failure_phase, 4)
+    assert calls[0][-1] == "--check-dependencies"
+    assert calls[1][:6] == ["-I", "-m", "pip", "install", "--disable-pip-version-check", "-r"]
+    assert Path(calls[1][6]).name == "requirements.txt"
     if failure_phase != "pip":
-        assert calls[1][-1] == "--check-dependencies"
+        assert calls[2][-1] == "--check-dependencies"
     if failure_phase not in {"pip", "--check-dependencies"}:
-        assert calls[2][-1] == "--check-runtime"
+        assert calls[3][-1] == "--check-runtime"
     assert all(not any(arg.endswith("main.py") for arg in call) for call in calls)
+    assert all(not any(arg.endswith("launch_checks.py") for arg in call) for call in calls)
+    assert "Downloading missing TLI components" in output
+    assert "First-time setup needs internet" not in output
     fatal = failure_phase in {"pip", "--check-dependencies"}
     assert ("TLI setup completed." in output) is not fatal
     assert ("setup rejected" in output) is fatal
@@ -102,12 +136,12 @@ ConvertTo-Json -Depth 4 -Compress -InputObject $script:Calls
 '''.replace("FAILURE_PHASE", failure_phase or "no-synthetic-failure")
     output = run_setup(tmp_path, source)
     calls = json.loads(output.strip().splitlines()[-1])
-    assert len(calls) == (4 if failure_phase == "launch_checks.py" else 5)
-    assert calls[1][-1] == "--check-dependencies"
-    assert calls[2][-1] == "--check-runtime"
-    assert Path(calls[3][0]).name == "launch_checks.py"
+    assert len(calls) == (3 if failure_phase == "launch_checks.py" else 4)
+    assert calls[0][-1] == "--check-dependencies"
+    assert calls[1][-1] == "--check-runtime"
+    assert Path(calls[2][0]).name == "launch_checks.py"
     if failure_phase != "launch_checks.py":
-        assert Path(calls[4][0]).name == "main.py"
+        assert Path(calls[3][0]).name == "main.py"
     # PowerShell wraps warning text to the host width even in captured output.
     warning_text = " ".join(output.split())
     assert "Local AI needs attention" in warning_text

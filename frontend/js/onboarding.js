@@ -11,7 +11,7 @@
     ['Welcome to your next idea.', 'A question, a plan, a spark of something new. TLI gives you a private place to think, learn, write and create.'],
     ['Make yourself at home.', 'Give this computer a familiar name and choose a look that feels like you.'],
     ['Your space. Your access.', 'Choose how people can open TLI on this host. You can change this later in Settings.'],
-    ['Bring your AI to life.', 'Choose a model to run on this computer. A one-time download needs internet; local conversations run on your hardware.'],
+    ['Bring your AI to life.', 'Use a model you already have, or download one if you need it. You can finish welcome setup offline and set up AI later.'],
     ['Where shall we begin?', 'Your workspace is taking shape. Choose your first stop; everything else will be here when you need it.'],
   ];
   let overlay, step = 0, epoch = 0, open = false, busy = false, initializing = false, blocked = false;
@@ -129,7 +129,7 @@
       }
       return data;
     } catch (error) {
-      if (error.name === 'AbortError') throw new Error('TLI is taking longer than expected. Check the connection and try again.');
+      if (error.name === 'AbortError') throw new Error('Your TLI host is taking longer than expected. Check that it is running and try again.');
       throw error;
     } finally { clearTimeout(alarm); }
   }
@@ -209,7 +209,7 @@
       <div class="onboard-feature"><span class="onboard-icon" aria-hidden="true">01</span><h3>Think it through</h3><p>Ask anything. Untangle an idea, learn something new or plan your next move.</p></div>
       <div class="onboard-feature"><span class="onboard-icon" aria-hidden="true">02</span><h3>Make something</h3><p>Find the words, explore code or turn an idea into a small web app.</p></div>
       <div class="onboard-feature"><span class="onboard-icon" aria-hidden="true">03</span><h3>Connect your world</h3><p>Bring in files, computers and supported home devices when you choose.</p></div>
-    </div><p class="onboard-note">Start with you and an idea. Connected devices are optional.</p>`;
+    </div><p class="onboard-note">Welcome setup works offline. Bring your own local AI, download a model when you choose, or explore first.</p>`;
   }
   function personalize(dyn) {
     dyn.innerHTML = `<div class="onboard-field"><label for="onboard-node-name">What should we call this computer?</label><input id="onboard-node-name" type="text" maxlength="48" autocomplete="off" placeholder="e.g. Studio, Office PC, My laptop" value="${esc(name)}" aria-describedby="onboard-name-hint"><p id="onboard-name-hint">A familiar name for your workspace and connected computers. Leave blank to keep the current name.</p></div><h3>Set the mood</h3><div class="onboard-theme-options" aria-label="Workspace theme"></div><p class="onboard-note" id="onboard-theme-note">Colors save in this browser. Explore the full collection in Settings.</p>`;
@@ -258,10 +258,10 @@
     if (ready()) return 'Local AI ready';
     if (download?.in_progress) return 'Download in progress';
     if (presets.some(p => p.installation_complete === true)) return 'Installed · needs activation';
-    return 'AI setup pending';
+    return 'Bundled model not active';
   }
   function intelligence(dyn) {
-    dyn.innerHTML = '<div id="onboard-ai-details" aria-live="polite"><p>Checking local AI…</p></div><div class="onboard-inline-actions"><button type="button" id="onboard-ai-refresh">Check again</button></div><p class="onboard-note">Downloads can be several GB. Other providers and reviewed LAN models are available in Settings → AI. No provider is changed until you choose to use a model.</p>';
+    dyn.innerHTML = '<div id="onboard-ai-details" aria-live="polite"><p>Checking models on this computer…</p></div><div class="onboard-inline-actions"><button type="button" id="onboard-ai-refresh">Check again</button></div><p class="onboard-note">Already using a local provider such as LM Studio? Keep using it and continue; you do not need another download. Manage existing models, other providers and reviewed LAN models in Settings → AI. Only model downloads need internet here, and they can be several GB. No provider is changed until you choose to use a model.</p>';
     $('onboard-ai-refresh').addEventListener('click', () => refreshAI());
     refreshAI();
   }
@@ -275,7 +275,7 @@
     presets = results[1].status === 'fulfilled' && Array.isArray(results[1].value.presets) ? results[1].value.presets.filter(p => p && typeof p.id === 'string' && typeof p.name === 'string') : [];
     download = results[2].status === 'fulfilled' ? results[2].value : null;
     if (!presets.some(p => p.id === selectedModel)) selectedModel =
-      presets.find(p => p.running)?.id || presets.find(p => p.installation_complete && p.compatibility?.selectable)?.id ||
+      presets.find(p => p.running)?.id || presets.find(p => p.installation_complete && (p.compatibility?.selectable || p.compatibility?.state === 'unknown'))?.id ||
       ['standard','lite'].find(id => presets.some(p => p.id === id && p.compatibility?.state === 'compatible')) || presets[0]?.id || '';
     if (step === 3) drawAI(); else if (step === 4) drawSummary();
     if (refresh) refresh.disabled = false;
@@ -284,7 +284,7 @@
   function drawAI() {
     const details = $('onboard-ai-details'); if (!details) return;
     const model = presets.find(p => p.id === selectedModel);
-    details.innerHTML = `<div class="onboard-ai-state"><span class="onboard-state-label">${esc(aiLabel())}</span><p>${ready() ? 'A local model is responding. You can keep it and continue.' : !ai ? 'The local AI status could not be checked. Retry, or continue and open the model library later.' : download?.in_progress ? 'You can keep exploring while the model downloads.' : 'Download a model, then explicitly activate it when you are ready.'}</p></div>`;
+    details.innerHTML = `<div class="onboard-ai-state"><span class="onboard-state-label">${esc(aiLabel())}</span><p>${ready() ? 'A local model is responding. You can keep it and continue offline.' : !ai ? 'The bundled model status could not be checked. You can continue offline and manage AI later.' : download?.in_progress ? 'You can keep exploring while the model downloads.' : presets.some(p => p.installation_complete === true) ? 'A model is already on this computer. Choose it below to check and use it; no download is needed.' : 'Choose a download only if you need a model. You can keep your existing provider or continue offline and set up AI later.'}</p></div>`;
     if (download?.in_progress) {
       const progress = document.createElement('div'); progress.className = 'onboard-download';
       const total = Number(download.bytes_total), done = Number(download.bytes_done);
@@ -435,7 +435,7 @@
     initializing = true; blocked = false; controls();
     try {
       const state = await request('/system/onboarding/status');
-      if (typeof state.complete !== 'boolean') throw new Error('Setup status could not be confirmed. Check the connection and try again.');
+      if (typeof state.complete !== 'boolean') throw new Error('Setup status could not be confirmed with your TLI host. Check that it is running and try again.');
       completed = state.complete; started = state.started === true;
       if (completed && !force) { write(localStorage, SEEN, '1'); if (open) hide(); delete document.documentElement.dataset.tliOnboard; return; }
       if (!completed) write(localStorage, SEEN, null);

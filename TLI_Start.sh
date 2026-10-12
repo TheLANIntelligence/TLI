@@ -63,7 +63,7 @@ fi
     fail "This installation's environment needs Python 3.10 or newer. Use a new TLI folder with a supported Python installation."
 
 if ! "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies >/dev/null 2>&1; then
-    printf 'Installing this release\047s Python dependencies. Internet access is needed for this step.\n'
+    printf 'Installing missing TLI components. Internet is only needed if these components must be downloaded.\n'
     "$VENV_PYTHON" -m pip --disable-pip-version-check install -r "$BACKEND_DIR/requirements.txt" || \
         fail "Dependencies could not be installed. Check the error and connection, then reopen TLI. No backend was started."
     "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies || \

@@ -149,9 +149,20 @@ function Invoke-TliBootstrap([string]$Root, [switch]$PrepareOnly) {
         if (!(Get-TliPythonInfo $tliPython)) { throw 'The new Python environment could not be verified. TLI has not been started.' }
     }
     Initialize-TliLocalAIRuntime $tliRoot
-    Write-TliSetupProgress 'Preparing TLI components. First-time setup needs internet access...'
-    Invoke-TliPython $tliPython @('-I','-m','pip','install','-r',$tliRequirements)
-    Invoke-TliPython $tliPython @((Join-Path $tliBackend 'host_launcher.py'),'--check-dependencies')
+    Write-TliSetupProgress 'Checking TLI components...'
+    $tliDependenciesReady = $false
+    try {
+        Invoke-TliPython $tliPython @((Join-Path $tliBackend 'host_launcher.py'),'--check-dependencies')
+        $tliDependenciesReady = $true
+    } catch {
+        # An already prepared environment needs no package index or pip request.
+        # Missing components are installed below, then independently rechecked.
+    }
+    if (!$tliDependenciesReady) {
+        Write-TliSetupProgress 'Downloading missing TLI components...'
+        Invoke-TliPython $tliPython @('-I','-m','pip','install','--disable-pip-version-check','-r',$tliRequirements)
+        Invoke-TliPython $tliPython @((Join-Path $tliBackend 'host_launcher.py'),'--check-dependencies')
+    }
     # The bundled inference engine is optional. Its native prerequisites must
     # not prevent the web app, welcome setup, or another AI provider from opening.
     # Keep the required Python/dependency and backend checks outside this catch.

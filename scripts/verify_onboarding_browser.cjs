@@ -238,12 +238,17 @@ async function main() {
   try {
     await runCase(browser, 'fresh-install-without-ai', {}, async run => {
       assert.equal(mutations(run).length, 0, 'Welcome must not mutate host settings');
-      await reachLaunch(run);
+      assert.match(await run.page.locator('#tli-onboard-dyn').innerText(), /welcome setup works offline/i);
+      await reachAI(run);
+      const aiCopy = await run.page.locator('#tli-onboard-dyn').innerText();
+      assert.match(aiCopy, /continue offline/i, 'AI setup can be deferred without internet');
+      assert.match(aiCopy, /LM Studio/, 'Existing local providers remain an available path');
+      await next(run.page).click(); await waitStep(run, 4);
       assert.equal(mutations(run).filter(c => aiMutation.test(c.path)).length, 0, 'AI setup must require an explicit action');
       assert.equal(count(run, '/system/pin/set'), 0, 'Open access must not set a PIN');
       assert.equal(mutations(run)[0].path, '/system/onboarding/start', 'Persist onboarding start before changing settings');
       assert.match(await run.page.locator('#onboard-summary').innerText(), /My creative studio/, 'Summary reflects the saved computer name');
-      assert.match(await run.page.locator('#tli-onboard-dyn').innerText(), /not (?:ready|set up|downloaded)|later|needs|available after|download|not configured|setup pending/i, 'Missing AI must be disclosed');
+      assert.match(await run.page.locator('#tli-onboard-dyn').innerText(), /not (?:active|ready|set up|downloaded)|later|needs|available after|download|not configured|setup pending/i, 'Missing AI must be disclosed');
       assert.equal(await run.page.locator('[data-onboard-destination="dashboard"]').getAttribute('aria-pressed'), 'true', 'Without ready AI, launch defaults to dashboard');
       await next(run.page).click();
       await run.page.locator('#tli-onboard').waitFor({ state: 'hidden' });
@@ -253,6 +258,9 @@ async function main() {
       await run.page.reload({ waitUntil: 'load' });
       await run.page.waitForTimeout(200);
       assert.equal(await run.page.locator('#tli-onboard').isVisible(), false, 'Persisted completion survives reload');
+      assert.equal(mutations(run).filter(c => aiMutation.test(c.path)).length, 0, 'Finishing and reloading must not download or activate AI');
+      assert.equal(run.state.aiReady, false, 'Finishing welcome does not claim missing AI is ready');
+      assert.deepEqual(run.external, [], 'Welcome completes using only the local host while external requests are blocked');
     });
     await runCase(browser, 'ready-ai-launches-chat', { aiReady: true }, async run => {
       await reachLaunch(run);
@@ -261,6 +269,9 @@ async function main() {
       await next(run.page).click();
       await run.page.locator('#tli-onboard').waitFor({ state: 'hidden' });
       assert.equal(await run.page.locator('#panel-main').isVisible(), true);
+      assert.equal(mutations(run).filter(c => aiMutation.test(c.path)).length, 0, 'Completing welcome preserves the running model without activation or downloads');
+      assert.equal(run.state.aiReady, true);
+      assert.deepEqual(run.external, [], 'Keeping a ready local model requires no external request');
     });
     await runCase(browser, 'server-overrides-browser-seen', { seen: true }, async run => {
       await waitStep(run, 0);
@@ -405,6 +416,36 @@ async function main() {
       assert.equal(count(run, '/api/ai/models/check'), 0);
       await next(run.page).click(); await waitStep(run, 4);
       assert.equal(await run.page.locator('[data-onboard-destination="chat"]').getAttribute('aria-pressed'), 'true');
+    });
+    await runCase(browser, 'installed-custom-unknown-preferred-over-download', { overrides: {
+      'GET /api/ai/models/presets': ({ run }) => ({ ok: true, active: run.state.aiReady ? 'custom-local' : 'standard', presets: [
+        model,
+        { ...model, id: 'custom-local', name: 'My existing local model', description: 'An installed custom GGUF with compatibility not yet checked.',
+          is_selected: false, running: run.state.aiReady, is_active: run.state.aiReady, downloaded: true, installation_complete: true,
+          compatibility: { state: 'unknown', checked_at: null, reasons: ['This custom model needs a local compatibility check.'], selectable: false, download_allowed: false, installation: { complete: true, components: [] } } },
+      ] }),
+      'GET /api/ai/status': ({ run }) => ({ ...missingRuntime, healthy: run.state.aiReady, running: run.state.aiReady, exists: true, model_exists: true, state: run.state.aiReady ? 'ready' : 'stopped', selected_preset: run.state.aiReady ? 'custom-local' : 'standard' }),
+    } }, async run => {
+      await reachAI(run);
+      assert.equal(await run.page.locator('[data-onboard-model="custom-local"]').getAttribute('aria-pressed'), 'true', 'An installed unknown custom model is preferred over the first compatible undownloaded preset');
+      assert.equal(await run.page.locator('[data-onboard-model="standard"]').getAttribute('aria-pressed'), 'false');
+      assert.match(await run.page.locator('#onboard-ai-action').innerText(), /check and use this model/i);
+      assert.equal(await run.page.locator('#onboard-ai-action').isEnabled(), true);
+      assert.equal(mutations(run).filter(c => aiMutation.test(c.path)).length, 0, 'Discovery and preselection do not activate or download');
+      await run.page.locator('#onboard-ai-action').click();
+      await run.page.waitForFunction(() => !document.querySelector('#tli-onboard-next').disabled);
+      assert.deepEqual(mutations(run).filter(c => aiMutation.test(c.path)).map(c => ({path:c.path,body:c.body})), [
+        { path:'/api/ai/models/check', body:{preset_id:'custom-local'} },
+      ], 'Explicit Check and use checks the installed custom model without a separate select or download');
+      await next(run.page).click(); await waitStep(run, 4);
+      assert.equal(await run.page.locator('[data-onboard-destination="chat"]').getAttribute('aria-pressed'), 'true', 'Confirmed local check enables the chat destination');
+      await next(run.page).click();
+      await run.page.locator('#tli-onboard').waitFor({state:'hidden'});
+      assert.equal(run.state.complete, true);
+      assert.equal(count(run, '/api/ai/model/download'), 0);
+      assert.equal(count(run, '/api/ai/models/select'), 0);
+      assert.equal(count(run, '/api/ai/models/check'), 1);
+      assert.deepEqual(run.external, [], 'Using an installed model requires no external request');
     });
     await runCase(browser, 'unconfirmed-activation-is-not-ready', { installed: true, overrides: { 'POST /api/ai/models/select': { ok: true, healthy: false } } }, async run => {
       await reachAI(run); await run.page.locator('#onboard-ai-action').click(); await errorVisible(run);
