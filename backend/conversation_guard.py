@@ -9,6 +9,22 @@ from starlette.responses import StreamingResponse
 
 _lock = threading.Lock()
 _active: set[str] = set()
+_reservations: dict[str, str] = {}
+
+
+def reserve_run(ident, run_id):
+    with _lock:
+        if ident in _active:
+            raise HTTPException(409, "This conversation already has a response in progress.")
+        _active.add(ident)
+        _reservations[ident] = run_id
+
+
+def release_run(ident, run_id):
+    with _lock:
+        if _reservations.get(ident) == run_id:
+            _reservations.pop(ident, None)
+            _active.discard(ident)
 
 
 def assert_idle(conversation_ids):
@@ -59,6 +75,13 @@ def exclusive_turn(function):
             req.conversation_id = ident
         elif "session_id" in bound.arguments:
             bound.arguments["session_id"] = ident
+        from run_context import run_id
+        with _lock:
+            reserved = bool(run_id() and _reservations.get(ident) == run_id())
+        if reserved:
+            # The detached worker owns this lease from durable admission through
+            # finalization, including while its response has no subscribers.
+            return function(*bound.args, **bound.kwargs)
         with _lock:
             if ident in _active:
                 raise HTTPException(409, "This conversation already has a response in progress. Wait for it to finish before sending again.")

@@ -181,7 +181,9 @@ window.TLIWebApps = (() => {
     state.busy = true; state.selection++; controls(); const epoch = state.epoch;
     message('Generating with ' + (selection ? 'your selected LAN model' : 'your local model') + '. The brief is saved first; reopening the library recovers the result if this page closes.');
     try {
-      const {project} = await api(path, {method:'POST', body:JSON.stringify(body)});
+      const managed = window.TLIWorkspace ? await window.TLIWorkspace.builder(path, body) : null;
+      const {project} = managed || await api(path, {method:'POST', body:JSON.stringify(body)});
+      if (epoch !== state.epoch || state.locked) return;
       if (ticket && (!lan.isCurrent(ticket) || JSON.stringify(lan.request(lan.capture(), {})) !== JSON.stringify(selection))) throw Error('The selected computer or model changed. Reopen the saved app from the library to review the result.');
       accept(project); if (project.status !== 'needs_retry') consume();
     } catch (error) { if (!state.locked) message(error.message + ' Your draft is retained. Refresh the library before retrying a request whose result is uncertain.'); }
@@ -269,5 +271,12 @@ window.TLIWebApps = (() => {
     if (!prepareRequest(text)) return false;
     ui.root.scrollIntoView?.({behavior:'smooth',block:'start'}); return true;
   }
-  return {setup, onOpen:refresh, open, prepareRequest};
+  async function openProject(id) {
+    if (!setup() || state.locked || state.busy || state.testing) return false;
+    if (ui.brief.value.trim() || ui.feedback.value.trim()) { message('Your unsent draft is retained. Save or clear it before opening another app.'); return false; }
+    window.showPanel?.('panel-builder');
+    ui.showApps(); await load(id); ui.root.scrollIntoView?.({behavior:'smooth',block:'start'}); return true;
+  }
+  window.addEventListener('tli-workspace-changed', event => { if (event.detail?.kind === 'builder' && !state.busy && !state.locked) void refresh(); });
+  return {setup, onOpen:refresh, open, prepareRequest, openProject};
 })();

@@ -6,10 +6,11 @@ requires its own explicit state directory before any shared TLI module loads.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 import ipaddress
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import socket
@@ -47,15 +48,17 @@ def _root(value):
 def _origin(value):
     try:
         url = urlsplit(value)
-        address = ipaddress.IPv4Address(url.hostname)
+        hostname = url.hostname
+        stable = bool(isinstance(hostname, str) and re.fullmatch(r'(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local', hostname))
+        address = None if stable else ipaddress.IPv4Address(hostname)
         port = url.port if url.port is not None else 443
-        private = any(address in ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+        private = stable or any(address in ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
         if (url.scheme != "https" or not private or not 1 <= port <= 65535
                 or url.username is not None or url.password is not None or url.path not in ("", "/") or url.query or url.fragment):
             raise ValueError()
-        return f"https://{address}:{port}"
+        return f"https://{hostname if stable else address}:{port}"
     except (ValueError, TypeError, AttributeError):
-        raise NodeError("Use an HTTPS origin with this computer's private LAN IPv4 address and port.") from None
+        raise NodeError("Use an HTTPS origin with this computer's private LAN IPv4 address or exact machine-name.local and port.") from None
 
 
 def _model_origin(value):
@@ -75,12 +78,20 @@ def _model_origin(value):
 
 def _local_addresses():
     import psutil
-    return {str(ipaddress.IPv4Address(item.address)) for addresses in psutil.net_if_addrs().values()
+    stats = psutil.net_if_stats()
+    return {str(ipaddress.IPv4Address(item.address)) for name, addresses in psutil.net_if_addrs().items() if name not in stats or stats[name].isup
             for item in addresses if item.family == socket.AF_INET}
 
 
 def _require_local(origin):
-    if urlsplit(origin).hostname not in _local_addresses():
+    host = urlsplit(origin).hostname
+    if host.endswith('.local'):
+        name = socket.gethostname().rstrip('.').lower()
+        name = name if name.endswith('.local') else name + '.local'
+        private = tuple(ipaddress.ip_network(net) for net in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+        if host != name or not any(any(ipaddress.IPv4Address(ip) in net for net in private) for ip in _local_addresses()):
+            raise NodeError("Use this computer's exact machine-name.local with a current private LAN adapter. A hostname change requires a reviewed update.")
+    elif host not in _local_addresses():
         raise NodeError("The saved private LAN address is not assigned to this computer. Restore that address before starting or exchanging cards.")
 
 
@@ -128,8 +139,9 @@ def _read_marker(root):
         value = json.loads(raw)
         if len(raw) > 8192 or not isinstance(value, dict) or set(value) != _MARKER_KEYS:
             raise ValueError()
-        if (type(value["version"]) is not int or value["version"] != 1 or value["purpose"] != PURPOSE
+        if (type(value["version"]) is not int or value["version"] not in (1, 2) or value["purpose"] != PURPOSE
                 or value["origin"] != _origin(value["origin"]) or value["lm_studio_url"] != _model_origin(value["lm_studio_url"])
+                or value['version'] == 1 and urlsplit(value['origin']).hostname.endswith('.local')
                 or any(not isinstance(value[key], str) or not 1 <= len(value[key]) <= 128 for key in ("node_id", "name", "identity_fingerprint", "certificate_sha256"))):
             raise ValueError()
         for relative in _REQUIRED:
@@ -176,6 +188,7 @@ def _load(root, *, local_address=False):
             raise NodeError("The Node directory contains unsupported permissions. Only inference is supported here.")
     identity.init(S.DATA_DIR)
     S.SERVER_BIND_PORT = urlsplit(marker["origin"]).port
+    S.SERVER_BIND_HOST = '0.0.0.0' if urlsplit(marker['origin']).hostname.endswith('.local') else urlsplit(marker['origin']).hostname
     S.TLS_ENABLED = True
     S.lm_provider = SimpleNamespace(chat_url=marker["lm_studio_url"] + "/v1/chat/completions",
                                     models_url=marker["lm_studio_url"] + "/v1/models")
@@ -208,9 +221,10 @@ def initialize(args):
         if not ensure_tls_cert(S.TLS_CERT_PATH, S.TLS_KEY_PATH):
             raise NodeError("Node HTTPS initialization failed. Partial state was preserved; do not initialize over it.")
         S.SERVER_BIND_PORT = urlsplit(origin).port
+        S.SERVER_BIND_HOST = '0.0.0.0' if urlsplit(origin).hostname.endswith('.local') else urlsplit(origin).hostname
         S.TLS_ENABLED = True
         card = P.local_card(origin, capabilities=["inference_v1"])
-        security.write_json(root / MARKER, {"version": 1, "purpose": PURPOSE, "node_id": config.node_id,
+        security.write_json(root / MARKER, {"version": 2 if urlsplit(origin).hostname.endswith('.local') else 1, "purpose": PURPOSE, "node_id": config.node_id,
                             "name": config.node_name, "origin": origin, "lm_studio_url": model,
                             "identity_fingerprint": card["identity_fingerprint"],
                             "certificate_sha256": card["certificate_sha256"]}, "Node configuration", new=True)
@@ -228,6 +242,23 @@ def export_card(args):
         print("Public Node card exported. It contains no private key.")
     else:
         print(text, end="")
+
+
+def export_invitation(args):
+    root = _root(args.state_dir)
+    marker, _, _, P, _ = _load(root, local_address=True)
+    import connection_invitation
+    import tls_cert
+    card = P.local_card(marker['origin'], capabilities=['inference_v1'], existing_only=True)
+    host = urlsplit(marker['origin']).hostname
+    addresses = tls_cert.lan_listener_addresses()[:8] if host.endswith('.local') else [host]
+    text = connection_invitation.encode(card, addresses) + '\n'
+    if args.out:
+        with Path(args.out).open('x', encoding='utf-8') as stream:
+            stream.write(text)
+        print('Public connection invitation exported. Compare and approve the code on both computers to grant access.')
+    else:
+        print(text, end='')
 
 
 def trust(args):
@@ -274,20 +305,72 @@ def revoke(args):
     print("Peer permission revoked. Active inference checks will stop accepting that peer.")
 
 
+def make_app(marker, *, advertise=True, pairing_window=None):
+    """Compute and identity; optional public bootstrap with console-only approval."""
+    from fastapi import FastAPI
+    import lan_inference as L
+    from peer_inference_routes import make_peer_router
+    from connection_identity import router as identity_router
+    from node_discovery import Advertiser
+    @asynccontextmanager
+    async def lifespan(app):
+        discovery = Advertiser(marker)
+        if pairing_window is not None:
+            pairing_window.start()
+        if advertise:
+            discovery.start()
+        try:
+            yield
+        finally:
+            if pairing_window is not None:
+                pairing_window.stop()
+            discovery.stop()
+    app = FastAPI(title='TLI Node', docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app.include_router(make_peer_router(resource_loader=lambda **kw: L._resources(include_bundled=False, **kw)))
+    app.include_router(identity_router)
+    if pairing_window is not None:
+        from peer_pairing_public import make_public_router
+        app.include_router(make_public_router(node_window=pairing_window))
+    return app
+
+
+def _interactive_console():
+    if sys.stdin is None or not sys.stdin.isatty():
+        return False
+    if os.name != 'nt':
+        return True
+    # Windows reports NUL as a character device too. Only a real console input
+    # handle supports GetConsoleMode; redirected input must not open pairing.
+    try:
+        import ctypes
+        import msvcrt
+        mode = ctypes.c_ulong()
+        handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+        return bool(ctypes.windll.kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
 def run(args):
+    pair = getattr(args, 'pair', False)
+    review_update = getattr(args, 'review_update', False)
+    if review_update and not pair:
+        raise NodeError('--review-update requires an explicit local run --pair review.')
+    if pair and not _interactive_console():
+        raise NodeError('Run --pair in an interactive local terminal so the matching code can be reviewed there.')
     root = _root(args.state_dir)
     _read_marker(root)
     with _lock(root, ".node-runtime.lock"):
         marker, S, _, _, _ = _load(root, local_address=True)
         import uvicorn
-        from fastapi import FastAPI
-        import lan_inference as L
-        from peer_inference_routes import make_peer_router
-        app = FastAPI(title="TLI Node", docs_url=None, redoc_url=None, openapi_url=None)
-        app.include_router(make_peer_router(resource_loader=lambda **kw: L._resources(include_bundled=False, **kw)))
+        window = None
+        if pair:
+            from node_pairing import PairingWindow
+            window = PairingWindow(marker, review_update=review_update)
+        app = make_app(marker, pairing_window=window)
         address = urlsplit(marker["origin"])
         print("Starting TLI Node at " + marker["origin"] + ". Press Ctrl+C to stop. Only reviewed inference peers are accepted.", flush=True)
-        uvicorn.run(app, host=address.hostname, port=address.port, ssl_certfile=S.TLS_CERT_PATH,
+        uvicorn.run(app, host=S.SERVER_BIND_HOST, port=address.port, ssl_certfile=S.TLS_CERT_PATH,
                     ssl_keyfile=S.TLS_KEY_PATH, proxy_headers=False, access_log=False,
                     timeout_keep_alive=5, limit_concurrency=16)
 
@@ -295,22 +378,25 @@ def run(args):
 def parser():
     value = argparse.ArgumentParser(description=__doc__)
     commands = value.add_subparsers(dest="command", required=True)
-    for name, handler in (("init", initialize), ("card", export_card), ("trust", trust), ("peers", peers), ("revoke", revoke), ("run", run)):
+    for name, handler in (("init", initialize), ("card", export_card), ("invitation", export_invitation), ("trust", trust), ("peers", peers), ("revoke", revoke), ("run", run)):
         command = commands.add_parser(name)
         command.add_argument("--state-dir", required=True, help="Absolute dedicated Node state directory; never the full TLI installation")
         command.set_defaults(handler=handler)
         if name == "init":
             command.add_argument("--name", required=True)
-            command.add_argument("--origin", required=True, help="HTTPS private LAN IPv4 origin, e.g. https://192.168.1.20:8444")
+            command.add_argument("--origin", required=True, help="HTTPS own machine-name.local (preferred), or private LAN IPv4; e.g. https://gaming-pc.local:8444")
             command.add_argument("--lm-studio-url", default="http://127.0.0.1:1234")
-        elif name == "card":
-            command.add_argument("--out", help="Create a new public JSON file; never overwrite an existing file")
+        elif name in ("card", "invitation"):
+            command.add_argument("--out", help="Create a new public file; never overwrite an existing file")
         elif name == "trust":
             command.add_argument("--card", required=True)
             command.add_argument("--identity-fingerprint", required=True, help="Fingerprint compared on the other computer")
             command.add_argument("--certificate-sha256", required=True, help="Certificate fingerprint compared on the other computer")
         elif name == "revoke":
             command.add_argument("--peer-id", required=True)
+        elif name == 'run':
+            command.add_argument('--pair', action='store_true', help='Open a five-minute inference-only connection window with matching-code approval in this terminal')
+            command.add_argument('--review-update', action='store_true', help='With --pair, allow explicit local review of replaced peer trust')
     return value
 
 

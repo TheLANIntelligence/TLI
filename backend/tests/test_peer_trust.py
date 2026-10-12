@@ -460,4 +460,5 @@ def test_presence_snapshot_keeps_same_ip_ids_and_rejects_malformed_time(peers,mo
         response=await mesh.mesh_presence_stream(NS(is_disconnected=disconnected),_session='owner')
         return [json.loads(chunk.split('data: ',1)[1]) async for chunk in response.body_iterator]
     payloads=asyncio.run(snapshot())
-    assert [x['node_id'] for x in payloads]==['first','second']
+    assert payloads==[{'type':'directory_changed','protocol':'tli-connections-v1','schema_version':1}]
+    assert set(records)=={'first','second','invalid-time'}

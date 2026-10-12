@@ -25,7 +25,7 @@ ROOT_FILES = {
     ".easignore", ".gitignore", "AGENTS.md", "CLAUDE.md", "README.md", "TLI_MANUAL.md", "LICENSE", "SECURITY.md",
     "build_dist.py", "build.ps1", "build_windows.ps1", "build_linux.sh", "build_mac.sh",
     "TLI_Start.bat", "TLI_Start.command", "TLI_Start.sh", "tli_sentinel.ps1",
-    "TLI_Setup.ps1", "TLI_Setup.bat", "TLI_Diagnostics.bat",
+    "TLI_Setup.ps1", "TLI_Setup.bat", "TLI_Diagnostics.bat", "TLI_Network_Setup.ps1",
     "TLI_Bootstrap.ps1", "START_HERE.md",
     "TLI_Update.bat", "TLI_Update.ps1", "TLI_Update.command", "TLI_Update.sh",
     "TLI.exe", "build_launcher.ps1",
@@ -33,7 +33,8 @@ ROOT_FILES = {
 }
 BACKEND_DIRS = {"ai", "builder", "cleanup", "drivers", "game_configs", "intelligence", "providers", "routers", "tests"}
 BACKEND_FILES = {"requirements.txt", "requirements-test.txt", "pytest.ini", "tli_backend.spec", "run_backend_dev.bat"}
-PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
+PUBLIC_GUIDES = {"TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "TLI_SEAMLESS_CONNECTIONS.md", "SSE_SCHEMA.md",
+                "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",

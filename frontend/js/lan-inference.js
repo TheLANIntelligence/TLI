@@ -86,17 +86,70 @@
       notice(data.resources.length ? `Models checked on ${data.peer.name}. Select a model and choose Use this model to share future questions with it.` : `No supported running model was found on ${data.peer.name}. Your current AI choice is unchanged.`);
     });
   }
-  function choose() {
+  async function persistChoice(value, ticket) {
+    const id = window.currentConversationId;
+    const navigation = window.TLIConversationLoad?.generation;
+    const allowed = () => current(ticket) && window.currentConversationId === id && window.TLIConversationLoad?.generation === navigation && !window.TLIConversationLoad?.loading;
+    const assertCurrent = () => { if (!allowed()) throw Error('The conversation or session changed. Reopen it to review its AI selection.'); };
+    assertCurrent();
+    if (!id || !window.TLIWorkspace) return;
+    const supported = await window.TLIWorkspace.supported();
+    assertCurrent();
+    if (!supported) return;
+    const path = '/api/ai/conversations/' + encodeURIComponent(id) + '/settings';
+    const existing = await fetch(path, {cache:'no-store'});
+    const settings = await existing.json();
+    assertCurrent();
+    if (!existing.ok) throw Error(settings.detail || 'Could not check conversation settings.');
+    if (!Number.isInteger(settings.settings_revision) || settings.settings_revision < 0) throw Error('The conversation settings are invalid. Reload the conversation before choosing AI.');
+    const response = await fetch(path, {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({compute_selection:value ? selectionFields(value) : null,expected_settings_revision:settings.settings_revision})});
+    const saved = await response.json();
+    assertCurrent();
+    if (!response.ok) throw Error(saved.detail || 'The conversation AI choice could not be saved.');
+  }
+  async function prepareConversation(id, options = {}) {
+    invalidate(); const ticket = epoch;
+    const allowed = () => current(ticket) && options.current?.() !== false;
+    if (!allowed()) return () => false;
+    busy = true; render();
+    try {
+      if (!window.TLIWorkspace) return () => allowed();
+      const supported = await window.TLIWorkspace.supported();
+      if (!allowed()) return () => false;
+      if (!supported) return () => allowed();
+      const response = await fetch('/api/ai/conversations/' + encodeURIComponent(id) + '/settings', {cache:'no-store'});
+      const value = await response.json();
+      if (!allowed()) return () => false;
+      if (!response.ok) throw Error(value.detail || 'Could not load the conversation AI choice.');
+      const saved = value.compute_selection;
+      if (!Number.isInteger(value.settings_revision) || value.settings_revision < 0 || saved !== null && (!saved || !text(saved.peer_id) || !revision(saved.trust_revision) || !revision(saved.resource_id) || !revision(saved.resource_revision))) throw Error('The saved AI selection is invalid.');
+      return () => {
+        if (!allowed()) return false;
+        selection = saved ? {...saved, peer_name:saved.peer_id, label:'Saved LAN model'} : null;
+        clearChecked(); render(); changed();
+        notice(selection ? 'This conversation uses its saved LAN model. Trust and resource versions are checked when sending.' : 'This conversation uses the current local AI setup.');
+        return true;
+      };
+    } finally { if (current(ticket)) { busy = false; render(); } }
+  }
+  async function choose() {
     if (locked || busy || !checked || checked.peer.id !== ui.peer.value) return;
     const resource = checked.resources.find(value => value.id === ui.resource.value); if (!resource) return;
-    selection = { peer_id: checked.peer.id, trust_revision: checked.trust_revision,
+    const next = { peer_id: checked.peer.id, trust_revision: checked.trust_revision,
       resource_id: resource.id, resource_revision: resource.revision, peer_name: checked.peer.name, label: resource.label };
+    const ticket = epoch; busy = true; render();
+    try { await persistChoice(next, ticket); if (!current(ticket)) return; selection = next; }
+    catch (error) { if (current(ticket)) notice(error.message); return; }
+    finally { if (current(ticket)) { busy = false; render(); } }
     notice(`Future text questions use ${selection.label} on ${selection.peer_name}. History and saved notes follow your Context choices. Shelly and other device actions stay on this TLI host.`);
     render(); changed();
   }
-  function useLocal() {
+  async function useLocal() {
     if (locked) return;
-    invalidate(); selection = null; clearChecked();
+    invalidate(); const ticket = epoch; busy = true; render();
+    try { await persistChoice(null, ticket); if (!current(ticket)) return; selection = null; clearChecked(); }
+    catch (error) { if (current(ticket)) notice(error.message); return; }
+    finally { if (current(ticket)) { busy = false; render(); } }
     notice('Your current AI setup is selected. No LAN model will be selected by this control.'); render(); changed();
   }
   function capture() { return { generation, selection: selection ? selectionFields(selection) : null }; }
@@ -110,8 +163,10 @@
     return selectionFields(ticket.selection);
   }
   function annotateReply(bubble, metadata) {
-    if (!bubble || (metadata?.handled_by !== 'lan_inference' && metadata?.provider !== 'lan') || !text(metadata.inference_host?.id) || !text(metadata.inference_host?.name) || !text(metadata.model)) return;
-    const receipt = node('div', `AI model: ${metadata.model} · ${metadata.inference_host.name}`);
+    const model = metadata?.model || metadata?.model_used;
+    const host = metadata?.inference_host?.name || (typeof metadata?.host === 'string' ? metadata.host : metadata?.host?.name || metadata?.host?.node_name);
+    if (!bubble || !text(model) || !text(host)) return;
+    const receipt = node('div', `AI model: ${model} · ${host}`);
     receipt.className = 'memory-meta'; bubble.append(receipt);
   }
   function install() {
@@ -137,7 +192,7 @@
     resource.addEventListener('change', render);
     notice('Your current AI setup is selected. No computer has been contacted.'); render();
   }
-  window.TLILanInference = { capture, isCurrent, request, annotateReply,
+  window.TLILanInference = { capture, isCurrent, request, annotateReply, prepareConversation,
     display: () => !locked && selection ? { peer_name: selection.peer_name, label: selection.label } : null };
   window.addEventListener('tli-session-locked', () => reset(true));
   window.addEventListener('tli-session-unlocked', () => reset(false));

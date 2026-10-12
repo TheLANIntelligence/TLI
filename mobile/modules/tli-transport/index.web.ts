@@ -1,4 +1,5 @@
 import { PreviewCases } from '../../src/cases-preview';
+import { PreviewWorkspace } from '../../src/workspace-preview';
 import { PREVIEW_REPORT, PREVIEW_REPORT_FACTS, previewReportSource } from '../../src/report-preview';
 import { validateNotePreview } from '../../src/reviewed-note';
 import { validSourceRef } from '../../src/answer-evidence';
@@ -44,6 +45,7 @@ const activity: Activity[] = [
 type HeadersListener = (event: { id: string; status: number; headers: Record<string, string> }) => void;
 type ChunkListener = (event: { id: string; chunk: string }) => void;
 class PreviewTransport implements Transport {
+  private workspace = new PreviewWorkspace();
   private cases = new PreviewCases();
   private guidedReports: Report[] = [];
   private headers = new Set<HeadersListener>();
@@ -91,6 +93,7 @@ class PreviewTransport implements Transport {
     const { path, method } = options;
     const body: Record<string, unknown> = options.body ? JSON.parse(options.body) : {};
     if ((globalThis as any).__TLI_PREVIEW_VERIFY__) { const log = (globalThis as any).__TLI_PREVIEW_REQUESTS__ ||= []; log.push({ path, method, body }); if (log.length > 500) log.shift(); }
+    const workspaceResult=this.workspace.request(path,method,body,this.conversations);if(workspaceResult)return workspaceResult;
     if (path === '/api/intelligence/data-health') {
       if (method !== 'GET') return this.response({ detail: 'Data checks are read-only.' }, 405);
       const scenario = typeof location === 'undefined' ? '' : new URLSearchParams(location.search).get('sample_data_health');
@@ -147,7 +150,7 @@ class PreviewTransport implements Transport {
       if (scenario === 'fail_after_first' && this.connectionChecks > 1) return this.response({ detail: 'Sample TLI responded, but its connection check could not complete.' }, 503);
       const status = scenario === 'ai_unavailable' ? 'unavailable' : scenario === 'ai_unknown' ? 'unknown' : 'available';
       return this.response({ api_version: scenario === 'version' ? 2 : 1, node,
-        capabilities: { vision: status === 'available', chat: status === 'available', home_control: true, preferences: true },
+        capabilities: { vision: status === 'available', chat: status === 'available', home_control: true, preferences: true,conversation_settings:true,documents:true,builder:true,lan_inference:true,host_runs:!!((globalThis as any).__TLI_PREVIEW_VERIFY__&&(globalThis as any).__TLI_PREVIEW_HOST_RUNS__) },
         ai: { status, provider: 'Preview', model: 'Sample TLI', detail: status === 'available' ? 'A simulated model is available in this preview. No inference runs.' : status === 'unavailable' ? 'The sample host is connected, but its model is unavailable. Controls and diagnostics remain separate.' : 'The sample host is connected. Its model has no recent health confirmation.', checked_at: new Date().toISOString() },
         chat: { path: '/api/ai/chat/stream', streaming: true } });
     }

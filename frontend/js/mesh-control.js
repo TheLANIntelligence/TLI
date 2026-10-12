@@ -1,17 +1,42 @@
 // TLI Mesh Control Center
 (function () {
   const REFRESH_INTERVAL = 30000; // auto-refresh every 30s
-  let _timer = null;
+  let _timer = null, _unsubscribe = null, _unsubscribeExpiry = null, _visible = false, _locked = false;
   let _pending = false, _lastSuccess = null, _epoch = 0;
+  let _lastNodes = [], _lastRender = '';
+  const project = n => window.MeshService?.projectPeer(n) || (n.is_self ? n : {...n,online:null,ready_grants:[],connection:{state:'unknown',fresh:false,ready_grants:[]}});
   const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const registryId = n => n.peer_id || n.node_id || n.id;
+  const pendingDiscovery = n => !n.is_self && n.pairing_available === true;
+  function discoveryEndpoint(n) {
+    if (n.is_self) return null;
+    const ip = String(n.ip || ''), parts = ip.split('.'), port = Number(n.port ?? n.tli_port ?? 8000);
+    if (parts.length !== 4 || parts.some(p => !/^(0|[1-9]\d{0,2})$/.test(p) || Number(p) > 255) || !Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return ip + ':' + port;
+  }
+  const stamp = value => { const parsed = typeof value === 'string' && value.length <= 64 && /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? Date.parse(value) : NaN; return Number.isFinite(parsed) ? parsed : null; };
+  function newerDiscovery(a, b) {
+    const seenA = stamp(a.last_seen), seenB = stamp(b.last_seen);
+    return (stamp(a.discovery_observed_at) ?? seenA ?? -Infinity) - (stamp(b.discovery_observed_at) ?? seenB ?? -Infinity) ||
+      (seenA ?? -Infinity) - (seenB ?? -Infinity) ||
+      (String(registryId(a)) > String(registryId(b)) ? 1 : -1);
+  }
   function uniqueNodes(nodes) {
     const seen = new Set();
-    return nodes.filter(n => {
+    const distinct = nodes.filter(n => {
       const key = n.peer_id || n.node_id || n.id || (n.ip ? n.ip + ':' + (n.port || n.tli_port || '') : null);
       if (!key) return true;
       if (seen.has(key)) return false;
       seen.add(key); return true;
     });
+    // Only the presentation of unreviewed discoveries is grouped. All actions
+    // retain the selected record's exact identity; saved trust is never merged.
+    const current = new Map();
+    for (const n of distinct) {
+      const key = discoveryEndpoint(n);
+      if (key && (!current.has(key) || newerDiscovery(n, current.get(key)) > 0)) current.set(key, n);
+    }
+    return distinct.filter(n => !pendingDiscovery(n) || !discoveryEndpoint(n) || current.get(discoveryEndpoint(n)) === n);
   }
 
   function fmt(id) { return document.getElementById(id); }
@@ -51,14 +76,16 @@
   }
 
   function buildNodeCard(n) {
+    n = project(n);
     const isSelf = !!n.is_self;
     const inferenceNode = !isSelf && (n.peer_profile === 'inference_node' || n.connection_state === 'inference_only');
-    const online = n.online === true && !n.error;
+    const online = isSelf ? n.online === true && !n.error : n.connection.state === 'connected' && n.connection.fresh === true;
+    const needsReview = ['discovered','review_required','identity_changed'].includes(n.connection?.state) || n.connection_state === 'review_required' || n.pairing_available === true;
     const knownOffline = n.online === false;
     const name = escape(n.node_name || n.hostname || n.ip || "Unknown computer");
 
     const card = document.createElement("div");
-    card.className = "mcd-node" + (isSelf ? " self" : "") + (!online && !inferenceNode ? " offline" : "");
+    card.className = "mcd-node" + (isSelf ? " self" : "") + (!online && !needsReview ? " offline" : "");
 
     // ── Top row ──
     const avClass = isSelf ? "self-av" : inferenceNode ? "" : (online ? "peer-av" : "offline-av");
@@ -78,37 +105,46 @@
       </div>
     `;
 
-    if (inferenceNode) {
-      const availability = document.createElement('div');
-      availability.className = 'mcd-ai-row';
-      availability.textContent = 'Check models in Ask TLI to check this Node’s current availability.';
-      card.appendChild(availability);
-      return card;
-    }
-
     // Registry identity only. A duplicated display name or an IP is never a key.
     const registryId = n.peer_id || n.node_id || n.id;
     if (typeof registryId === 'string' && registryId.length && registryId.length <= 240) {
       const details = document.createElement('button'); details.type = 'button'; details.className = 'btn-outline';
       details.textContent = 'Device details'; details.dataset.deviceDetailsId = 'node-' + registryId;
       details.addEventListener('click', () => window.TLIDeviceDetails?.open('node-' + registryId)); card.appendChild(details);
-      if (!isSelf) { const messages = document.createElement('button'); messages.type = 'button'; messages.className = 'btn-outline'; messages.textContent = 'Messages & files'; messages.addEventListener('click', () => window.TLIChat?.openPeer?.(registryId)); card.appendChild(messages); }
-      if (!isSelf && n.pairing_available === true) {
+      if (!isSelf && !inferenceNode && online && n.connection.ready_grants.includes('messages')) { const messages = document.createElement('button'); messages.type = 'button'; messages.className = 'btn-outline'; messages.textContent = 'Messages & files'; messages.addEventListener('click', () => window.TLIChat?.openPeer?.(registryId)); card.appendChild(messages); }
+      if (!isSelf && needsReview) {
         const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'btn-primary';
-        connect.textContent = 'Request connection'; connect.dataset.pairingDeviceId = registryId;
-        connect.addEventListener('click', () => window.TLIPeerPairing?.open({deviceId:registryId,name:n.node_name || n.hostname || registryId}));
+        connect.textContent = 'Connect'; connect.dataset.pairingDeviceId = registryId;
+        connect.addEventListener('click', () => window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}));
         card.appendChild(connect);
+      } else if (!isSelf) {
+        const review=document.createElement('button');review.type='button';review.className='btn-outline';review.textContent='Review connection';
+        review.addEventListener('click',()=>window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}));card.appendChild(review);
       }
     }
 
+    if (!isSelf && (n.connection || needsReview || inferenceNode)) {
+      const summary=document.createElement('p');summary.className='mcd-ai-row';
+      const labels={discovered:'Nearby · needs approval',review_required:'Needs approval on both computers',checking:'Checking the saved connection',connected:'Connected',unreachable:'Temporarily unreachable',identity_changed:'Identity changed · review before reconnecting',unknown:'Connection not checked'};
+      summary.textContent=labels[n.connection?.state] || (needsReview?'Nearby · needs approval':'Saved Node · check availability');
+      if(n.connection?.reason?.message)summary.textContent+=' · '+n.connection.reason.message;
+      if(online&&n.connection?.ready_grants?.length)summary.textContent+=' · '+n.connection.ready_grants.map(g=>({messages:'Messages & files',observe:'Observations',coordinate:'Coordination',inference:'AI compute'}[g]||g)).join(' · ');
+      card.appendChild(summary);
+      if(inferenceNode||!online)return card;
+    }
     if (!online) {
       const err = document.createElement("div");
       err.className = "mcd-offline-msg";
       // Show a clean reason — never expose raw Python exceptions to the user
       const reason = n.error ? cleanOfflineError(n.error) : "Not reachable";
-      err.textContent = n.connection_state === 'review_required' ? 'Computer access needs review; no connection check was sent.' : knownOffline ? `Not reachable — ${reason}` : 'Current health is unavailable. Refresh to check again.';
+      err.textContent = n.connection_state === 'review_required' ? 'Computer access needs review; no connection check was sent.' : n.connection_state === 'status_unsupported' ? 'Update this computer to check shared permissions. Existing reviewed operations remain available.' : knownOffline ? `Not reachable — ${reason}` : 'Current health is unavailable. Refresh to check again.';
       card.appendChild(err);
       return card;
+    }
+    if(!isSelf && Array.isArray(n.ready_grants)){
+      const ready=document.createElement('p');ready.className='mcd-ai-row';
+      ready.textContent='Connected · '+(n.ready_grants.length?n.ready_grants.map(g=>({messages:'Messages & files',observe:'Observations',coordinate:'Coordination',inference:'AI compute'}[g]||g)).join(' · '):'No shared permissions');
+      card.appendChild(ready);
     }
 
     // ── Metrics ──
@@ -171,7 +207,20 @@
     return card;
   }
 
+  function renderCached(force=false) {
+    if (_locked || document.hidden) return;
+    const grid=fmt('mcd-grid');if(!grid)return;
+    const cached=new Map((window.MeshService?.getPeers()?.peers||[]).map(peer=>[peer.id,peer]));
+    const nodes=_lastNodes.map(node=>{const peer=cached.get(registryId(node));return project(peer&&!node.is_self?{...node,connection:peer.connection,online:peer.online,ready_grants:peer.ready_grants}:node);});
+    const signature=JSON.stringify(nodes);if(!force&&signature===_lastRender)return;_lastRender=signature;
+    grid.innerHTML='';
+    if(!nodes.length){grid.innerHTML='<div class="mcd-loading">No TLI computers were returned by the latest check.</div>';return;}
+    const sorted=[...nodes.filter(n=>n.is_self),...nodes.filter(n=>!n.is_self&&n.online!==false),...nodes.filter(n=>!n.is_self&&n.online===false)];
+    for(const node of uniqueNodes(sorted))grid.appendChild(buildNodeCard(node));
+  }
+
   async function refresh() {
+    if(_locked||document.hidden)return;
     const grid = fmt("mcd-grid");
     const btn  = fmt("mcd-refresh-btn");
     const updated = fmt("mcd-last-updated");
@@ -189,21 +238,30 @@
       if (epoch !== _epoch) return;
       if (!Array.isArray(data.nodes)) throw new Error('Incomplete computer health response');
 
-      grid.innerHTML = "";
-      const nodes = data.nodes || [];
-      if (!nodes.length) {
-        grid.innerHTML = '<div class="mcd-loading">No TLI computers were returned by the latest check.</div>';
-      } else {
-        // Self first, then online peers, then offline
-        const sorted = [
-          ...nodes.filter(n => n.is_self),
-          ...nodes.filter(n => !n.is_self && n.online !== false),
-          ...nodes.filter(n => !n.is_self && n.online === false),
-        ];
-        // Frontend dedup safety net — same machine can appear under multiple IPs/IDs
-        const deduped = uniqueNodes(sorted);
-        for (const n of deduped) grid.appendChild(buildNodeCard(n));
+      // Older running backends already identify pairing-eligible records but
+      // omit their timestamps from health. Read the local directory only when
+      // needed so a browser refresh also cleans up an older server's cards.
+      const endpoints = new Set();
+      const hasDuplicates = data.nodes.some(n => {
+        const key = discoveryEndpoint(n); if (!key) return false;
+        if (endpoints.has(key)) return true; endpoints.add(key); return false;
+      });
+      if (hasDuplicates && data.nodes.some(pendingDiscovery) && data.nodes.some(n => discoveryEndpoint(n) && !n.last_seen)) {
+        try {
+          let directory;
+          if (window.MeshService?.fetchDirectory) directory = await window.MeshService.fetchDirectory({force:true});
+          else {
+            const response = await fetch('/mesh/directory', {cache:'no-store'});
+            if (!response.ok) throw Error('Directory unavailable');
+            directory = await response.json();
+          }
+          const saved = new Map((directory.devices || []).map(n => [n.device_id, n]));
+          data.nodes = data.nodes.map(n => ({...n, last_seen:n.last_seen || saved.get(registryId(n))?.last_seen}));
+        } catch (_) { /* The server's exact identities remain available. */ }
+        if (epoch !== _epoch) return;
       }
+
+      _lastNodes = data.nodes;renderCached(true);
 
       _lastSuccess = new Date();
       grid.classList.remove('mcd-stale');
@@ -211,6 +269,7 @@
     } catch (e) {
       if (epoch !== _epoch) return;
       if (_lastSuccess) {
+        renderCached();
         grid.classList.add('mcd-stale');
         if (updated) updated.textContent = 'Check unavailable. Previous results from ' + _lastSuccess.toLocaleTimeString() + ' may be out of date.';
       } else grid.textContent = 'Computer health is unavailable. Check the TLI connection, then choose Refresh.';
@@ -221,11 +280,17 @@
   }
 
   function start() {
+    _visible=true;
+    if(_lastSuccess)renderCached();
     refresh();
+    if(!_unsubscribe&&window.MeshService?.subscribePeers)_unsubscribe=window.MeshService.subscribePeers(()=>{if(_visible&&_lastSuccess)renderCached();});
+    if(!_unsubscribeExpiry&&window.MeshService?.subscribeExpiry)_unsubscribeExpiry=window.MeshService.subscribeExpiry(()=>{if(_visible&&_lastSuccess)renderCached();});
     if (!_timer) _timer = setInterval(refresh, REFRESH_INTERVAL);
   }
 
   function stop() {
+    _visible=false;_unsubscribe?.();_unsubscribe=null;
+    _unsubscribeExpiry?.();_unsubscribeExpiry=null;
     if (_timer) { clearInterval(_timer); _timer = null; }
   }
 
@@ -245,11 +310,14 @@
         stop();
       }
     });
-    window.addEventListener('tli-session-locked', () => {
-      stop(); _epoch++; _lastSuccess = null;
+    for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event, () => {
+      _locked=true;stop(); _epoch++; _lastSuccess = null; _lastNodes=[];_lastRender='';
       const grid = fmt('mcd-grid'); if (grid) grid.textContent = 'Unlock TLI to check connected computers.';
       const updated = fmt('mcd-last-updated'); if (updated) updated.textContent = '';
     });
+    window.addEventListener('tli-session-unlocked',()=>{_locked=false;const panel=fmt('panel-mesh');if(panel&&!panel.hidden&&!panel.classList.contains('hidden'))start();});
+    window.addEventListener('tli-peer-trust-changed',()=>{if(_visible)refresh();});
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&_visible){if(_lastSuccess)renderCached();refresh();}});
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

@@ -13,6 +13,30 @@
 .peer-pairing-check input { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 2px; }
 .peer-pairing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .peer-pairing-muted, .peer-pairing-address { color: var(--text-muted); font-size: 12px; }
+.connect-device-dialog .connect-device-steps { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+.connect-device-dialog pre { max-width: 100%; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: var(--accent-soft); font-size: 12px; }
+.connect-device-dialog label { display: grid; gap: 6px; }
+.connect-device-dialog .peer-pairing-check { display: flex; }
+.connect-device-dialog { width: min(740px, calc(100vw - 24px)); }
+.connect-device-dialog section { min-width: 0; }
+.connect-device-dialog textarea, .connect-device-dialog input { box-sizing: border-box; max-width: 100%; }
+.connect-device-dialog textarea { width: 100%; resize: vertical; }
+.connect-device-peer { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+.connect-device-peer > div { min-width: 0; }
+.connect-device-peer[data-selected=true] { border-color: var(--accent); background: var(--accent-soft); }
+.connect-device-dialog details { border-top: 1px solid var(--border); padding-top: 12px; }
+.connect-device-dialog summary { cursor: pointer; margin-bottom: 10px; }
+.connect-device-phone #native-companion-settings { width: 100%; padding: 0; }
+.connect-device-phone .native-companion-overview, .connect-device-phone .native-companion-steps,
+.connect-device-phone #native-companion-step-access, .connect-device-phone #native-companion-step-connection,
+.connect-device-phone #native-companion-startup-details, .connect-device-phone #native-companion-host-start,
+.connect-device-phone #native-companion-remote { display: none; }
+#tli-connect-device-review:not(:empty), #tli-connect-device-verification:not(:empty) { border-top: 1px solid var(--border); padding-top: 18px; }
+#tli-connections-advanced { margin-bottom: 16px; }
+.connection-review-facts { display: grid; gap: 4px; margin: 8px 0; overflow-wrap: anywhere; }
+.connection-review-facts dt { font-weight: 650; }
+.connection-review-facts dd { margin: 0 0 10px; }
+.connect-device-dialog .connect-device-legacy { display: block; margin-top: 16px; }
 .peer-pairing-result { padding: 12px; border-left: 3px solid var(--accent); }
 .peer-pairing-banner { position: fixed; right: 22px; bottom: 88px; z-index: 900; width: min(350px, calc(100vw - 32px)); box-sizing: border-box; padding: 18px; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 10px 32px #0003; overflow-wrap: anywhere; }
 .peer-pairing-banner p { font-size: 13px; line-height: 1.5; }

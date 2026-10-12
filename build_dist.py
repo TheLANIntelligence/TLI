@@ -161,7 +161,8 @@ SKIP_ROOT_FILES: set[str] = {
 }
 
 # Only reviewed, public guides ship. Other documentation stays developer-only.
-PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
+PUBLIC_GUIDES = {"TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "TLI_SEAMLESS_CONNECTIONS.md", "SSE_SCHEMA.md",
+                "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
                 "TLI_CAPABILITIES.md", "TLI_ANNIVERSARY_COMPLETION_PROGRAM.md",
@@ -169,7 +170,7 @@ PUBLIC_GUIDES = {"HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT
 
 PLATFORM_ROOT_FILES = {
     "windows": {"TLI.exe", "TLI_Start.bat", "TLI_Diagnostics.bat", "TLI_Bootstrap.ps1",
-                "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1",
+                "TLI_Setup.bat", "TLI_Setup.ps1", "TLI_Network_Setup.ps1", "tli_sentinel.ps1",
                 "TLI_Update.bat", "TLI_Update.ps1", "Uninstall_TLI.bat", "TLI_Uninstall.ps1"},
     "macos": {"TLI_Start.command", "TLI_Start.sh", "TLI_Update.command", "TLI_Update.sh",
               "Uninstall_TLI.command", "Uninstall_TLI.sh"},

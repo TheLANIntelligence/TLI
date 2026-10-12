@@ -2,7 +2,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   let _lanLocked=false,_lanEpoch=0;
-  let _panelOpen = false, _panelEpoch = 0, _bgPollPending = null;
+  let _panelOpen = false, _panelEpoch = 0, _bgPollPending = null, _unsubscribeExpiry = null;
   const _lanAlive=t=>!_lanLocked&&t===_lanEpoch;
   const _panelVisible = () => _panelOpen && !document.hidden && !_lanLocked;
 
@@ -14,7 +14,6 @@
   const BYTES_IN_GB = 1024 * 1024 * 1024;
 
   const PRESENCE_OFFLINE_MS = 10 * 60 * 1000;
-  const PRESENCE_IDLE_MS = 3 * 60 * 1000;
   const REFRESH_MS = 3500;
 
   // -----------------------------
@@ -39,6 +38,7 @@
 
     lastDirectoryOk: false,
     nodeSearch: "",
+    previousOpen: false,
 
     localNodeId: "local",
     localNodeName: "Me",
@@ -51,6 +51,7 @@
   let _typingSendTimer = null;    // debounce handle for outgoing typing signal
   let _typingClearTimer = null;   // auto-clear typing indicator after inactivity
   const _chatLastTs    = {};      // threadId → last seen ts
+  const _chatCursors   = {};      // host journal order, independent of sender clocks
   const _readReceipts  = {};      // threadId → { peerId: up_to_ts } — what peer has read
   let _typingState     = false;   // is peer currently typing in active thread
 
@@ -96,11 +97,22 @@
   }
 
   function normalizeStatusFromLastSeen(lastSeenMs) {
-    if (!lastSeenMs || Number.isNaN(lastSeenMs)) return "online";
-    const age = nowTs() - lastSeenMs;
-    if (age > PRESENCE_OFFLINE_MS) return "offline";
-    if (age > PRESENCE_IDLE_MS) return "idle";
-    return "online";
+    return Number.isFinite(lastSeenMs) && lastSeenMs > 0 && nowTs() - lastSeenMs < PRESENCE_OFFLINE_MS ? 'discovered' : 'unknown';
+  }
+
+  const connectionNow = receipt => window.MeshService?.projectConnection(receipt) || {state:'unknown',fresh:false,online:null,ready_grants:[]};
+  function projectNode(node) {
+    if(node.id==='__local_loopback__')return node;
+    const connection=connectionNow(node.connection);
+    return {...node,connection,online:connection.online===true,status:connection.online===true?'online':connection.online===false?'offline':'unknown'};
+  }
+  function expireConnections() {
+    if(!_panelVisible())return;
+    const projected=state.rawNodes.map(projectNode);
+    if(JSON.stringify(projected)===JSON.stringify(state.rawNodes))return;
+    state.rawNodes=projected;state.nodes=applyNodeSearch(projected);
+    renderBuddyList();renderHeaderLivePill();updateComposerState();
+    if(state.selectedNodeId)renderThread(state.selectedNodeId);
   }
 
   function presenceClass(status) {
@@ -232,6 +244,7 @@
     if (!nodeId) return;
     const threadId = makeThreadId(nodeId);
     const since = _chatLastTs[threadId] || 0;
+    const requestedCursor = _chatCursors[threadId] || 0;
 
     // Collect raw messages from both local store and peer's store (pull-based delivery)
     const allMsgs = [];
@@ -239,7 +252,7 @@
 
     const addMsgs = (msgs) => {
       for (const m of (msgs || [])) {
-        const key = m.ts + "|" + m.from_id;
+        const key = (m.message_id || m.ts) + "|" + m.from_id;
         if (!seen.has(key)) { seen.add(key); allMsgs.push(m); }
       }
     };
@@ -247,10 +260,16 @@
     // 1) Local store (messages received by push, stored here)
     try {
       const r = await fetch(
-        `/mesh/chat/messages?thread_id=${encodeURIComponent(threadId)}&since=${since}`,
+        `/mesh/chat/messages?thread_id=${encodeURIComponent(threadId)}&cursor=${requestedCursor}&since=${since}`,
         { cache: "no-store" }
       );
-      if (r.ok) addMsgs((await r.json()).messages);
+      if (r.ok) { const data = await r.json(); if (!_lanAlive(epoch)) return; addMsgs(data.messages);
+        if (Number.isSafeInteger(data.next_cursor) && data.next_cursor >= 0) {
+          // A slower concurrent poll must not rewind a newer arrival cursor.
+          const currentCursor = _chatCursors[threadId] || 0;
+          if (data.cursor_reset && currentCursor === requestedCursor) _chatCursors[threadId] = data.next_cursor;
+          else _chatCursors[threadId] = Math.max(currentCursor, data.next_cursor);
+        } }
     } catch {}
 
     // Received messages are stored locally by the authenticated peer endpoint.
@@ -266,7 +285,7 @@
     for (const m of allMsgs) {
       // Use client ts; fall back to server_ts if missing or implausibly small (<2020)
       const msgTs = (m.ts && m.ts > 1577836800000) ? m.ts : (m.server_ts || m.ts || 0);
-      const key = msgTs + "|" + m.from_id;
+      const key = (m.message_id || msgTs) + "|" + m.from_id;
       if (existingIds.has(key)) continue;
 
       const isOwn = m.from_id === state.localNodeId;
@@ -368,7 +387,7 @@
   // -----------------------------
   function mapLanPeersToNodes(data) {
     const peers = Array.isArray(data?.peers) ? data.peers : [];
-    return peers.map(p => ({
+    return peers.map(p => projectNode({
       id:         String(p.id || p.name || "peer"),
       name:       String(p.name || p.id || "Unknown TLI Node"),
       role:       p.peer_profile === 'inference_node' ? "AI compute Node" : "TLI computer",
@@ -377,20 +396,28 @@
       port:       Number(p.port || 8000),
       lastSeenMs: p.last_seen ? Date.parse(p.last_seen) : 0,
       online:     p.online === true,
-      status:     p.online ? "online" : "offline",
+      status:     p.online === true ? "online" : p.online === false ? "offline" : "unknown",
+      connection: p.connection || null,
+      discoveredRecently: p.discovered_recently === true,
+      reviewedGrants: p.reviewed_grants || [],
       accessStatus: p.status || "pending",
       trustState: p.trust_state || "review_required",
       peerProfile: p.peer_profile || "host",
       messaging: p.messaging || null,
+      previousDiscovery: p.previous_discovery === true,
+      supersededBy: typeof p.superseded_by === 'string' ? p.superseded_by : null,
     }));
   }
 
   function messagingState(node) {
     if (!node) return {available: false, code: 'peer_missing', message: 'This computer is no longer in the directory. Refresh its connection before sending.'};
     if (node.id === '__local_loopback__') return {available: true, code: 'local', message: 'Notes stay on this computer.'};
+    if (node.previousDiscovery) return {available:false, code:'previous_discovery', message:'This is an older discovery record. Its conversation and draft stay here. Select the current computer to request a connection.'};
     if (!state.lastDirectoryOk) return {available: false, code: 'unavailable', message: 'Message permissions could not be checked. Refresh status before sending. Your draft stays here.'};
     if (node.peerProfile === 'inference_node') return {available: false, code: 'inference_only', message: 'This TLI Node offers AI compute only. Use its models in Ask TLI.'};
-    if (node.messaging) return {...node.messaging, available: node.messaging.available === true};
+    const connection=connectionNow(node.connection);
+    if(connection.state==='connected'&&connection.fresh&&connection.ready_grants.includes('messages'))return {available:true,code:'checked',message:'Messages available on both computers.'};
+    if (node.connection) return {available:false,code:connection.reason?.code||'connection_not_ready',message:connection.reason?.message||'Check this saved connection before sending. Your draft stays here.'};
     if (node.accessStatus === 'blocked') return {available: false, code: 'peer_not_allowed', message: 'Access to this computer is blocked here. Review its identity and text-message permission to reconnect.'};
     if (node.accessStatus !== 'allowed' || node.trustState !== 'verified') return {available: false, code: 'review_required', message: 'Text messages need a trust review here. Both computers must review each other’s identity and text-message permission.'};
     return {available: false, code: 'permission_unknown', message: 'Text-message permission could not be checked. Update TLI on this computer, then refresh status.'};
@@ -398,7 +425,9 @@
 
   function reviewComputer(nodeId) {
     if (_lanLocked) return;
-    if (window.TLIPeerTrust?.open) window.TLIPeerTrust.open({deviceId: nodeId, name: state.rawNodes.find(n=>n.id===nodeId)?.name, purpose: 'messages'});
+    const node = state.rawNodes.find(n=>n.id===nodeId);
+    if(window.TLIConnectDevice?.open)window.TLIConnectDevice.open({kind:node?.peerProfile==='inference_node'?'node':'computer',deviceId:nodeId});
+    else if (window.TLIPeerTrust?.open) window.TLIPeerTrust.open({deviceId: nodeId, name: node?.name, purpose: 'messages'});
     else window.switchPanel?.('panel-mesh');
   }
 
@@ -424,7 +453,8 @@
         room: String(host.room || host.location || "—"),
         ip: String(host.ip || host.addr || host.address || ""),
         lastSeenMs,
-        status: String(host.status || normalizeStatusFromLastSeen(lastSeenMs)),
+        connection: host.connection || null,
+        status: connectionNow(host.connection).online===true?'online':normalizeStatusFromLastSeen(lastSeenMs),
       });
     }
 
@@ -449,7 +479,8 @@
         room: String(d.room || d.location || "—"),
         ip: String(d.ip || d.addr || d.address || ""),
         lastSeenMs,
-        status: String(d.status || normalizeStatusFromLastSeen(lastSeenMs)),
+        connection: d.connection || null,
+        status: connectionNow(d.connection).online===true?'online':normalizeStatusFromLastSeen(lastSeenMs),
       });
     }
 
@@ -529,7 +560,7 @@
 
   function handlePresenceEvent(evt) {
     const type = evt.type;
-    if(type==='directory_changed'){refreshNodes();return;}
+    if(type==='directory_changed'||type==='connection_changed'){refreshNodes();return;}
 
     if (type === "node_online") {
       const nodeId = evt.node_id;
@@ -556,7 +587,7 @@
       if (!nodeId) return;
 
       const node = state.rawNodes.find(n => n.id === nodeId);
-      if (node) { node.online = false; node.status = 'offline'; }
+      if (node && !node.connection) { node.online = false; node.status = 'unknown'; }
       state.nodes = applyNodeSearch(state.rawNodes);
       // Keep the exact recipient, saved history, and draft when presence expires.
       if (state.selectedNodeId === nodeId) renderThread(nodeId);
@@ -693,7 +724,7 @@
   async function refreshNodes() {
     if(_lanLocked)return;const epoch=_lanEpoch;
     // Discovery is automatic; messaging readiness comes from reviewed local state.
-    // Different identities at the same address must remain distinct.
+    // Previous discoveries retain separate identities, history and drafts.
     let lanData = null;
     try {
       lanData = await safeFetchJson("/api/lan/peers");
@@ -704,7 +735,7 @@
     if(!_lanAlive(epoch))return;
     state.lastDirectoryOk = !!(lanData && Array.isArray(lanData.peers));
 
-    const mapped = state.lastDirectoryOk ? mapLanPeersToNodes(lanData) : state.rawNodes;
+    const mapped = state.lastDirectoryOk ? mapLanPeersToNodes(lanData) : state.rawNodes.map(projectNode);
 
     state.rawNodes = mapped;
     state.nodes = applyNodeSearch(mapped);
@@ -730,8 +761,9 @@
       return;
     }
 
-    const onlineish = state.rawNodes.filter(n => (n.status || "") !== "offline").length;
-    pill.textContent = onlineish === 0 ? "No peers yet" : `${onlineish} online`;
+    const onlineish = state.rawNodes.filter(n => !n.previousDiscovery && connectionNow(n.connection).online === true).length;
+    const known=state.rawNodes.filter(n=>!n.previousDiscovery).length;
+    pill.textContent = onlineish ? `${onlineish} connected` : known ? `${known} computers · select to check` : 'No peers yet';
   }
 
   // -----------------------------
@@ -742,8 +774,10 @@
     const meta = $("tli-chat-buddies-meta");
     if (!list) return;
 
-    const onlineCount = state.nodes.filter(n => (n.status || "") !== "offline").length;
-    if (meta) meta.textContent = state.rawNodes.length === 0 ? "—" : `${onlineCount}/${state.nodes.length}`;
+    const currentNodes = state.nodes.filter(n => !n.previousDiscovery);
+    const previousNodes = state.nodes.filter(n => n.previousDiscovery);
+    const onlineCount = currentNodes.filter(n => connectionNow(n.connection).online === true).length;
+    if (meta) meta.textContent = state.rawNodes.length === 0 ? "—" : `${onlineCount}/${currentNodes.length}`;
 
     list.innerHTML = "";
 
@@ -769,18 +803,27 @@
       return;
     }
 
-    for (const n of state.nodes) {
+    let previousList;
+    if (previousNodes.length) {
+      previousList = document.createElement('details'); previousList.className = 'tli-chat-previous-discoveries';
+      previousList.open = state.previousOpen;
+      previousList.addEventListener('toggle', () => { state.previousOpen = previousList.open; });
+      const summary = document.createElement('summary'); summary.textContent = `Previous discoveries (${previousNodes.length})`;
+      previousList.appendChild(summary);
+    }
+    for (const n of [...currentNodes, ...previousNodes]) {
       const row = document.createElement("div");
       row.className = "tli-chat-buddy" + (state.selectedNodeId === n.id ? " active" : "");
+      row.setAttribute('data-node-id', n.id);
       row.addEventListener("click", () => openThread(n.id));
 
       const unreadCount = (state.unread && state.unread[n.id]) || 0;
       const unreadBadge = unreadCount > 0
         ? `<span class="tli-chat-unread-badge">${unreadCount}</span>`
         : "";
-      const duplicate = state.rawNodes.some(other => other.id !== n.id && (other.name === n.name || (n.ip && other.ip === n.ip)));
+      const duplicate = n.previousDiscovery || currentNodes.some(other => other.id !== n.id && (other.name === n.name || (n.ip && other.ip === n.ip)));
       const access = messagingState(n);
-      const accessLabel = access.available ? 'Messages reviewed here' : n.accessStatus === 'blocked' ? 'Blocked here' : n.peerProfile === 'inference_node' ? 'AI compute only' : 'Review messages';
+      const accessLabel = n.previousDiscovery ? 'Previous discovery · saved conversation' : access.available ? 'Messages reviewed here' : n.accessStatus === 'blocked' ? 'Blocked here' : n.peerProfile === 'inference_node' ? 'AI compute only' : 'Review messages';
 
       row.innerHTML = `
         <div class="tli-presence-dot ${presenceClass(n.status)}"></div>
@@ -824,8 +867,9 @@
         });
       });
 
-      list.appendChild(row);
+      (n.previousDiscovery ? previousList : list).appendChild(row);
     }
+    if (previousList) list.appendChild(previousList);
   }
 
   // -----------------------------
@@ -878,13 +922,13 @@
 
     const node = (state.rawNodes || state.nodes || []).find(n => n.id === nodeId) || null;
     const peerName = node ? (node.name || node.display_name || nodeId) : nodeId;
-    const isOnline = node ? !!node.online : false;
+    const connection=connectionNow(node?.connection),isOnline=connection.online===true;
 
     // Header
     title.innerHTML = `<span class="tchat-peer-name">${escapeHtml(peerName)}</span>`;
     if (meta) {
       const dot = `<span class="tchat-status-dot ${isOnline ? "online" : "offline"}"></span>`;
-      const statusText = isOnline ? "Seen on LAN" : (node?.lastSeenMs ? "Last seen " + _fmtMsgTime(node.lastSeenMs) : "Offline");
+      const statusText = isOnline ? 'Connected' : connection.reason?.code==='connection_expired'?'Connection check expired':node?.connection?.error ? 'Connection check unavailable' : node?.discoveredRecently ? 'Discovered on LAN · connection not checked' : 'Select to check connection';
       meta.innerHTML = `${dot}<span class="tchat-status-text">${statusText}</span>`;
     }
 
@@ -1066,9 +1110,9 @@
       : access.message;
     notice.appendChild(message);
     const controls = document.createElement('div'); controls.className = 'tli-chat-readiness-actions';
-    if (!access.available && node?.accessStatus === 'pending' && node.peerProfile !== 'inference_node' && window.TLIPeerPairing) {
+    if (!access.available && !node?.previousDiscovery && node?.accessStatus === 'pending' && node.peerProfile !== 'inference_node' && window.TLIPeerPairing) {
       const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'btn btn-primary'; connect.textContent = 'Request connection';
-      connect.addEventListener('click', () => window.TLIPeerPairing.open({deviceId:node.id,name:node.name})); controls.appendChild(connect);
+      connect.addEventListener('click', () => window.TLIConnectDevice?.open({kind:'computer',deviceId:node.id})); controls.appendChild(connect);
     }
     if (node?.peerProfile !== 'inference_node') {
       const review = document.createElement('button'); review.type = 'button'; review.className = 'btn btn-outline'; review.textContent = 'Review computer trust';
@@ -1087,6 +1131,7 @@
   }
 
   function openThread(nodeId) {
+    if (state.rawNodes.find(n => n.id === nodeId)?.previousDiscovery) state.previousOpen = true;
     const input = $('tli-chat-input');
     if (state.selectedNodeId !== nodeId && input) {
       if (state.selectedNodeId) state.drafts.set(state.selectedNodeId, input.value);
@@ -1108,8 +1153,23 @@
       fetchReadReceipts(nodeId);
     });
     startTypingPoll(nodeId);
+    checkSelectedConnection(nodeId);
 
     if (input) input.focus();
+  }
+
+  async function checkSelectedConnection(nodeId) {
+    const node=state.rawNodes.find(n=>n.id===nodeId),epoch=_lanEpoch;
+    if(!node||node.peerProfile==='inference_node'||node.trustState!=='verified'||node.previousDiscovery)return;
+    try{const response=await fetch('/mesh/directory/'+encodeURIComponent(nodeId)+'/connection',{method:'POST',cache:'no-store'});
+      const result=await response.json();if(!_lanAlive(epoch))return;
+      if(!response.ok||result.node_id!==nodeId||!Array.isArray(result.ready_grants))throw Error('Connection unavailable');
+      const connection=connectionNow(result.connection),connected=connection.state==='connected'&&connection.fresh;
+      node.connection=connection;node.online=connected;node.status=connected?'online':'unknown';
+      const messages=connected&&connection.ready_grants.includes('messages');
+      node.messaging={available:messages,code:connected?'checked':result.connection?.state||'unreachable',message:messages?'Messages available on both computers.':result.connection?.reason?.message||'The connection is not confirmed ready for messages.'};
+    }catch{if(!_lanAlive(epoch))return;node.connection={error:true};node.online=false;node.status='unknown';}
+    if(state.selectedNodeId===nodeId){renderThread(nodeId);updateComposerState();}renderBuddyList();renderHeaderLivePill();
   }
 
   // -----------------------------
@@ -1131,7 +1191,7 @@
 
   function _newDelivery(text,nodeId,kind='text') {
     const ts=nowTs(),remote=state.rawNodes.find(n=>n.id===nodeId),id=genId();
-    return {kind,from:kind==='ai'?'ai':'me',body:text,ts,_msgId:ts+'|'+state.localNodeId,delivery:'pending',
+    return {kind,from:kind==='ai'?'ai':'me',body:text,ts,_msgId:id+'|'+state.localNodeId,delivery:'pending',
       _payload:{message_id:id,thread_id:makeThreadId(nodeId),from_id:state.localNodeId,from_name:state.localNodeName,
         to_id:nodeId,to_ip:remote?.ip||null,body:text,ts}};
   }
@@ -1424,6 +1484,8 @@
     const epoch = _lanEpoch, panelEpoch = ++_panelEpoch;
     const current = () => _lanAlive(epoch) && _panelVisible() && panelEpoch === _panelEpoch;
     bindUIOnce();
+    expireConnections();
+    if(!_unsubscribeExpiry&&window.MeshService?.subscribeExpiry)_unsubscribeExpiry=window.MeshService.subscribeExpiry(expireConnections);
     if (_isMobile()) _setChatMobileView(state.selectedNodeId ? "thread" : "buddies");
     await loadLocalNodeIdentity();
     if (!current()) return;
@@ -1441,6 +1503,7 @@
 
   function pausePanel() {
     _panelEpoch++;
+    _unsubscribeExpiry?.();_unsubscribeExpiry=null;
     stopChatPolling();
     stopTypingPoll();
     stopPresenceStream();
@@ -1481,8 +1544,9 @@
   window.addEventListener('tli-session-locked',()=>{
     _lanLocked=true;_lanEpoch++;pausePanel();stopBgPoll();
     if(state.refreshTimer)clearInterval(state.refreshTimer);state.refreshTimer=null;
-    state.threads.clear();state.drafts.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;
+    state.threads.clear();state.drafts.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;state.previousOpen=false;
     for(const key of Object.keys(_chatLastTs))delete _chatLastTs[key];
+    for(const key of Object.keys(_chatCursors))delete _chatCursors[key];
     const out=$('tli-chat-thread-output');if(out)out.replaceChildren();const input=$('tli-chat-input');if(input)input.value='';
     updateComposerState();
   });

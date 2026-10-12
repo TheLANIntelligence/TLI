@@ -9,7 +9,23 @@
   const set = (id,value) => {if($(id))$(id).textContent=value;};
   const identity = value => typeof value==='string' && value.length>0 && value.length<=160 && !/[\x00-\x20\x7f]/.test(value);
   const localURL = value => {try {const url=new URL(value);return ['http:','https:'].includes(url.protocol)&&['localhost','127.0.0.1','::1','[::1]'].includes(url.hostname.toLowerCase())&&!url.username&&!url.password&&!url.hash?url:null;}catch{return null;}};
-  const localDesktop = () => !!localURL(window.location.href) && navigator.userAgentData?.mobile!==true && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
+  const localDesktop = () => !!localURL(window.location.href.split('#')[0]) && navigator.userAgentData?.mobile!==true && !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
+  function connectionContinuation(next){
+    if(!window.TLIConnectDevice?.isOpen?.()||!localURL(next))return null;
+    try{const raw=new URL(window.TLIConnectDevice.resumeURL(next)),base=new URL(next);
+      if(raw.origin!==base.origin||raw.pathname!==base.pathname||raw.search!==base.search||raw.username||raw.password)return null;
+      const supplied=new URLSearchParams(raw.hash.slice(1)),safe=new URLSearchParams(),kind=supplied.get('connect_device');
+      if(!['phone','computer','node'].includes(kind))return null;safe.set('connect_device',kind);
+      for(const key of ['peer','request']){const value=supplied.get(key);if(typeof value==='string'&&value.length>0&&value.length<=128&&!/[\x00-\x20\x7f]/.test(value))safe.set(key,value);}
+      const receipt=supplied.get('setup_receipt');if(/^[a-f0-9]{32,64}$/.test(receipt||''))safe.set('setup_receipt',receipt);
+      base.hash=safe.toString();return base.href;
+    }catch{return null;}
+  }
+  function handoff(command){
+    const link=$('tli-host-restart-handoff');if(!link)return;
+    const ready=command?.action==='restart'&&command.status==='accepted'&&command.resume_url&&localURL(command.next_url)&&new URL(command.next_url).origin!==window.location.origin;
+    link.hidden=!ready;if(ready){link.setAttribute('href',command.resume_url);link.textContent='Continue at '+new URL(command.next_url).origin+' and unlock TLI';}else link.removeAttribute?.('href');
+  }
   const validIdentity = value => value?.schema_version===1 && identity(value.instance_id) && identity(value.installation_id);
   const fresh = ticket => ticket===state.epoch && !state.locked;
   const active = ticket => fresh(ticket) && dialog()?.open && !document.hidden;
@@ -70,13 +86,16 @@
     const preview=state.preview;if(state.command||state.pending||state.locked||!localDesktop()||!dialog().open||document.hidden||!preview)return;
     if(preview.expires_at*1000<=Date.now()){state.preview=null;controls();text('This review expired. Refresh the review before continuing.');$('tli-host-lifecycle-check').hidden=false;$('tli-host-lifecycle-check').textContent='Refresh review';return;}
     let id;try{id=requestId();}catch(error){text(error.message);return;}
-    const ticket=state.epoch;state.command={action:preview.action,request_id:id,instance_id:preview.instance_id,installation_id:preview.installation_id,next_url:preview.next_url,status:'uncertain'};state.preview=null;
+    const ticket=state.epoch;state.command={action:preview.action,request_id:id,instance_id:preview.instance_id,installation_id:preview.installation_id,next_url:preview.next_url,resume_url:connectionContinuation(preview.next_url),status:'uncertain'};state.preview=null;
+    const command=state.command;
     controls();text('Sending the confirmed '+preview.action+' request…');
     try{
       const result=await request('/confirm','POST',{preview_id:preview.preview_id,request_id:id});
-      if(!fresh(ticket))return;
       if(result?.schema_version!==1||result.request_id!==id||result.action!==preview.action||!['accepted','stopping','restarting'].includes(result.status))throw Error('The host did not confirm this command receipt.');
-      state.command.status='accepted';showCommand();
+      if(state.command!==command)return;
+      command.status='accepted';handoff(command);
+      if(!fresh(ticket))return;
+      showCommand();
       if(preview.action==='restart'&&new URL(preview.next_url).origin===window.location.origin&&dialog().open&&!document.hidden){state.pollUntil=Date.now()+90000;state.polls=0;schedulePoll();}
     }catch(error){if(fresh(ticket)){
       if([400,401,403,404,409,410,422].includes(error.status)){state.command=null;state.preview=null;controls();text(error.message+' The request was rejected; no retry ran.');$('tli-host-lifecycle-check').hidden=false;$('tli-host-lifecycle-check').textContent='Refresh review';}
@@ -132,7 +151,7 @@
     $('tli-host-lifecycle-cancel').addEventListener('click',()=>dialog().close());
     $('tli-host-lifecycle-confirm').addEventListener('click',confirm);
     $('tli-host-lifecycle-check').addEventListener('click',()=>checkConnection());
-    $('tli-host-lifecycle-reload').addEventListener('click',()=>{if(state.locked||!state.command||!localURL(state.command.next_url))return;stopPolling();window.location.assign(state.command.next_url);});
+    $('tli-host-lifecycle-reload').addEventListener('click',()=>{if(state.locked||!state.command||!localURL(state.command.next_url))return;stopPolling();window.location.assign(state.command.resume_url||state.command.next_url);});
     dialog().addEventListener('close',()=>{state.epoch++;stopPolling();cancelRequest();state.preview=null;if(!state.locked&&state.opener?.isConnected)state.opener.focus({preventScroll:true});});
     window.addEventListener('tli-session-locked',()=>{state.locked=true;state.epoch++;stopPolling();cancelRequest();state.preview=null;if(dialog().open)dialog().close();controls();});
     window.addEventListener('tli-session-unlocked',()=>{state.locked=false;controls();});

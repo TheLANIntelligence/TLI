@@ -110,6 +110,22 @@ def credential_owner(credential: str) -> str:
     raise HTTPException(401, "Companion credential expired or revoked. Pair this device again.")
 
 
+def upgrade_pairing(token, credential, device_id, owner, origin, fingerprint):
+    """Consume a reviewed new invitation without rotating a valid phone key."""
+    with LOCK:
+        state = _read()
+        entry = state["devices"].get(device_id)
+        invitation = state["pairings"].get(_hash(token))
+        if (not entry or entry.get("revoked_at") or entry["owner_id"] != owner
+                or not secrets.compare_digest(entry["credential_hash"], _hash(credential))):
+            raise HTTPException(401, "The existing phone credential is no longer valid.")
+        if (not invitation or invitation["expires"] <= time.time() or invitation["owner_id"] != owner
+                or invitation["origin"] != origin or not secrets.compare_digest(invitation["fingerprint"], fingerprint)):
+            raise HTTPException(403, "This upgrade invitation is invalid, expired or belongs to another owner.")
+        del state["pairings"][_hash(token)]
+        _write(state)
+
+
 def resolve_user(request=None, tli_session=None, *, allow_anonymous: bool = False) -> str | None:
     """Explicit Authorization always wins and can never fall back to local mode."""
     authorization = request.headers.get("authorization") if request is not None else None
@@ -199,11 +215,14 @@ def operation_access(request: Request, owner: str):
             return owner == "local" and not S.load_pin_config()["enabled"]
     def check():
         try:
-            if valid():
-                return
+            allowed = valid()
         except Exception:
-            pass
-        raise HTTPException(401, "Execution stopped because the original access expired, was locked or was revoked. Remaining steps were not run.")
+            allowed = False
+        if not allowed:
+            raise HTTPException(401, "Execution stopped because the original access expired, was locked or was revoked. Remaining steps were not run.")
+        additional = getattr(request.state, "tli_run_check", None)
+        if additional:
+            additional()
     check()
     return check
 

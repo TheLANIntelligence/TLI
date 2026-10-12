@@ -33,7 +33,7 @@ const report = {
 const json = (route, body, status=200) => route.fulfill({status, contentType:'application/json', body:JSON.stringify(body)});
 const safeOperations = new Set(['/mesh/trust/setup', '/mesh/trust/card', '/api/companion/v1/setup']);
 const publicLabel = 'Your public computer card; contains no private key';
-const addressLabel = 'This computer’s HTTPS LAN IPv4 address and port';
+const addressLabel = 'This computer’s HTTPS LAN address and port';
 
 async function snapshot(page, mode, name, width) {
   await page.setViewportSize({width, height:1000});
@@ -112,6 +112,26 @@ async function main() {
         for (const width of [1440,390]) await snapshot(page,mode,'public-card-ready',width);
         report.checks.push(`${mode}: public address/card load automatically; copy works; permissions remain explicit; desktop/mobile fit`);
         await close();
+
+        const stableOrigin = 'https://fixture-studio.local:8443';
+        const stableCard = {...localCard, protocol:'tli-peer-trust-v2', origin:stableOrigin};
+        // An unchanged hostname SAN remains usable after DHCP invalidates the old
+        // literal address. Export only the server-validated stable public card.
+        setupResponse = {body:{...ready, ready:false, code:'certificate_mismatch',
+          origins:[], selected_origin:null, card:null, stable_origins:[stableOrigin]}};
+        cardResponse = {body:{ok:true, card:stableCard}};
+        const stableStart = operations.length;
+        await open();
+        await waitCard(stableCard);
+        assert.equal(await address().inputValue(), stableOrigin);
+        assert.deepEqual(operations.slice(stableStart), [
+          {method:'GET',path:'/mesh/trust/setup'},
+          {method:'POST',path:'/mesh/trust/card',body:{origin:stableOrigin}},
+        ]);
+        await snapshot(page,mode,'stable-public-card-after-dhcp',390);
+        report.checks.push(`${mode}: SAN-covered stable name exports after a DHCP address change without changing trust`);
+        await close();
+        cardResponse = null;
 
         setupResponse = {body:{...ready,ready:false,code:'https_unavailable',
           reason:'HTTPS is not active. Restart TLI with HTTPS enabled before exchanging cards.',

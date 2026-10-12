@@ -66,6 +66,34 @@ def certificate_bundle(cert_path: str, key_path: str, host: str) -> dict[str, st
     }
 
 
+def lan_listener_addresses() -> list[str]:
+    """Private adapters actually covered by the running IPv4 listener."""
+    import tli_state as S
+    from lan_endpoints import private_ip
+    bind = getattr(S, 'SERVER_BIND_HOST', None)
+    if bind != '0.0.0.0' and not private_ip(bind):
+        return []
+    return sorted({ip for value in _local_ipv4_addresses() if (ip := private_ip(value))
+                   and (bind == '0.0.0.0' or bind == ip)})
+
+
+def stable_lan_origins(port: int) -> list[str]:
+    """Existing certificate-covered machine names; never renew trust on a read."""
+    import tli_state as S
+    from lan_endpoints import stable_name
+    if not S.TLS_ENABLED or not lan_listener_addresses():
+        return []
+    name = socket.gethostname().rstrip('.').lower()
+    name = name if name.endswith('.local') else name + '.local'
+    if not stable_name(name):
+        return []
+    try:
+        certificate_bundle(S.TLS_CERT_PATH, S.TLS_KEY_PATH, name)
+    except (ValueError, OSError):
+        return []
+    return [f"https://{name}:{port}"]
+
+
 def ensure_tls_cert(cert_path: str, key_path: str) -> bool:
     """
     Ensure a self-signed TLS cert exists.  Generates one if missing.

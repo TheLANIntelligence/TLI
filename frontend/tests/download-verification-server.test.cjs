@@ -8,14 +8,28 @@ const { DatabaseSync } = require('node:sqlite');
 
 const root = path.join(__dirname, '../..');
 const moduleURL = pathToFileURL(path.join(root, 'website/download-verification.mjs')).href;
-const migration = fs.readFileSync(path.join(root, 'website/migrations/0001_download_verification.sql'), 'utf8');
+const migrationDirectory = path.join(root, 'website/migrations');
+const migrations = fs.readdirSync(migrationDirectory).filter(name => /^\d+.*\.sql$/.test(name)).sort()
+  .map(name => fs.readFileSync(path.join(migrationDirectory, name), 'utf8'));
+const releases = Promise.all([
+  import(pathToFileURL(path.join(root, 'landing/js/release.js')).href),
+  import(pathToFileURL(path.join(root, 'landing/js/companion-release.js')).href),
+]).then(([desktop, companion]) => ({ desktop: desktop.PUBLIC_RELEASE, android: companion.COMPANION_RELEASE }));
 const origin = 'https://downloads.example.test';
 const baseTime = Date.UTC(2026, 9, 12, 12);
 const tokenHash = value => createHash('sha256').update(value).digest('hex');
 
 // Run the actual migration and prepared SQL; D1 batch uses one SQL transaction.
 class SQLiteD1 {
-  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec(migration); this.batches = 0; }
+  constructor(schema = migrations) {
+    this.sqlite = new DatabaseSync(':memory:'); this.batches = 0;
+    for (const migration of schema) this.migrate(migration);
+  }
+  migrate(migration) {
+    this.sqlite.exec('BEGIN IMMEDIATE');
+    try { this.sqlite.exec(migration); this.sqlite.exec('COMMIT'); }
+    catch (error) { this.sqlite.exec('ROLLBACK'); throw error; }
+  }
   prepare(sql) {
     const database = this;
     function bound(parameters = []) {
@@ -65,13 +79,14 @@ async function fixture(t, options = {}) {
     sent.push(args[1]);
     return options.sendEmail ? options.sendEmail(...args) : true;
   };
-  const handlers = createDownloadHandlers(dependencies);
+  let handlers = createDownloadHandlers(dependencies);
   const makeRequest = (route, payload, extra = {}) => new Request(`${origin}/api/download/${route}`, {
     method: 'POST', body: JSON.stringify(payload), headers: {
       Origin: origin, 'Content-Type': 'application/json', 'CF-Connecting-IP': '192.0.2.10', ...(extra.headers || {}),
     }, ...extra,
   });
-  return { db, env, handlers, calls, sent, makeRequest,
+  return { db, env, get handlers() { return handlers; }, calls, sent, makeRequest,
+    setReleases(changes) { handlers = createDownloadHandlers({ ...dependencies, ...changes }); },
     setTime(value) { now = value; }, advance(value) { now += value; }, setChallenge(value) { challenge = value; },
     request(body = {}, extra = {}) {
       return handlers.request(makeRequest('request', { email: 'reader@example.test', platform: 'windows', turnstileToken: 'synthetic-challenge', website: '', ...body }, extra), env);
@@ -92,6 +107,67 @@ async function expectError(response, status, code) {
   assert.doesNotMatch(JSON.stringify(value), /reader@example\.test|synthetic-mail-key|synthetic-live-secret-key/);
   return value;
 }
+
+function seedDesktopRegistrations(db) {
+  for (const [index, platform] of ['windows', 'macos'].entries()) {
+    db.sqlite.prepare(`INSERT INTO pending_downloads
+      (token_hash,email,platform,release_version,asset_filename,requested_at,expires_at,sent_at)
+      VALUES (?,?,?,?,?,?,?,?)`).run(String(index + 1).repeat(64), `pending${index}@example.test`, platform,
+      'historical-desktop-version', `historical-${platform}.zip`, 100 + index, 200 + index, index ? null : 150);
+    db.sqlite.prepare(`INSERT INTO verified_downloads
+      (id,token_hash,email,platform,release_version,asset_filename,requested_at,verified_at)
+      VALUES (?,?,?,?,?,?,?,?)`).run(7 + index * 35, String(index + 3).repeat(64), `verified${index}@example.test`,
+      platform, 'historical-desktop-version', `historical-${platform}.zip`, 50 + index, 75 + index);
+    db.sqlite.prepare('INSERT INTO download_rate_events VALUES (?,?,?,?)')
+      .run(String(index + 5).repeat(64), 'a'.repeat(64), 'b'.repeat(64), 100 + index);
+  }
+}
+
+const databaseRows = db => Object.fromEntries(['pending_downloads', 'verified_downloads', 'download_rate_events']
+  .map(table => [table, db.rows(table)]));
+function indexes(db) {
+  return ['pending_downloads', 'verified_downloads', 'download_rate_events'].flatMap(table =>
+    db.sqlite.prepare(`PRAGMA index_list(${table})`).all().map(index => ({
+      table, name: index.name, unique: index.unique, origin: index.origin,
+      columns: db.sqlite.prepare(`PRAGMA index_info(${index.name})`).all().map(column => column.name),
+    }))).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+test('Android migration preserves every legacy row, primary key, timestamp, index and rate-table definition', t => {
+  const db = new SQLiteD1(migrations.slice(0, 1)); t.after(() => db.close());
+  seedDesktopRegistrations(db);
+  const before = databaseRows(db), oldIndexes = indexes(db);
+  const rateSchema = () => db.sqlite.prepare("SELECT sql FROM sqlite_master WHERE name = 'download_rate_events'").get().sql;
+  const oldRateSchema = rateSchema();
+  for (const migration of migrations.slice(1)) db.migrate(migration);
+  assert.deepEqual(databaseRows(db), before);
+  assert.deepEqual(indexes(db), oldIndexes);
+  assert.equal(rateSchema(), oldRateSchema);
+  assert.equal(db.rows('pending_downloads')[1].sent_at, null, 'An unsent old request remains unsent');
+  assert.equal(db.rows('verified_downloads')[1].id, 42, 'Existing registration IDs are not reassigned');
+  db.sqlite.prepare('INSERT INTO pending_downloads VALUES (?,?,?,?,?,?,?,?)')
+    .run('c'.repeat(64), 'android@example.test', 'android', 'synthetic-companion', 'synthetic.apk', 300, 400, null);
+  db.sqlite.prepare(`INSERT INTO verified_downloads
+    (token_hash,email,platform,release_version,asset_filename,requested_at,verified_at) VALUES (?,?,?,?,?,?,?)`)
+    .run('d'.repeat(64), 'android@example.test', 'android', 'synthetic-companion', 'synthetic.apk', 300, 350);
+  assert.equal(db.rows('verified_downloads').at(-1).id, 43);
+  for (const table of ['pending_downloads', 'verified_downloads']) {
+    assert.throws(() => db.sqlite.prepare(`UPDATE ${table} SET platform = 'linux'`).run(), /CHECK constraint failed/);
+    assert.throws(() => db.sqlite.prepare(`UPDATE ${table} SET token_hash = 'bad'`).run(), /CHECK constraint failed/);
+    assert.throws(() => db.sqlite.prepare(`UPDATE ${table} SET email = NULL`).run(), /NOT NULL constraint failed/);
+    assert.throws(() => db.sqlite.prepare(`UPDATE ${table} SET token_hash = ?`).run('e'.repeat(64)), /UNIQUE constraint failed/);
+  }
+});
+
+test('a failed Android migration transaction leaves original registrations and schema intact', t => {
+  const db = new SQLiteD1(migrations.slice(0, 1)); t.after(() => db.close());
+  seedDesktopRegistrations(db);
+  const before = databaseRows(db), oldIndexes = indexes(db);
+  const schema = () => db.sqlite.prepare('SELECT name, sql FROM sqlite_master ORDER BY name').all().map(row => ({ ...row }));
+  const oldSchema = schema();
+  assert.throws(() => db.migrate(migrations[1] + '\nSELECT * FROM deliberately_missing_migration_fixture;'), /no such table/);
+  assert.deepEqual(databaseRows(db), before); assert.deepEqual(indexes(db), oldIndexes); assert.deepEqual(schema(), oldSchema);
+});
 
 test('config is minimal and fails closed for every missing binding, weak hash key, invalid origin and dummy Turnstile key', async t => {
   const f = await fixture(t);
@@ -177,7 +253,7 @@ test('request returns only check-email, stores a random token hash, and records 
   assert.equal(response.status, 202); assert.deepEqual(await response.json(), { status: 'check_email' });
   const sent = f.sent[0]; assert.match(sent.token, /^[a-f0-9]{64}$/);
   assert.equal(sent.email, 'First.Last+beta@googlemail.com');
-  assert.equal(sent.version, '1.4.3-beta'); assert.equal(sent.platform, 'macos');
+  assert.equal(sent.version, '1.4.4-beta'); assert.equal(sent.platform, 'macos');
   const pending = f.db.rows('pending_downloads')[0], rate = f.db.rows('download_rate_events')[0];
   assert.equal(pending.token_hash, tokenHash(sent.token)); assert.notEqual(pending.token_hash, sent.token);
   assert.equal(pending.expires_at - pending.requested_at, 20 * 60_000);
@@ -188,13 +264,110 @@ test('request returns only check-email, stores a random token hash, and records 
   const scanner = await f.handlers.verify(new Request(`${origin}/api/download/verify?token=${sent.token}`), f.env);
   await expectError(scanner, 405, 'invalid_request'); assert.equal(f.db.rows('pending_downloads').length, 1);
   const verified = await f.verify(sent.token);
-  assert.deepEqual(await verified.json(), { status: 'verified', platform: 'macos', version: '1.4.3-beta',
-    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.3-beta/TLI_1.4.3-beta_macOS.zip' });
+  assert.deepEqual(await verified.json(), { status: 'verified', platform: 'macos', version: '1.4.4-beta',
+    url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.4-beta/TLI_1.4.4-beta_macOS.zip' });
   assert.equal(f.db.rows('pending_downloads').length, 0);
   const record = f.db.rows('verified_downloads')[0];
-  assert.equal(record.email, sent.email); assert.equal(record.asset_filename, 'TLI_1.4.3-beta_macOS.zip');
+  assert.equal(record.email, sent.email); assert.equal(record.asset_filename, 'TLI_1.4.4-beta_macOS.zip');
   assert.equal(record.requested_at, baseTime); assert.equal(record.verified_at, baseTime);
   await expectError(await f.verify(sent.token), 400, 'invalid_token');
+  assert.equal(f.db.rows('verified_downloads').length, 1);
+});
+
+test('Android email binds its own release and discloses its APK only after successful one-use verification', async t => {
+  const f = await fixture(t), { android } = await releases;
+  const response = await f.request({ platform: 'android' });
+  assert.equal(response.status, 202); assert.deepEqual(await response.json(), { status: 'check_email' });
+  assert.equal(f.sent[0].platform, 'android'); assert.equal(f.sent[0].version, android.version);
+  const pending = f.db.rows('pending_downloads')[0];
+  assert.equal(pending.platform, 'android'); assert.equal(pending.release_version, android.version);
+  assert.equal(pending.asset_filename, android.filename); assert.equal(pending.sent_at, baseTime);
+  assert.equal(pending.expires_at - pending.requested_at, 20 * 60_000);
+  assert.equal(f.db.rows('verified_downloads').length, 0);
+  const token = f.sent[0].token;
+  for (const malformed of ['', 'bad', 'A'.repeat(64), '0'.repeat(64)]) {
+    await expectError(await f.verify(malformed), 400, 'invalid_token');
+  }
+  for (const override of [{ platform: 'windows' }, { platform: 'macos' }, { url: android.url }, { filename: android.filename }]) {
+    await expectError(await f.verify(token, override), 400, 'invalid_request');
+  }
+  const simultaneous = await Promise.all(Array.from({ length: 8 }, () => f.verify(token)));
+  assert.equal(simultaneous.filter(result => result.status === 200).length, 1);
+  assert.equal(simultaneous.filter(result => result.status === 400).length, 7);
+  const winner = simultaneous.find(result => result.status === 200);
+  assert.deepEqual(await winner.json(), { status: 'verified', platform: 'android', version: android.version, url: android.url });
+  for (const rejected of simultaneous.filter(result => result.status !== 200)) await expectError(rejected, 400, 'invalid_token');
+  assert.equal(f.db.rows('pending_downloads').length, 0);
+  assert.equal(f.db.rows('verified_downloads').length, 1);
+  assert.equal(f.db.rows('verified_downloads')[0].asset_filename, android.filename);
+});
+
+test('Android sent status, provider failure, expiry and shared quotas remain required', async t => {
+  let finishSend;
+  const f = await fixture(t, { sendEmail: () => new Promise(resolve => { finishSend = resolve; }) });
+  const request = f.request({ platform: 'android' });
+  while (!finishSend) await new Promise(setImmediate);
+  const token = f.sent[0].token;
+  await expectError(await f.verify(token), 400, 'invalid_token');
+  assert.equal(f.db.rows('verified_downloads').length, 0);
+  finishSend(false); await expectError(await request, 503, 'delivery_failed');
+  assert.equal(f.db.rows('pending_downloads').length, 0);
+  assert.equal(f.db.rows('download_rate_events').length, 1);
+  await expectError(await f.request({ platform: 'windows' }), 429, 'rate_limited');
+  await expectError(await f.request({ platform: 'macos' }), 429, 'rate_limited');
+  await expectError(await f.request({ platform: 'android' }), 429, 'rate_limited');
+  const expired = await fixture(t); await expired.request({ platform: 'android' });
+  expired.advance(20 * 60_000);
+  await expectError(await expired.verify(expired.sent[0].token), 410, 'expired_token');
+  assert.equal(expired.db.rows('verified_downloads').length, 0);
+  assert.equal(expired.db.rows('pending_downloads').length, 0);
+});
+
+test('desktop and Android upgrades independently invalidate only tokens for their own changed release', async t => {
+  const { desktop, android } = await releases;
+  for (const platform of ['windows', 'macos', 'android']) {
+    const otherChanged = await fixture(t); await otherChanged.request({ platform });
+    otherChanged.setReleases(platform === 'android'
+      ? { desktopRelease: { ...desktop, version: 'synthetic-new-desktop' } }
+      : { companionRelease: { ...android, version: 'synthetic-new-companion', filename: 'new-companion.apk' } });
+    assert.equal((await otherChanged.verify(otherChanged.sent[0].token)).status, 200, `${platform}: unrelated release update cannot expire token`);
+    const ownChanged = await fixture(t); await ownChanged.request({ platform });
+    ownChanged.setReleases(platform === 'android'
+      ? { companionRelease: { ...android, version: 'synthetic-new-companion' } }
+      : { desktopRelease: { ...desktop, version: 'synthetic-new-desktop' } });
+    await expectError(await ownChanged.verify(ownChanged.sent[0].token), 410, 'expired_token');
+    assert.equal(ownChanged.db.rows('pending_downloads').length, 0);
+    assert.equal(ownChanged.db.rows('verified_downloads').length, 0);
+  }
+});
+
+test('same-version asset changes and cross-platform stored tuples cannot disclose any download', async t => {
+  const { desktop, android } = await releases;
+  for (const [platform, wrongVersion, wrongFilename] of [
+    ['android', desktop.version, desktop.windows.filename],
+    ['android', android.version, desktop.macos.filename],
+    ['windows', android.version, android.filename],
+    ['macos', desktop.version, desktop.windows.filename],
+  ]) {
+    const f = await fixture(t); await f.request({ platform });
+    f.db.sqlite.prepare('UPDATE pending_downloads SET release_version = ?, asset_filename = ?').run(wrongVersion, wrongFilename);
+    await expectError(await f.verify(f.sent[0].token), 410, 'expired_token');
+    assert.equal(f.db.rows('verified_downloads').length, 0);
+  }
+  const f = await fixture(t); await f.request({ platform: 'android' });
+  f.setReleases({ companionRelease: { ...android, filename: 'synthetic-replacement.apk' } });
+  await expectError(await f.verify(f.sent[0].token), 410, 'expired_token');
+  assert.equal(f.db.rows('verified_downloads').length, 0);
+});
+
+test('Android verification remains atomic when the final pending-token deletion fails', async t => {
+  const f = await fixture(t); await f.request({ platform: 'android' });
+  const token = f.sent[0].token;
+  f.db.sqlite.exec("CREATE TRIGGER fail_android_consumption BEFORE DELETE ON pending_downloads BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END;");
+  await expectError(await f.verify(token), 503, 'unavailable');
+  assert.equal(f.db.rows('pending_downloads').length, 1); assert.equal(f.db.rows('verified_downloads').length, 0);
+  f.db.sqlite.exec('DROP TRIGGER fail_android_consumption;');
+  assert.equal((await f.verify(token)).status, 200);
   assert.equal(f.db.rows('verified_downloads').length, 1);
 });
 

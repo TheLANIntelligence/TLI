@@ -34,8 +34,9 @@ def _pairing_link(bundle: dict) -> str:
     # DER is already base64: use its URL-safe alphabet, not a second encoding.
     certificate = bundle["certificate_der"].replace("+", "-").replace("/", "_").rstrip("=")
     expires = int(datetime.fromisoformat(bundle["expires_at"].replace("Z", "+00:00")).timestamp())
-    fragment = urlencode({"v": "1", "c": certificate, "t": bundle["token"], "e": str(expires),
-                          "i": bundle["node_id"], "n": bundle["node_name"]})
+    fragment = urlencode({"v": str(bundle["version"]), "c": certificate, "t": bundle["token"], "e": str(expires),
+                          "i": bundle["node_id"], "n": bundle["node_name"],
+                          **({"k": bundle["public_key"]} if bundle.get("public_key") else {})})
     return bundle["origin"] + PAIRING_LINK_PATH + "#" + fragment
 
 
@@ -44,7 +45,7 @@ def pairing_landing(request: Request):
     # This fixed public page cannot read invitations or redeem a credential.
     # Browsers never send URL fragments to this route. The local script removes
     # the fragment from history before presenting the explicit native opener.
-    if request.url.scheme != "https" or not _local_ip(request.url.hostname or ""):
+    if request.url.scheme != "https" or not _supported_host(request.url.hostname or ""):
         raise HTTPException(403, "Open the private HTTPS pairing link shown on your TLI desktop.")
     request.state.tli_companion_pair_landing = True
     policy = ("default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -83,6 +84,26 @@ def _local_ip(host: str) -> bool:
         return False
 
 
+def _supported_host(host: str) -> bool:
+    if _local_ip(host):
+        return True
+    # Only this machine's configured SAN-covered name, never arbitrary DNS or
+    # user-controlled Host/Forwarded data, may name a pairing listener.
+    if not host.endswith('.local'):
+        return False
+    port = int(getattr(S, "SERVER_BIND_PORT", None) or os.environ.get("TLI_PORT") or 443)
+    return any(urlsplit(origin).hostname == host for origin in tls_cert.stable_lan_origins(port))
+
+
+def _pairing_origin(request):
+    origin = str(request.base_url).rstrip('/')
+    if (request.url.hostname or '').endswith('.local'):
+        # Stable-name identity/card signatures use an explicit port, including
+        # 443. HTTP libraries may omit the default port from the Host header.
+        return f"https://{request.url.hostname}:{request.url.port or 443}"
+    return origin
+
+
 def _certificate(host: str) -> dict:
     try:
         return tls_cert.certificate_bundle(S.TLS_CERT_PATH, S.TLS_KEY_PATH, host)
@@ -97,7 +118,7 @@ def _remote_readiness(setup: dict) -> dict:
     Keep ordinary LAN origins unchanged, including existing link-local pairings.
     """
     origins = [origin for origin in setup["origins"]
-               if any(ipaddress.IPv4Address(urlsplit(origin).hostname) in network
+               if _local_ip(urlsplit(origin).hostname) and any(ipaddress.IPv4Address(urlsplit(origin).hostname) in network
                       for network in _ROUTABLE_PRIVATE_NETWORKS)]
     ready = bool(setup["pairing_ready"] and origins)
     reason = ("This host's existing HTTPS setup can be used through an externally managed private-network route. The route has not been tested."
@@ -122,6 +143,8 @@ def _setup(request: Request) -> dict:
         except HTTPException as error:
             errors.append(str(error.detail))
     pin_enabled = bool(S.load_pin_config()["enabled"])
+    stable_origins = tls_cert.stable_lan_origins(port) if lan_enabled and S.TLS_ENABLED else []
+    origins = stable_origins + [origin for origin in origins if origin not in stable_origins]
     reason = None
     if not S.TLS_ENABLED:
         reason = "Enable HTTPS and restart TLI before pairing a companion."
@@ -232,10 +255,19 @@ def create_pairing(req: PairingRequest, request: Request, response: Response, ow
     certificate = _certificate(urlsplit(req.origin).hostname)
     if len(certificate["certificate_der"]) > 12000:
         raise HTTPException(409, "This host certificate exceeds the Companion pairing limit. The existing certificate was kept; no invitation was created.")
-    token, expires = auth.create_pairing(owner, req.origin, certificate["fingerprint"])
     node = _node()
-    payload = {"version": 1, "origin": req.origin, "certificate_der": certificate["certificate_der"],
+    stable = urlsplit(req.origin).hostname.endswith(".local")
+    identity = None
+    if stable:
+        import node_identity
+        identity = node_identity.read_existing(S.DATA_DIR)
+        if not identity:
+            raise HTTPException(409, "The host identity is unavailable. Repair it on this computer before pairing.")
+    token, expires = auth.create_pairing(owner, req.origin, certificate["fingerprint"])
+    payload = {"version": 2 if stable else 1, "origin": req.origin, "certificate_der": certificate["certificate_der"],
                "token": token, "expires_at": expires, "node_id": node["id"], "node_name": node["name"]}
+    if stable:
+        payload["public_key"] = identity["public_key_hex"]
     bundle = json.dumps(payload, separators=(",", ":"))
     pairing_url = _pairing_link(payload)
     if len(pairing_url) > PAIRING_LINK_LIMIT:
@@ -254,7 +286,7 @@ def create_pairing(req: PairingRequest, request: Request, response: Response, ow
         # bundle available without changing the host's certificate or identity.
         pass
     response.headers["Cache-Control"] = "no-store"
-    return {"bundle": bundle, "pairing_url": pairing_url, "qr_format": "https_fragment_v1", "qr": qr, "expires_at": expires}
+    return {"bundle": bundle, "pairing_url": pairing_url, "qr_format": "https_fragment_v2" if stable else "https_fragment_v1", "qr": qr, "expires_at": expires}
 
 
 @router.post("/pairings/redeem")
@@ -264,13 +296,32 @@ def redeem(req: RedeemRequest, request: Request, response: Response):
         auth.resolve_user(request)
     if request.url.scheme != "https" or not S.TLS_ENABLED:
         raise HTTPException(403, "Redeem pairing codes over HTTPS only.")
-    if not _local_ip(request.url.hostname or ""):
-        raise HTTPException(403, "Use the local IPv4 address in the pairing code.")
+    if not _supported_host(request.url.hostname or ""):
+        raise HTTPException(403, "Use the reviewed LAN address in the pairing code.")
     certificate = _certificate(request.url.hostname)
-    origin = str(request.base_url).rstrip("/")
+    origin = _pairing_origin(request)
     result = auth.redeem_pairing(req.token, origin, certificate["fingerprint"], req.name, req.platform)
     response.headers["Cache-Control"] = "no-store"
     return {**result, "node": _node()}
+
+
+class UpgradeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    token: str = Field(min_length=20, max_length=256)
+    device_id: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/pairings/upgrade")
+def upgrade_pairing(req: UpgradeRequest, request: Request, response: Response, owner: str = Depends(require_session)):
+    if request.url.scheme != "https" or not S.TLS_ENABLED or not _supported_host(request.url.hostname or ""):
+        raise HTTPException(403, "Use the reviewed secure LAN address.")
+    authorization = request.headers.get("authorization", "").split()
+    if len(authorization) != 2 or authorization[0].lower() != "bearer":
+        raise HTTPException(403, "Upgrade from the phone's existing paired credential.")
+    certificate = _certificate(request.url.hostname)
+    auth.upgrade_pairing(req.token, authorization[1], req.device_id, owner, _pairing_origin(request), certificate["fingerprint"])
+    response.headers["Cache-Control"] = "no-store"
+    return {"device_id": req.device_id, "owner_id": owner, "node": _node(), "credential_retained": True}
 
 
 @router.get("/paired-devices")
@@ -290,9 +341,10 @@ def bootstrap(response: Response, owner: str = Depends(require_session), request
     from ai.ai_manager import BundledAIManager
     manager = BundledAIManager.get()
     healthy = bool(not getattr(manager, "_transition", False) and manager.is_healthy())
-    mesh_observed = _recent_mesh_ai()
-    streaming = bool(manager.cfg.model_path.exists() or healthy or mesh_observed)
-    ai = _ai_readiness(manager, healthy, mesh_observed, streaming)
+    # Advertisements cannot select a transport or authorize a model. An installed
+    # local runtime is a configured destination, not evidence that it is running.
+    streaming = bool(manager.cfg.model_path.exists() or healthy)
+    ai = _ai_readiness(manager, healthy, False, streaming)
     try:
         models.image_provider()
         vision = True
@@ -302,7 +354,12 @@ def bootstrap(response: Response, owner: str = Depends(require_session), request
     from routers.host_control_routes import metadata as host_control_metadata
     return {"api_version": 1, "node": _node(), "host_control": host_control_metadata(request), "capabilities": {
         "vision": vision, "chat": ai["status"] == "available", "home_control": True, "preferences": True,
-    }, "chat": {"path": "/api/ai/chat/stream" if streaming else "/chat", "streaming": streaming}, "ai": ai}
+        "host_runs": True, "conversation_settings": True, "workspace_events": True,
+        "documents": True, "builder": True, "lan_inference": True,
+        "connection_snapshots": True,
+    }, "protocols": {"runs": "tli-runs-v1", "workspace": "tli-workspace-v1", "conversation_settings": "tli-conversation-settings-v1",
+                     "connections": "tli-connections-v1", "connection_invitation": "tli-connection-invitation-v1"},
+        "chat": {"path": "/api/ai/chat/stream" if streaming else "/chat", "streaming": streaming}, "ai": ai}
 
 
 def _ai_readiness(manager, healthy, mesh_observed, streaming):

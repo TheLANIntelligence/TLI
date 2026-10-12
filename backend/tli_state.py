@@ -91,7 +91,7 @@ AGENT_TASKS_PATH    = MESH_DATA_DIR / "agent_tasks.json"
 #  Version
 # ============================================
 
-TLI_VERSION = "1.4.4-beta"
+TLI_VERSION = "1.4.5-beta"
 
 # ============================================
 #  LM Studio / HTTP config
@@ -616,7 +616,7 @@ def load_conversations() -> Dict[str, Any]:
 def save_conversations(conversations: Dict[str, Any]) -> None:
     # Reject replacement of unreadable existing history even when a caller
     # supplies a fresh dictionary without first loading the current store.
-    load_conversations()
+    previous = load_conversations()
     key = _get_conv_key()
     plaintext = json.dumps(conversations, ensure_ascii=False).encode("utf-8")
     nonce = os.urandom(12)
@@ -632,6 +632,12 @@ def save_conversations(conversations: Dict[str, Any]) -> None:
         tmp_path.replace(CONVERSATIONS_FILE)
     except OSError as exc:
         raise _saved_data_unavailable("Conversation history", exc) from exc
+    from workspace_events import publish
+    for ident in previous.keys() | conversations.keys():
+        if previous.get(ident) != conversations.get(ident):
+            item = conversations.get(ident) or previous.get(ident) or {}
+            owner = item.get("user_id")
+            publish("local" if owner == "bundled-ai" else owner, "conversation", ident)
 
 
 # ============================================
@@ -731,6 +737,8 @@ def save_memory(user_id: str, memory: Dict[str, Any]) -> None:
     except OSError as exc:
         raise _saved_data_unavailable("Notebook", exc) from exc
     _discard_optional_session_state("intelligence.note_search", "invalidate", user_id)
+    from workspace_events import publish
+    publish(user_id, "notes")
 
 
 def _auto_category_for_fact(text: str) -> str:

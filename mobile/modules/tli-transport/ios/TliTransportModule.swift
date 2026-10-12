@@ -7,7 +7,20 @@ struct ConfigureOptions: Record {
   @Field var origin: String = ""
   @Field var certificateDer: String = ""
   @Field var certificateSha256: String = ""
+  @Field var resolvedAddresses: [String] = []
+  @Field var nodeId: String = ""
+  @Field var publicKey: String = ""
 }
+
+struct FileRequestOptions: Record {
+  @Field var id: String = ""
+  @Field var path: String = ""
+  @Field var headers: [String: String] = [:]
+  @Field var fileUri: String = ""
+  @Field var fileName: String = ""
+  @Field var mimeType: String = ""
+}
+struct DiscoveryOptions: Record { @Field var timeoutMs: Int = 5000 }
 
 struct RequestOptions: Record {
   @Field var id: String = ""
@@ -46,6 +59,30 @@ public final class TliTransportModule: Module {
       do { try transport.request(options, promise: promise) }
       catch { reject(promise, error) }
     }.runOnQueue(.main)
+
+    AsyncFunction("uploadFile") { (options: FileRequestOptions, promise: Promise) in
+      do {
+        guard let transport = self.transport else { throw TransportFailure(code: "E_NOT_CONFIGURED", message: "Pair with TLI first.") }
+        let data = try readUpload(options.fileUri)
+        var request = RequestOptions(); request.id = options.id; request.path = options.path; request.headers = options.headers; request.method = "POST"
+        try transport.request(request, promise: promise, upload: data)
+      } catch { reject(promise, error) }
+    }.runOnQueue(.main)
+
+    AsyncFunction("downloadFile") { (options: FileRequestOptions, promise: Promise) in
+      do {
+        guard let transport = self.transport else { throw TransportFailure(code: "E_NOT_CONFIGURED", message: "Pair with TLI first.") }
+        var request = RequestOptions(); request.id = options.id; request.path = options.path; request.headers = options.headers
+        try transport.request(request, promise: promise, downloadName: options.fileName)
+      } catch { reject(promise, error) }
+    }.runOnQueue(.main)
+
+    AsyncFunction("discover") { (_: DiscoveryOptions, promise: Promise) in
+      promise.reject("E_UNSUPPORTED", "LAN discovery is available in the Android release. Use the reviewed IPv4 pairing address on iOS.")
+    }
+    AsyncFunction("probeConnection") { (_: ConfigureOptions, promise: Promise) in
+      promise.reject("E_UNSUPPORTED", "Signed endpoint discovery is available in the Android release.")
+    }
 
     AsyncFunction("requestHelper") { (configuration: ConfigureOptions, options: RequestOptions, promise: Promise) in
       do {
@@ -111,6 +148,8 @@ private final class PendingRequest {
   var decoder = IncrementalUTF8Decoder()
   var bytes = 0
   var failure: Error?
+  var downloadURL: URL?
+  var downloadHandle: FileHandle?
 
   init(options: RequestOptions, task: URLSessionDataTask, promise: Promise) {
     self.options = options
@@ -171,7 +210,7 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
     }
   }
 
-  func request(_ options: RequestOptions, promise: Promise) throws {
+  func request(_ options: RequestOptions, promise: Promise, upload: Data? = nil, downloadName: String? = nil) throws {
     try validity.check()
     guard options.id.range(of: #"^[A-Za-z0-9_-]{1,128}\z"#, options: .regularExpression) != nil,
       pending[options.id] == nil else {
@@ -181,11 +220,22 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
     try TransportPolicy.validate(method: options.method, headers: options.headers, body: options.body)
     var request = URLRequest(url: url)
     request.httpMethod = options.method
-    request.httpBody = options.body.map { Data($0.utf8) }
+    request.httpBody = upload ?? options.body.map { Data($0.utf8) }
     request.allHTTPHeaderFields = options.headers
     request.httpShouldHandleCookies = false
     let task = session.dataTask(with: request)
     let state = PendingRequest(options: options, task: task, promise: promise)
+    if let downloadName {
+      let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("tli-downloads", isDirectory: true)
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      let suppliedExtension = (downloadName as NSString).pathExtension.lowercased()
+      let ext = suppliedExtension.range(of: #"^[a-z0-9]{1,8}$"#, options: .regularExpression) == nil ? "bin" : suppliedExtension
+      let destination = root.appendingPathComponent("tli-" + UUID().uuidString + "." + ext)
+      guard FileManager.default.createFile(atPath: destination.path, contents: nil) else { throw TransportFailure(code: "E_FILE", message: "Could not create the download cache file.") }
+      state.downloadURL = destination
+      do { state.downloadHandle = try FileHandle(forWritingTo: destination) }
+      catch { try? FileManager.default.removeItem(at: destination); throw error }
+    }
     pending[options.id] = state
     taskIDs[task.taskIdentifier] = options.id
     task.resume()
@@ -195,6 +245,7 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
     guard let state = pending.removeValue(forKey: id) else { return }
     taskIDs.removeValue(forKey: state.task.taskIdentifier)
     state.task.cancel()
+    cleanupDownload(state)
     state.promise.reject("E_CANCELLED", "The request was cancelled.")
   }
 
@@ -257,7 +308,8 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
       completionHandler(.cancel)
       return
     }
-    if response.expectedContentLength > Int64(helper ? 65536 : tliMaxResponseBytes) {
+    let maxBytes = helper ? 65536 : state.downloadURL != nil ? ((200...299).contains(http.statusCode) ? 16 * 1024 * 1024 : 262144) : tliMaxResponseBytes
+    if response.expectedContentLength > Int64(maxBytes) {
       state.failure = TransportFailure(code: "E_RESPONSE_TOO_LARGE", message: helper ? "The helper response exceeds 64 KiB." : "The response exceeds 8 MiB.")
       completionHandler(.cancel)
       return
@@ -273,11 +325,14 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
   func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
     guard let state = state(for: dataTask), state.failure == nil else { return }
     do {
-      guard data.count <= (helper ? 65536 : tliMaxResponseBytes) - state.bytes else {
+      let isDownload = state.downloadURL != nil && (200...299).contains(state.response?.statusCode ?? 0)
+      let maxBytes = helper ? 65536 : state.downloadURL != nil ? (isDownload ? 16 * 1024 * 1024 : 262144) : tliMaxResponseBytes
+      guard data.count <= maxBytes - state.bytes else {
         throw TransportFailure(code: "E_RESPONSE_TOO_LARGE", message: helper ? "The helper response exceeds 64 KiB." : "The response exceeds 8 MiB.")
       }
       state.bytes += data.count
-      append(try state.decoder.decode(data), to: state)
+      if isDownload { try state.downloadHandle?.write(contentsOf: data) }
+      else { append(try state.decoder.decode(data), to: state) }
     } catch {
       state.failure = error
       dataTask.cancel()
@@ -300,6 +355,7 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
       settled?()
     }
     if let failure = state.failure ?? error {
+      cleanupDownload(state)
       reject(state.promise, failure)
       return
     }
@@ -308,8 +364,38 @@ private final class TransportSession: NSObject, URLSessionDataDelegate, @uncheck
       guard let response = state.response else {
         throw TransportFailure(code: "E_PROTOCOL", message: "TLI did not return an HTTP response.")
       }
-      let result: [String: Any] = ["status": response.statusCode, "headers": state.headers, "body": state.body]
+      var result: [String: Any] = ["status": response.statusCode, "headers": state.headers, "body": state.body]
+      if let url = state.downloadURL, (200...299).contains(response.statusCode) {
+        try state.downloadHandle?.close(); state.downloadHandle = nil
+        result["fileUri"] = url.absoluteString
+      } else { cleanupDownload(state) }
       state.promise.resolve(result)
-    } catch { reject(state.promise, error) }
+    } catch { cleanupDownload(state); reject(state.promise, error) }
   }
+}
+
+private func cleanupDownload(_ state: PendingRequest) {
+  try? state.downloadHandle?.close(); state.downloadHandle = nil
+  if let url = state.downloadURL { try? FileManager.default.removeItem(at: url) }
+}
+
+private func readUpload(_ value: String) throws -> Data {
+  guard let supplied = URL(string: value), supplied.isFileURL, supplied.host == nil || supplied.host == "",
+    supplied.query == nil, supplied.fragment == nil else {
+    throw TransportFailure(code: "E_FILE", message: "Copy the selected document to the app cache before sending.")
+  }
+  let file = supplied.resolvingSymlinksInPath().standardizedFileURL
+  let root = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].resolvingSymlinksInPath().standardizedFileURL.path + "/"
+  let resource = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+  guard file.path.hasPrefix(root), resource.isRegularFile == true, (resource.fileSize ?? Int.max) <= 8 * 1024 * 1024 else {
+    throw TransportFailure(code: "E_FILE", message: "Choose an app-cache document up to 8 MiB.")
+  }
+  let handle = try FileHandle(forReadingFrom: file)
+  defer { try? handle.close() }
+  var bytes = Data()
+  while let chunk = try handle.read(upToCount: 8192), !chunk.isEmpty {
+    guard bytes.count + chunk.count <= 8 * 1024 * 1024 else { throw TransportFailure(code: "E_REQUEST_TOO_LARGE", message: "The document exceeds 8 MiB.") }
+    bytes.append(chunk)
+  }
+  return bytes
 }

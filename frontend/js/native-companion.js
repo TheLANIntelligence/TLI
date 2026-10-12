@@ -417,8 +417,8 @@
         const result=await read('/pairings','POST',{origin});if(!current(epoch))return;
         let bundle;try{bundle=JSON.parse(result.bundle);}catch{throw new Error('The server returned an invalid pairing bundle. Refresh before trying again.');}
         const expiry=Date.parse(result.expires_at);
-        if(bundle?.version!==1||bundle.origin!==origin||typeof bundle.token!=='string'||!bundle.token||typeof bundle.certificate_der!=='string'||!bundle.certificate_der||typeof bundle.node_id!=='string'||!bundle.node_id||typeof bundle.node_name!=='string'||!Number.isFinite(expiry)||expiry<=Date.now()||Date.parse(bundle.expires_at)!==expiry)throw new Error('TLI did not confirm a complete, current pairing invitation. Create a fresh code after checking the connection.');
-        const cameraLink=result.qr_format==='https_fragment_v1';
+        if(![1,2].includes(bundle?.version)||bundle.version===2&&!/^[a-f0-9]{64}$/.test(bundle.public_key||'')||bundle.origin!==origin||typeof bundle.token!=='string'||!bundle.token||typeof bundle.certificate_der!=='string'||!bundle.certificate_der||typeof bundle.node_id!=='string'||!bundle.node_id||typeof bundle.node_name!=='string'||!Number.isFinite(expiry)||expiry<=Date.now()||Date.parse(bundle.expires_at)!==expiry)throw new Error('TLI did not confirm a complete, current pairing invitation. Create a fresh code after checking the connection.');
+        const cameraLink=['https_fragment_v1','https_fragment_v2'].includes(result.qr_format);
         pairing.append(node('h4',cameraLink?'Scan with your phone camera':'Scan with TLI Companion'));
         pairing.append(node('p','Your phone will connect to '+origin+'.','native-companion-address'));
         if(typeof result.qr==='string'&&/^data:image\/(?:svg\+xml|png);base64,/.test(result.qr)){const img=node('img');img.src=result.qr;img.alt='Single-use QR code for pairing this TLI host';pairing.append(img);}
@@ -441,7 +441,13 @@
     window.addEventListener('tli-session-unlocked',()=>{state.locked=false;if(!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
     window.addEventListener('pagehide',leave);
     document.addEventListener('visibilitychange',()=>{if(document.hidden)leave();else if(!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
-    window.TLICompanion={open,onOpen,onClose:leave,refresh:load};
+    let embeddedAt=null;
+    function mount(container){
+      if(embeddedAt)return()=>{};
+      const marker=document.createComment('Phone pairing returns here');section.before(marker);embeddedAt=container;container.append(section);onOpen();
+      return()=>{leave();embeddedAt=null;marker.replaceWith(section);};
+    }
+    window.TLICompanion={open,onOpen,onClose:leave,refresh:load,mount};
     busy();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

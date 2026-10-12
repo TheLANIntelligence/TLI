@@ -12,6 +12,8 @@ psutil>=5.9.0
 send2trash>=1.8.3
 qrcode>=7.4.2
 websockets>=12.0
+# Stable local service discovery; legacy UDP remains available without it.
+zeroconf>=0.148,<1
 
 # Validate and strip image metadata before model requests.
 Pillow>=12.1.1

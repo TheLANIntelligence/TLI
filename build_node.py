@@ -20,7 +20,9 @@ FILES = (
     "TLI_Node.bat", "node/README.md", "node/requirements.txt",
     "backend/tli_node.py", "backend/tli_state.py", "backend/node_identity.py",
     "backend/data_protection.py", "backend/security_state.py", "backend/tls_cert.py",
-    "backend/peer_trust.py", "backend/lan_inference.py", "backend/peer_inference_routes.py",
+    "backend/peer_trust.py", "backend/lan_endpoints.py", "backend/lan_inference.py", "backend/peer_inference_routes.py",
+    "backend/connection_identity.py", "backend/connection_invitation.py", "backend/node_discovery.py",
+    "backend/peer_pairing.py", "backend/peer_pairing_public.py", "backend/node_pairing.py",
     "backend/stream_lifecycle.py", "backend/intelligence/__init__.py",
     "backend/intelligence/input_budget.py",
 )

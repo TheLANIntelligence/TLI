@@ -299,6 +299,8 @@ def _auto_title(text: str, max_len: int = 55) -> str:
 @S.conversation_transaction
 def _save_chat_turn(req: "ChatRequest", reply: str, model_id: str, *, provider=None, host=None, screenshot_context=None, note_context=None, document_context=None, memory_context=None, conversation_context=None, input_budget=None, observation_context=None, evidence_context=None, case_context=None) -> str:
     """Persist a user+assistant turn.  Returns the conversation_id (new or existing)."""
+    from run_context import checkpoint, run_id
+    checkpoint()
     try:
         conversations = S.load_conversations()
         conv_id = req.conversation_id
@@ -319,6 +321,9 @@ def _save_chat_turn(req: "ChatRequest", reply: str, model_id: str, *, provider=N
             }
         conv.setdefault("messages", []).append({"role": "user", "content": req.message, "ts": now})
         assistant = {"role": "assistant", "content": reply, "model": model_id, "ts": now}
+        if run_id():
+            conv["messages"][-1]["run_id"] = run_id()
+            assistant["run_id"] = run_id()
         if isinstance(provider, str) and provider:
             assistant["provider"] = provider
         host_name = host.get("name") if isinstance(host, dict) else host

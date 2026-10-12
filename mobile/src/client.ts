@@ -4,7 +4,12 @@ import type { ChatEvent } from './types';
 export type NativeRequest = { id: string; path: string; method: string; headers: Record<string, string>; body?: string; stream?: boolean };
 export type NativeResponse = { status: number; headers: Record<string, string>; body: string };
 export interface Transport {
-  configure(options: { origin: string; certificateDer: string }): Promise<void>;
+  uploadFile?(options: {id:string;path:string;headers:Record<string,string>;fileUri:string;fileName?:string;mimeType?:string}): Promise<NativeResponse>;
+  downloadFile?(options: {id:string;path:string;headers:Record<string,string>;fileName:string}): Promise<NativeResponse & {fileUri?:string}>;
+  configure(options: { origin: string; certificateDer: string; nodeId?:string; publicKey?:string; resolvedAddresses?:string[] }): Promise<void>;
+  discover?(options:{timeoutMs?:number}):Promise<{origin:string;nodeId:string;name:string;addresses:string[]}[]>;
+  resolveConnection?(options:{origin:string;timeoutMs?:number}):Promise<string[]>;
+  probeConnection?(options:{origin:string;certificateDer:string;nodeId:string;publicKey:string;resolvedAddresses?:string[];timeoutMs?:number}):Promise<{verified:true;origin:string;nodeId:string;publicKey:string;certificateSha256:string;resolvedAddresses:string[]}>;
   request(options: NativeRequest): Promise<NativeResponse>;
   cancel(id: string): void | Promise<void>;
   reset(): void | Promise<void>;
@@ -15,7 +20,7 @@ export class ApiError extends Error { constructor(message: string, readonly stat
 export class InterruptedError extends Error { constructor() { super('Connection interrupted. Check conversation history and device status before trying again.'); } }
 export function isConnectionError(error: unknown): boolean {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
-  return ['E_NETWORK', 'E_TLS_TRUST', 'E_CERTIFICATE', 'E_LOCAL_NETWORK_PERMISSION', 'E_TIMEOUT', 'ETIMEDOUT', 'E_CONNECT', 'E_NO_ROUTE', 'E_OFFLINE'].includes(code);
+  return ['E_NETWORK', 'E_DISCOVERY', 'E_TLS_TRUST', 'E_CERTIFICATE', 'E_IDENTITY', 'E_LOCAL_NETWORK_PERMISSION', 'E_TIMEOUT', 'ETIMEDOUT', 'E_CONNECT', 'E_NO_ROUTE', 'E_OFFLINE'].includes(code);
 }
 let counter = 0;
 export class Client {
@@ -49,6 +54,26 @@ export class Client {
       return response.body ? JSON.parse(response.body) as T : undefined as T;
     } catch (error) { if (observation === this.observation && !this.paused && isConnectionError(error)) this.disconnected(error); throw error; }
     finally { this.active.delete(id); this.mutations.delete(id); }
+  }
+  async text(path: string): Promise<NativeResponse> {
+    this.assertAvailable(); const observation=this.observation,id=this.id();this.active.add(id);
+    try {const response=await this.transport.request({id,path,method:'GET',headers:{...this.headers(),Accept:'text/html'}});this.validate(response,observation);return response;}
+    catch(error){if(observation===this.observation&&!this.paused&&isConnectionError(error))this.disconnected(error);throw error;}
+    finally{this.active.delete(id);}
+  }
+  async upload<T>(path:string,fileUri:string,fileName:string):Promise<T>{
+    this.assertAvailable();if(!this.transport.uploadFile)throw new Error('Install the updated native app to send documents.');
+    const observation=this.observation,id=this.id();this.active.add(id);this.mutations.add(id);
+    try{const response=await this.transport.uploadFile({id,path,fileUri,fileName,headers:{...this.headers(),'Content-Type':'application/octet-stream'}});this.validate(response,observation);return JSON.parse(response.body) as T;}
+    catch(error){if(observation===this.observation&&!this.paused&&isConnectionError(error))this.disconnected(error);throw error;}
+    finally{this.active.delete(id);this.mutations.delete(id);}
+  }
+  async download(path:string,fileName:string):Promise<string>{
+    this.assertAvailable();if(!this.transport.downloadFile)throw new Error('Install the updated native app to download app files.');
+    const observation=this.observation,id=this.id();this.active.add(id);
+    try{const response=await this.transport.downloadFile({id,path,fileName,headers:{...this.headers(),Accept:'application/zip'}});this.validate(response,observation);if(!response.fileUri)throw new Error('The download did not produce a file.');return response.fileUri;}
+    catch(error){if(observation===this.observation&&!this.paused&&isConnectionError(error))this.disconnected(error);throw error;}
+    finally{this.active.delete(id);}
   }
   async stream(path: string, body: unknown, onEvent: (event: ChatEvent) => void): Promise<void> {
     this.assertAvailable(); const observation = this.observation;

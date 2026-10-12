@@ -195,6 +195,10 @@ def _auto_title(text, max_len=60):
 
 @S.conversation_transaction
 def _save_turn(conv_id, role, content, **extra):
+    from run_context import checkpoint, run_id
+    checkpoint()
+    if run_id():
+        extra["run_id"] = run_id()
     if not _HAS_STATE or not conv_id:
         return
     conversations = S.load_conversations()

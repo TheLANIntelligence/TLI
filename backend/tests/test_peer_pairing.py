@@ -68,6 +68,7 @@ def pair(tmp_path, monkeypatch):
         mp.setattr(Q, "_REQUESTS", side.requests)
         mp.setattr(Q, "_RATES", side.rates)
         mp.setattr(Q, "_GLOBAL_RATE", side.global_rate)
+        mp.setattr(Q, "_NODE_PAIRING", getattr(side, 'node_window', None))
 
     @contextmanager
     def active(name):
@@ -299,7 +300,7 @@ def test_full_host_mounts_pairing_routes_with_no_store_and_browser_gate(pair):
         client.cookies.set("tli_session", "browser-token")
         result = client.get("/mesh/pairing/requests")
         assert result.status_code == 200, result.text
-        assert result.json() == {"ok": True, "supported": True, "requests": []}
+        assert result.json() == {"ok": True, "supported": True, "protocols": [Q.PROTOCOL, Q.PROTOCOL_V2], "requests": []}
         assert result.headers["cache-control"] == "no-store"
         client.cookies.clear()
         assert client.get("/mesh/pairing/requests").status_code == 401

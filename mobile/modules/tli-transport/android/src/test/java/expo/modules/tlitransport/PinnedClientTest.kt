@@ -2,6 +2,7 @@ package expo.modules.tlitransport
 
 import okhttp3.Call
 import okhttp3.EventListener
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -29,13 +30,17 @@ import javax.net.ssl.SSLPeerUnverifiedException
 
 /** Real JVM handshakes through the same PinnedClient used by the Expo module.
  * Loopback is only a fixture transport here: TransportPolicyTest separately
- * proves production origins cannot be loopback, DNS names or public addresses.
+ * proves production routes cannot be loopback or public addresses. Reviewed
+ * .local hosts resolve only to bounded private candidates, preserving TLS SNI.
  * Every key/certificate is generated in memory; request data is dummy data.
  */
 class PinnedClientTest {
   private val credential = "Bearer test-only-companion-credential"
   private val payload = "{\"message\":\"test-only image question\",\"image_b64\":\"dGVzdA==\"}"
   private val hour = TimeUnit.HOURS.toMillis(1)
+  private val testLoopbackDns = object : Dns {
+    override fun lookup(hostname: String): List<InetAddress> = listOf(InetAddress.getByName("127.0.0.1"))
+  }
 
   private fun certificate(san: String = "127.0.0.1"): HeldCertificate {
     val now = System.currentTimeMillis()
@@ -178,5 +183,40 @@ class PinnedClientTest {
       assertNull(destination.takeRequest(200, TimeUnit.MILLISECONDS))
       assertEquals(0, destination.requestCount)
     } finally { close(client); source.shutdown(); destination.shutdown() }
+  }
+
+  @Test fun reviewedHostnameUsesOnlySuppliedRoutesAndKeepsHostnameVerification() {
+    val paired = certificate("studio.local")
+    val base = PinnedClient.create(paired.certificate, "studio.local", listOf("192.168.5.8"))
+    assertEquals(listOf("192.168.5.8"), base.dns.lookup("studio.local").map { it.hostAddress })
+    assertThrows(java.net.UnknownHostException::class.java) { base.dns.lookup("other.local") }
+    val server = server(paired)
+    // Only the test route maps to loopback; production DNS above rejects it.
+    val client = base.newBuilder().dns(testLoopbackDns).build()
+    try {
+      val target = url(server).newBuilder().host("studio.local").build()
+      val binary = byteArrayOf(0, 0xff.toByte(), 0xc0.toByte(), 10)
+      val request = Request.Builder().url(target).header("Authorization", credential)
+        .header("Content-Type", "application/octet-stream").post(binary.toRequestBody()).build()
+      client.newCall(request).execute().use { assertEquals(200, it.code) }
+      val received = server.takeRequest(1, TimeUnit.SECONDS)!!
+      assertEquals("studio.local:${server.port}", received.getHeader("Host"))
+      org.junit.Assert.assertArrayEquals(binary, received.body.readByteArray())
+    } finally { close(client); close(base); server.shutdown() }
+  }
+
+  @Test fun hostnameMismatchDoesNotSendBinaryDocumentOrCredential() {
+    val paired = certificate("other.local")
+    val server = server(paired)
+    val writes = Writes()
+    val client = PinnedClient.create(paired.certificate, "studio.local", listOf("192.168.5.8"))
+      .newBuilder().dns(testLoopbackDns).eventListener(writes).build()
+    try {
+      assertThrows(SSLPeerUnverifiedException::class.java) {
+        client.newCall(request(url(server).newBuilder().host("studio.local").build())).execute().close()
+      }
+      assertEquals(0, writes.headers.get()); assertEquals(0, writes.bodies.get())
+      assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    } finally { close(client); server.shutdown() }
   }
 }

@@ -86,7 +86,7 @@ test('full-host health cards retain details, messages and reported metrics along
   const f = fixture();
   f.load('mesh-control.js', s => s.replace('  function boot() {', '  window.testMesh = {buildNodeCard};\n  function boot() {'));
   const card = f.window.testMesh.buildNodeCard({ peer_id: 'full-host', node_name: 'Office', online: true, cpu_percent: 12 });
-  assert.deepEqual(card.querySelectorAll('button').map(child => child.textContent), ['Device details', 'Messages & files']);
+  assert.deepEqual(card.querySelectorAll('button').map(child => child.textContent), ['Device details', 'Messages & files', 'Review connection']);
   assert.equal(card.querySelectorAll('.mcd-metrics').length, 1); assert.match(card.innerHTML, /Reported online/);
   assert.doesNotMatch(card.innerHTML, /Compute-only Node/); assert.equal(f.calls.length, 0);
 });

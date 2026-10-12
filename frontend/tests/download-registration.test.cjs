@@ -13,9 +13,13 @@ const release = {
   macos: { url: 'https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.0-beta/TLI_1.4.0-beta_macOS.zip', sha256: 'b'.repeat(64) },
 };
 const email = 'synthetic-reader@example.test';
+const companion = { version: '0.1.0-beta.10', label: 'TLI Companion Beta 0.1.0 (10)',
+  url: 'https://expo.dev/artifacts/eas/synthetic-companion.apk', filename: 'companion-beta.apk',
+  sha256: 'c'.repeat(64), minimumAndroid: 7, size_bytes: 124703045 };
 const token = 'a1'.repeat(32);
 const config = { enabled: true, turnstileSiteKey: 'synthetic-public-sitekey' };
-const verified = platform => ({ status: 'verified', platform, version: release.version, url: release[platform].url });
+const selectedRelease = platform => platform === 'android' ? companion : { ...release[platform], version: release.version };
+const verified = platform => ({ status: 'verified', platform, version: selectedRelease(platform).version, url: selectedRelease(platform).url });
 const flush = async () => { for (let count = 0; count < 16; count++) await Promise.resolve(); };
 
 function attributes(tag) {
@@ -65,10 +69,11 @@ function fixture(options = {}) {
   }
   for (const id of ['download-email-form', 'download-email', 'download-platform', 'download-website', 'download-submit', 'email-status',
     'download-ready', 'download-file', 'mac-installer', 'copy-status', 'windows-sha256', 'macos-sha256', 'access',
-    'email-verification', 'verify-email', 'verify-status', 'challenge-status', 'download-challenge']) element(id);
+    'email-verification', 'verify-email', 'verify-status', 'challenge-status', 'download-challenge',
+    'companion-download', 'companion-file', 'companion-version', 'android-sha256', 'download-description']) element(id);
   const form = nodes['download-email-form'];
   form.reportValidity = () => nodes['download-email'].reportValidity() && nodes['download-platform'].reportValidity();
-  const anchors = ['windows', 'macos'].flatMap(platform => [0, 1].map(index => {
+  const anchors = ['windows', 'macos', 'android'].flatMap(platform => [0, 1].map(index => {
     const anchor = element(`${platform}-${index}`, { href: '#access' });
     return Object.assign(anchor, { platform });
   }));
@@ -104,11 +109,11 @@ function fixture(options = {}) {
     assert.ok(Object.hasOwn(handlers, url), 'Only the documented same-origin APIs may be fetched');
     return handlers[url](url, request);
   };
-  const context = vm.createContext({ document, window, navigator: {}, fetch, PUBLIC_RELEASE: release, AbortController,
+  const context = vm.createContext({ document, window, navigator: {}, fetch, PUBLIC_RELEASE: release, COMPANION_RELEASE: companion, AbortController,
     setTimeout: window.setTimeout, clearTimeout: window.clearTimeout,
     console: Object.fromEntries(['log', 'info', 'warn', 'error', 'debug'].map(name => [name, forbid(`console.${name}`)])),
   });
-  vm.runInContext(source.replace(/^\s*import\s+\{\s*PUBLIC_RELEASE\s*\}\s+from\s+['"][^'"]+['"];?\s*/m, ''), context);
+  vm.runInContext(source.replace(/^\s*import\s+\{\s*(?:PUBLIC_RELEASE|COMPANION_RELEASE)\s*\}\s+from\s+['"][^'"]+['"];?\s*/gm, ''), context);
   return { nodes, anchors, calls, timers, privateSideEffects, autoClicks, document, historyCalls, timeline, scripts, location, scrolls,
     get widgetOptions() { return widgetOptions; }, get resetCount() { return resetCount; },
     respond(api, callback) { handlers[`/api/download/${api}`] = callback; },
@@ -123,6 +128,8 @@ function assertLocked(f) {
   assert.equal(f.nodes['download-ready'].hidden, true);
   assert.equal(f.nodes['mac-installer'].hidden, true);
   assert.equal(f.nodes['download-file'].href, '');
+  assert.equal(f.nodes['companion-file'].href, '');
+  assert.equal(f.nodes['companion-download'].hidden, true);
   assert.ok(f.anchors.every(anchor => anchor.href === '#access'));
   assert.equal(f.autoClicks.length, 0);
   assert.deepEqual(f.privateSideEffects, [], 'No email or token in browser storage, navigation or logs');
@@ -132,10 +139,11 @@ async function usable(options) { const f = fixture(options); await flush(); f.fi
 
 test('static page is gated, accessible and has no third-party form fallback', () => {
   const links = [...html.matchAll(/<a\b[^>]*>/gi)].map(match => attributes(match[0]));
-  const downloads = links.filter(attrs => 'data-windows-download' in attrs || 'data-macos-download' in attrs);
-  assert.equal(downloads.length, 4);
+  const downloads = links.filter(attrs => 'data-windows-download' in attrs || 'data-macos-download' in attrs || 'data-android-download' in attrs);
+  assert.equal(downloads.length, 5);
   assert.ok(downloads.every(attrs => attrs.href === '#access'));
   assert.ok(!links.some(attrs => /\/releases\/download\//.test(attrs.href || '')));
+  assert.ok(!links.some(attrs => /\.apk(?:$|\?)/i.test(attrs.href || '')));
   assert.equal(tagWithId('download-email-form').attrs.action, '/api/download/request');
   assert.doesNotMatch(html + source, /formspree/i);
   for (const id of ['download-email', 'download-platform']) assert.ok('required' in tagWithId(id).attrs);
@@ -144,12 +152,13 @@ test('static page is gated, accessible and has no third-party form fallback', ()
   assert.ok('disabled' in tagWithId('verify-email').attrs);
   assert.equal(tagWithId('verify-email').attrs.type, 'button');
   const select = html.match(/<select\b[^>]*id="download-platform"[^>]*>([\s\S]*?)<\/select>/i);
-  assert.deepEqual([...select[1].matchAll(/<option\b[^>]*>/gi)].map(match => attributes(match[0]).value).filter(Boolean).sort(), ['macos', 'windows']);
+  assert.deepEqual([...select[1].matchAll(/<option\b[^>]*>/gi)].map(match => attributes(match[0]).value).filter(Boolean).sort(), ['android', 'macos', 'windows']);
   assert.equal(tagWithId('download-website').attrs.tabindex, '-1');
   assert.equal(tagWithId('download-website').attrs.autocomplete, 'off');
   assert.match(html, /class="email-honeypot" aria-hidden="true"/);
-  for (const id of ['download-ready', 'mac-installer', 'email-verification']) assert.ok('hidden' in tagWithId(id).attrs);
+  for (const id of ['download-ready', 'mac-installer', 'email-verification', 'companion-download', 'companion-file']) assert.ok('hidden' in tagWithId(id).attrs);
   assert.ok(!('href' in tagWithId('download-file').attrs));
+  assert.ok(!('href' in tagWithId('companion-file').attrs));
   assert.match(html, /<noscript>/);
 });
 
@@ -290,11 +299,17 @@ test('platform shortcuts during verification do not invalidate an in-flight emai
   assert.equal(f.nodes['download-ready'].hidden, false);
 });
 
-test('successful explicit verification reveals only the server-confirmed matching release and platform', async () => {
-  for (const platform of ['windows', 'macos']) {
+test('successful verification reveals the matching platform and a companion option only after verification', async () => {
+  for (const platform of ['windows', 'macos', 'android']) {
     const f = fixture({ hash: '#verify=' + token }); await flush();
     f.respond('verify', async () => reply(verified(platform))); await f.verify();
-    assert.equal(f.nodes['download-file'].href, release[platform].url);
+    assert.equal(f.nodes['download-file'].href, selectedRelease(platform).url);
+    assert.equal(f.nodes['companion-download'].hidden, false);
+    assert.equal(f.nodes['companion-file'].hidden, platform === 'android');
+    assert.equal(f.nodes['companion-file'].href, platform === 'android' ? '' : companion.url);
+    assert.match(f.nodes['companion-version'].textContent, /Companion Beta/);
+    assert.equal(f.nodes['android-sha256'].textContent, companion.sha256);
+    assert.match(f.nodes['download-description'].textContent, platform === 'android' ? /APK/ : /ZIP/);
     assert.equal(f.nodes['download-ready'].hidden, false);
     assert.equal(f.nodes['mac-installer'].hidden, platform !== 'macos');
     assert.equal(f.nodes['download-platform'].value, platform);
@@ -312,6 +327,9 @@ test('verification rejects arbitrary URLs, mismatched platform/version, malforme
     { ...verified('windows'), url: release.macos.url },
     { ...verified('windows'), platform: '__proto__' },
     { ...verified('windows'), version: '0.0.0' },
+    { ...verified('android'), url: 'https://untrusted.example/app.apk' },
+    { ...verified('android'), version: release.version },
+    { ...verified('windows'), url: companion.url },
     { ...verified('windows'), status: 'check_email' }, null,
   ];
   const handlers = invalid.map(body => async () => reply(body));

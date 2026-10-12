@@ -17,6 +17,8 @@ function Navigation() {
     <Stack.Screen name="pair" options={{ headerShown: false }} />
     <Stack.Screen name="settings" options={{ title: 'Your companion' }} />
     <Stack.Screen name="notebook" options={{ title: 'Notes & fixes' }} />
+    <Stack.Screen name="builder" options={{title:'Build an app'}}/>
+    <Stack.Screen name="history" options={{title:'Conversations'}}/>
     <Stack.Screen name="computers" options={{ title: 'Computers' }} />
     <Stack.Screen name="cases" options={{ title: 'Troubleshooting' }} />
     <Stack.Screen name="data-recovery" options={{ title: 'Data & Recovery' }} />

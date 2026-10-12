@@ -19,6 +19,8 @@ import shutil
 import requests
 import peer_trust
 import peer_pairing
+import peer_presentation
+import peer_connections as connections
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -30,6 +32,23 @@ from routers.system_routes import require_session
 from license_gate import gate as _gate
 
 router = APIRouter(tags=["mesh"], route_class=peer_trust.BoundedPeerRoute)
+
+
+@router.post('/agent/peer/status')
+def peer_connection_status(body: dict, access=Depends(peer_trust.status_access)):
+    if set(body) != {'challenge'} or not isinstance(body.get('challenge'), str) or re.fullmatch(r'[0-9a-f]{48}', body['challenge']) is None:
+        raise HTTPException(422, 'Supply a bounded connection challenge.')
+    peer_trust.revalidate(access)
+    entry, _, _ = peer_trust.trusted(access['device_id'])
+    import node_identity
+    return {'protocol': 'tli-peer-status-v1', 'challenge': body['challenge'],
+            'node_id': S.load_node_config().node_id, 'identity_fingerprint': node_identity.fingerprint(),
+            'grants': sorted(entry['peer_trust']['grants']), 'checked_at': S.now_iso()}
+
+
+@router.post('/mesh/directory/{device_id}/connection')
+def check_peer_connection(device_id: str, _session=Depends(require_session)):
+    return connections.check(device_id)
 
 MESH_CHAT_DIR = S.MESH_DATA_DIR / "chat"
 MESH_TRANSFERS_DIR = S.MESH_DATA_DIR / "transfers"
@@ -56,6 +75,8 @@ def _node_post(base: str, path: str, **kw):
 _presence_loop: Optional[asyncio.AbstractEventLoop] = None
 _presence_subs: List[asyncio.Queue] = []
 _presence_lock = threading.Lock()
+_background_stop = threading.Event()
+_background_threads = []
 
 
 def _set_presence_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -63,16 +84,26 @@ def _set_presence_loop(loop: asyncio.AbstractEventLoop) -> None:
     _presence_loop = loop
 
 
+def _enqueue_presence(queue, data):
+    try:
+        queue.put_nowait(data)
+    except asyncio.QueueFull:
+        # Reconcile after an overflow; do not leave stale connected state.
+        while not queue.empty():
+            queue.get_nowait()
+        queue.put_nowait(json.dumps({'type':'directory_changed','resync':True,'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION}))
+
+
 def _broadcast_presence(event: dict) -> None:
     loop = _presence_loop
     if not loop or not loop.is_running():
         return
-    data = json.dumps(event)
+    data = json.dumps({**event,'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION})
     with _presence_lock:
         dead = []
         for q in _presence_subs:
             try:
-                loop.call_soon_threadsafe(q.put_nowait, data)
+                loop.call_soon_threadsafe(_enqueue_presence, q, data)
             except Exception:
                 dead.append(q)
         for q in dead:
@@ -114,7 +145,9 @@ class MeshDeviceEntry(BaseModel):
     origin: Optional[str] = None
     peer_profile: Optional[str] = None
     messaging: Optional[Dict[str, Any]] = None
+    reviewed_grants: List[str] = []
     discovered_name: Optional[str] = None
+    connection: Optional[Dict[str, Any]] = None
 
 class MeshDirectoryResponse(BaseModel):
     mode: str
@@ -260,22 +293,15 @@ def mesh_health_status(_session=Depends(require_session)):
     """Smoke-test endpoint: returns full presence picture for a single node."""
     cfg = S.load_node_config()
     directory = S.load_mesh_directory()
-    now = time.time()
-    online_ids = []
-    offline_ids = []
+    online_ids, offline_ids, unknown_ids = [], [], []
     for dev_id, d in directory.items():
-        last_seen_str = d.get("last_seen")
-        if not last_seen_str:
+        state = connections.snapshot(dev_id,d) if dev_id != cfg.node_id else {'online':True,'fresh':True}
+        if state['online'] is True and state['fresh']:
+            online_ids.append(dev_id)
+        elif state['online'] is False and state['fresh']:
             offline_ids.append(dev_id)
-            continue
-        try:
-            ls = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00")).timestamp()
-            if (now - ls) < PRESENCE_TIMEOUT_SEC:
-                online_ids.append(dev_id)
-            else:
-                offline_ids.append(dev_id)
-        except Exception:
-            offline_ids.append(dev_id)
+        else:
+            unknown_ids.append(dev_id)
     self_in_dir = cfg.node_id in directory
     self_entry  = directory.get(cfg.node_id, {})
     return {
@@ -291,6 +317,7 @@ def mesh_health_status(_session=Depends(require_session)):
         "offline_count":   len(offline_ids),
         "online_nodes":    online_ids,
         "offline_nodes":   offline_ids,
+        "unknown_nodes":   unknown_ids,
     }
 
 
@@ -374,7 +401,7 @@ def mesh_agent_heartbeat(body: AgentHeartbeatRequest, access=Depends(peer_trust.
     # Broadcast live presence update
     dir_entry = directory.get(body.device_id, {})
     _broadcast_presence({
-        "type": "node_online",
+        "type": "connection_changed",
         "node_id": body.device_id,
         "name": dir_entry.get("display_name", body.device_id),
         "ip": dir_entry.get("ip"),
@@ -467,6 +494,7 @@ def get_mesh_directory(_session=Depends(require_session)):
             status=status_enum, is_host=bool(d.get("is_host", False)), last_seen=d.get("last_seen"),
             labels=d.get("labels") or [], notes=d.get("notes"),
             messaging=peer_trust.message_readiness(dev_id), discovered_name=_discovered_peer_name(d),
+            connection=connections.snapshot(dev_id,d),
             **peer_trust.public_trust(dev_id),
         ))
     host_device_id = node_cfg.node_id if node_cfg.role == "host" else None
@@ -475,143 +503,71 @@ def get_mesh_directory(_session=Depends(require_session)):
 
 @router.get("/api/mesh/health")
 def mesh_health(_session=Depends(require_session)):
-    """
-    Collective dashboard endpoint.
-    Returns live health stats for this node + all known mesh peers.
-    Each peer is fetched via GET /agent/health (single round-trip).
-    Peers that don't respond in 2s are marked offline.
-    """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # ── Self ───────────────────────────────────────────────────
-    self_health: dict = {"is_self": True, "online": True}
+    """Cached peer states. Opening a list never waits on other computers."""
+    self_health = {'is_self':True,'online':True}
     try:
-        from routers.system_routes import agent_health as _ah
-        self_health.update(_ah())
-    except Exception as e:
-        self_health["error"] = str(e)
-
-    nodes = [self_health]
-
-    # ── Peers ──────────────────────────────────────────────────
-    raw_dir = S.load_mesh_directory()
-    seen_ids: set[str] = set()
-
-    # Friendly names and addresses are not identities. Two TLI installations
-    # may share either; keep distinct registry identities visible to the user.
-    peer_list: list[dict] = []
-    for dev_id, d in raw_dir.items():
-        try:
-            self_cfg = S.load_node_config()
-            if dev_id == self_cfg.node_id:
-                continue
-        except Exception:
-            pass
-        ip = d.get("ip", "")
-        ident = str(d.get("node_id") or d.get("device_id") or dev_id)
-        if not ip or ident in seen_ids:
-            continue
-        seen_ids.add(ident)
-        peer_list.append({"peer_id": dev_id, "ip": ip, "port": int(d.get("tli_port", 8000)),
-                          "display_name": _peer_display_name(dev_id, d),
-                          "pairing_available": d.get("status", "pending") == "pending" and not d.get("peer_trust")})
-
-    def _friendly_error(exc: Exception) -> str:
-        msg = str(exc)
-        if "timed out" in msg or "ConnectTimeout" in msg or "connect timeout" in msg:
-            return "Connection timed out"
-        if "Max retries exceeded" in msg or "ConnectionError" in msg:
-            return "Not reachable"
-        if "Connection refused" in msg:
-            return "Connection refused"
-        if "Name or service not known" in msg or "getaddrinfo" in msg:
-            return "Host not found"
-        return "Not reachable"
-
-    def _fetch_peer(p: dict) -> dict:
-        base = {"is_self": False, "peer_id": p["peer_id"],
-                "node_name": p["display_name"], "ip": p["ip"], "port": p["port"],
-                "pairing_available": p["pairing_available"]}
-        trust = peer_trust.public_trust(p["peer_id"])
-        if trust.get("peer_profile") == "inference_node":
-            return {**base, **trust, "online": None, "connection_state": "inference_only",
-                    "error": None, "reason": "This Node shares AI compute only. Check its models in Ask TLI when needed."}
-        try:
-            peer_trust.trusted(p["peer_id"], "coordinate")
-        except HTTPException as exc:
-            base.update({"online": None, "connection_state": "review_required", "trust_state": "review_required",
-                         "reason": exc.detail, "error": None})
-            return base
-        try:
-            data = peer_trust.health(p["peer_id"])
-            data.update({"is_self": False, "online": True, "peer_id": p["peer_id"]})
-            return data
-        except Exception as e:
-            base.update({"online": False, "error": _friendly_error(e)})
-        return base
-
-    if peer_list:
-        with ThreadPoolExecutor(max_workers=min(len(peer_list), 20)) as ex:
-            futures = {ex.submit(_fetch_peer, p): p for p in peer_list}
-            for fut in as_completed(futures):
-                try:
-                    nodes.append(fut.result())
-                except Exception:
-                    pass
-
-    return {"nodes": nodes, "ts": S.now_iso()}
-
-
-@router.get("/api/lan/peers")
-def get_lan_peers(_session=Depends(require_session)):
-    """Return distinct recorded LAN identities and reported presence.
-
-    Discovery lists computers without granting permission. Messaging readiness
-    describes the local review only; the recipient must also review the sender.
-    """
-    try:
-        node_cfg = S.load_node_config()
+        from routers.system_routes import agent_health
+        self_health.update(agent_health())
     except Exception:
-        return {"peers": [], "self_id": "unknown"}
+        pass
+    rows=get_lan_peers(_session)
+    nodes,previous=[self_health],[]
+    for peer in rows['peers']:
+        state=peer['connection']
+        row={**peer,'is_self':False,'peer_id':peer['id'],'node_name':peer['name'],
+             'connection_state':state['state'],'reason':state['reason'],
+             'error':state['reason'].get('message') if state['state']=='unreachable' and isinstance(state['reason'],dict) else None,
+             'pairing_available':peer['pairing_available'],
+             'ready_grants':state['ready_grants']}
+        if peer['previous_discovery']:
+            row['pairing_available']=False
+            previous.append(row)
+        else:
+            nodes.append(row)
+    return {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'nodes':nodes,'previous_discoveries':previous,'ts':S.now_iso()}
 
-    raw = S.load_mesh_directory()
-    now = time.time()
 
-    peers = []
+@router.get('/api/lan/peers')
+def get_lan_peers(_session=Depends(require_session)):
+    cfg=S.load_node_config()
+    raw=S.load_mesh_directory()
+    previous=peer_presentation.previous_discoveries(raw,self_id=cfg.node_id)
+    peers=[]
+    for dev_id,entry in raw.items():
+        if dev_id==cfg.node_id or not entry.get('ip'):
+            continue
+        state=connections.snapshot(dev_id,entry)
+        messaging=peer_trust.message_readiness(dev_id)
+        if state['fresh'] and state['state']=='connected':
+            available='messages' in state['ready_grants']
+            messaging={'available':available,'code':'checked',
+                       'message':'Messages are available.' if available else 'Messages need permission on both computers.'}
+        peers.append({'id':dev_id,'name':_peer_display_name(dev_id,entry),'discovered_name':_discovered_peer_name(entry),
+            'ip':entry['ip'],'port':int(entry.get('tli_port',8000)),'last_seen':entry.get('last_seen'),
+            'discovery_observed_at':state['discovery']['last_observed_at'],'previous_discovery':dev_id in previous,
+            'superseded_by':previous.get(dev_id),'online':state['online'],'discovered_recently':state['discovery']['seen_recently'],
+            'status':entry.get('status','pending'),'messaging':messaging,'connection':state,
+            'pairing_available':entry.get('status','pending')=='pending' and entry.get('peer_trust') is None,
+            **peer_trust.public_trust(dev_id)})
+    peers.sort(key=lambda p:(0 if p['online'] else 1,p['name'].lower()))
+    return {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'peers':peers,'self_id':cfg.node_id}
 
-    for dev_id, d in raw.items():
-        if dev_id == node_cfg.node_id:
-            continue  # skip self
-        ip = d.get("ip") or ""
-        if not ip:
-            continue  # skip ghost entries with no IP
 
-        last_seen_str = d.get("last_seen")
-        online = False
-        if last_seen_str:
-            try:
-                ls = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00")).timestamp()
-                online = (now - ls) < PRESENCE_TIMEOUT_SEC
-            except Exception:
-                pass
+@router.get('/mesh/discovery/status')
+def discovery_status(_session=Depends(require_session)):
+    import lan_discovery
+    return lan_discovery.status()
 
-        peers.append({
-            "id":        dev_id,
-            "name":      _peer_display_name(dev_id, d),
-            "discovered_name": _discovered_peer_name(d),
-            "ip":        ip,
-            "port":      int(d.get("tli_port", 8000)),
-            "last_seen": last_seen_str,
-            "online":    online,
-            "status":    d.get("status", "pending"),
-            "messaging": peer_trust.message_readiness(dev_id),
-            **peer_trust.public_trust(dev_id),
-        })
 
-    # Sort: online first, then by name
-    peers.sort(key=lambda p: (0 if p["online"] else 1, p["name"].lower()))
+class DiscoveryScanRequest(BaseModel):
+    adapter: str
+    ports: Optional[List[int]] = None
 
-    return {"peers": peers, "self_id": node_cfg.node_id}
+
+@router.post('/mesh/discovery/scan')
+def discovery_scan(body: DiscoveryScanRequest,_session=Depends(require_session)):
+    import lan_discovery
+    return lan_discovery.request_scan(body.adapter,body.ports)
 
 
 @router.post("/mesh/devices/{device_id}/status", response_model=MeshDeviceEntry)
@@ -851,45 +807,16 @@ def mesh_node_tasks_run(device_id: str, body: MeshTaskRunRequest, _session=Depen
 
 @router.get("/mesh/presence/stream")
 async def mesh_presence_stream(request: Request, _session=Depends(require_session)):
-    """SSE stream — pushes node_online / node_offline events in real-time."""
+    """Bounded invalidation stream; clients reconcile cached connection state."""
     q: asyncio.Queue = asyncio.Queue(maxsize=64)
     with _presence_lock:
         _presence_subs.append(q)
 
     async def generate():
         try:
-            # Send a snapshot of currently-online nodes immediately on connect.
-            # Each saved node ID is independent, including shared IPs.
-            try:
-                _self_id = S.load_node_config().node_id
-            except Exception:
-                _self_id = None
-            raw = S.load_mesh_directory()
-            now_epoch = time.time()
-            for dev_id, d in raw.items():
-                if dev_id == _self_id:
-                    continue  # skip self
-                ip = d.get("ip") or ""
-                if not ip:
-                    continue
-                last_seen_str = d.get("last_seen")
-                is_online = False
-                if last_seen_str:
-                    try:
-                        ls = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00")).timestamp()
-                        is_online = (now_epoch - ls) < PRESENCE_TIMEOUT_SEC
-                    except Exception:
-                        is_online = False
-                if is_online:
-                    payload = json.dumps({
-                        "type": "node_online",
-                        "node_id": dev_id,
-                        "name": d.get("display_name", dev_id),
-                        "ip": ip,
-                        "tli_port": int(d.get("tli_port", 8000)),
-                        "status": d.get("status", "pending"),
-                    })
-                    yield f"data: {payload}\n\n"
+            # Reconnect reconciles from the cache, never from discovery timestamps.
+            initial=json.dumps({'type':'directory_changed','protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION})
+            yield f'data: {initial}\n\n'
 
             # Stream live events
             while True:
@@ -999,14 +926,14 @@ def _task_sleep():
 
 
 def agent_heartbeat_loop():
-    while True:
+    while not _background_stop.is_set():
         try:
             cfg = S.load_node_config()
         except Exception:
-            time.sleep(_hb_sleep())
+            _background_stop.wait(_hb_sleep())
             continue
         if cfg.mesh_status != "approved" or not cfg.host_address:
-            time.sleep(_hb_sleep())
+            _background_stop.wait(_hb_sleep())
             continue
         payload = {
             "device_id": cfg.node_id, "status": "online", "agent_version": "0.1.0",
@@ -1019,31 +946,31 @@ def agent_heartbeat_loop():
                 S.log_debug("mesh", "ERROR", "Heartbeat non-200", status_code=resp.status_code)
         except Exception as e:
             S.log_debug("mesh", "ERROR", "Heartbeat error", error=str(e))
-        time.sleep(_hb_sleep())
+        _background_stop.wait(_hb_sleep())
 
 
 def agent_task_worker_loop():
-    while True:
+    while not _background_stop.is_set():
         try:
             cfg = S.load_node_config()
         except Exception:
-            time.sleep(10)
+            _background_stop.wait(10)
             continue
         if cfg.mesh_status != "approved" or not cfg.host_address:
-            time.sleep(10)
+            _background_stop.wait(10)
             continue
         try:
             resp = _node_post(cfg.host_address, "/agent/tasks/next", json={"device_id": cfg.node_id},
                                   timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
             if resp.status_code != 200:
-                time.sleep(5)
+                _background_stop.wait(5)
                 continue
             task = resp.json().get("task")
         except Exception:
-            time.sleep(10)
+            _background_stop.wait(10)
             continue
         if not task:
-            time.sleep(5)
+            _background_stop.wait(5)
             continue
         task_id = task.get("task_id")
         task_type = task.get("type")
@@ -1068,7 +995,7 @@ def agent_task_worker_loop():
             }, timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT))
         except Exception:
             pass
-        time.sleep(2)
+        _background_stop.wait(2)
 
 
 # ============================================
@@ -1152,24 +1079,28 @@ def mesh_chat_receive(body: ChatMessageRequest, request: Request, access=Depends
 def mesh_chat_messages(
     thread_id: str = Query(...),
     since: float = Query(0),
+    cursor: Optional[int] = Query(default=None, ge=0),
 ):
     path = _safe_thread_path(thread_id)
     if not path.exists():
-        return {"messages": []}
+        return {"messages": [], "next_cursor": 0, "cursor_reset": bool(cursor)}
     msgs = []
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
+        with peer_trust.LOCK, open(path, "r", encoding="utf-8") as f:
+            rows = list(f)
+            reset = cursor is not None and cursor > len(rows)
+            after = 0 if reset else cursor
+            for sequence, line in enumerate(rows, 1):
                 m = S.decrypt_jsonl_line(line)
                 if m is None:
                     continue
-                if m.get("ts", 0) > since:
-                    msgs.append(m)
+                if (after is not None and sequence > after) or (after is None and m.get("ts", 0) > since):
+                    msgs.append({**m, "arrival_cursor": sequence})
     except HTTPException:
         raise
     except Exception:
         return {"messages": []}
-    return {"messages": msgs}
+    return {"messages": msgs, "next_cursor": len(rows), "cursor_reset": reset}
 
 
 # ============================================
@@ -1237,53 +1168,6 @@ def _prune_ghost_entries() -> None:
     return None
 
 
-def _presence_timeout_watcher() -> None:
-    """Background thread: broadcasts node_offline for nodes that stop heartbeating."""
-    known_online: Dict[str, float] = {}  # device_id → last_seen epoch
-
-    while True:
-        try:
-            now = time.time()
-            directory = S.load_mesh_directory()
-            cfg = S.load_node_config()
-
-            for dev_id, d in directory.items():
-                if not d.get("ip"):
-                    continue
-                last_seen_str = d.get("last_seen")
-                if not last_seen_str:
-                    continue
-                try:
-                    ls = datetime.fromisoformat(last_seen_str.replace("Z", "+00:00")).timestamp()
-                except Exception:
-                    continue
-
-                was_online = dev_id in known_online
-                is_online = (now - ls) < PRESENCE_TIMEOUT_SEC
-
-                if is_online and not was_online:
-                    known_online[dev_id] = ls
-                    _broadcast_presence({
-                        "type": "node_online",
-                        "node_id": dev_id,
-                        "name": d.get("display_name", dev_id),
-                        "ip": d.get("ip"),
-                        "status": d.get("status", "pending"),
-                    })
-                elif not is_online and was_online:
-                    del known_online[dev_id]
-                    _broadcast_presence({
-                        "type": "node_offline",
-                        "node_id": dev_id,
-                        "name": d.get("display_name", dev_id),
-                    })
-                elif is_online:
-                    known_online[dev_id] = ls
-        except Exception:
-            pass
-        time.sleep(15)
-
-
 @peer_trust.directory_locked
 def _ensure_self_registered() -> None:
     """On startup: guarantee this node has an entry in its own mesh directory."""
@@ -1322,7 +1206,7 @@ def _ensure_self_registered() -> None:
 def _self_presence_loop() -> None:
     """Background thread: keeps this node's own last_seen fresh (all roles)."""
     import node_identity as _ni
-    while True:
+    while not _background_stop.is_set():
         try:
             cfg = S.load_node_config()
             if _refresh_own_host_address(cfg):
@@ -1358,7 +1242,7 @@ def _self_presence_loop() -> None:
                 S.save_mesh_directory(directory)
         except Exception as e:
             S.log_debug("mesh", "ERROR", "Self-presence loop error", error=str(e))
-        time.sleep(30)
+        _background_stop.wait(30)
 
 
 # ============================================
@@ -1388,13 +1272,23 @@ async def transfer_serve(filename: str):
 
 
 def start_background_loops():
-    """Called by main.py at startup."""
+    """Idempotent lifecycle; connection presence belongs to the coordinator."""
+    if any(thread.is_alive() for thread in _background_threads):
+        return
+    _background_stop.clear()
     _ensure_self_registered()
-    _prune_ghost_entries()
-    threading.Thread(target=agent_heartbeat_loop, daemon=True).start()
-    threading.Thread(target=agent_task_worker_loop, daemon=True).start()
-    threading.Thread(target=_presence_timeout_watcher, daemon=True).start()
-    threading.Thread(target=_self_presence_loop, daemon=True).start()
+    _background_threads.clear()
+    for target in (agent_heartbeat_loop,agent_task_worker_loop,_self_presence_loop):
+        thread=threading.Thread(target=target,daemon=True,name='tli-'+target.__name__)
+        _background_threads.append(thread)
+        thread.start()
+
+
+def stop_background_loops():
+    _background_stop.set()
+    for thread in _background_threads:
+        if thread is not threading.current_thread():
+            thread.join(.5)
 
 
 class PeerCardRequest(BaseModel):

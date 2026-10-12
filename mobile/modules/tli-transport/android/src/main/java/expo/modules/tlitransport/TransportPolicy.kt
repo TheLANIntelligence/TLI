@@ -7,11 +7,14 @@ import java.nio.charset.CodingErrorAction
 
 internal const val MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 internal const val MAX_REQUEST_BYTES = 16 * 1024 * 1024
+internal const val MAX_UPLOAD_BYTES = 8 * 1024 * 1024
+internal const val MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
 
 internal class TransportFailure(val code: String, message: String) : Exception(message)
 
 internal object TransportPolicy {
-  private val originPattern = Regex("^https://([0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+)(?::([0-9]+))?/?$")
+  private val originPattern = Regex("^https://([a-z0-9.-]+)(?::([0-9]+))?/?$")
+  private val localHostname = Regex("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.local$")
   private val headerName = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
   private val forbiddenHeaders = setOf(
     "host", "connection", "content-length", "transfer-encoding", "upgrade",
@@ -22,7 +25,24 @@ internal object TransportPolicy {
   fun origin(value: String): String {
     val match = originPattern.matchEntire(value)
       ?: throw TransportFailure("E_ORIGIN", "Use an HTTPS origin with a private LAN IPv4 address.")
-    val parts = match.groupValues[1].split('.').map { part ->
+    val host = match.groupValues[1]
+    if (!localHostname.matches(host)) privateAddress(host)
+    val portText = match.groupValues[2]
+    if (portText.isNotEmpty()) {
+      val port = portText.toIntOrNull()
+      if (port == null || port !in 1..65535 || port.toString() != portText) {
+        throw TransportFailure("E_ORIGIN", "The HTTPS port is invalid.")
+      }
+    }
+    return if (localHostname.matches(host) && portText.isEmpty()) "https://$host:443" else value.removeSuffix("/")
+  }
+
+  fun isHostname(origin: String): Boolean = URI(origin).host.endsWith(".local")
+
+  fun privateAddress(value: String): String {
+    val text = value.split('.')
+    if (text.size != 4) throw TransportFailure("E_ORIGIN", "Use a canonical private LAN IPv4 address or reviewed .local hostname.")
+    val parts = text.map { part ->
       val number = part.toIntOrNull()
       if (number == null || number !in 0..255 || number.toString() != part) {
         throw TransportFailure("E_ORIGIN", "The LAN IPv4 address is invalid.")
@@ -34,14 +54,12 @@ internal object TransportPolicy {
       (parts[0] == 192 && parts[1] == 168) ||
       (parts[0] == 169 && parts[1] == 254)
     if (!privateAddress) throw TransportFailure("E_ORIGIN", "TLI beta connections require a private LAN address.")
-    val portText = match.groupValues[2]
-    if (portText.isNotEmpty()) {
-      val port = portText.toIntOrNull()
-      if (port == null || port !in 1..65535 || port.toString() != portText) {
-        throw TransportFailure("E_ORIGIN", "The HTTPS port is invalid.")
-      }
-    }
-    return value.removeSuffix("/")
+    return value
+  }
+
+  fun addresses(values: List<String>): List<String> {
+    if (values.isEmpty() || values.size > 8) throw TransportFailure("E_DISCOVERY", "Resolve 1–8 private LAN addresses before connecting.")
+    return values.map { privateAddress(it) }.distinct()
   }
 
   fun requestUrl(origin: String, path: String): String {

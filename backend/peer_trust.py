@@ -29,10 +29,12 @@ from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
 
 import node_identity
+import lan_endpoints
 import tli_state as S
 
 LOCK = S.MESH_DIRECTORY_LOCK
 PROTOCOL = "tli-peer-trust-v1"
+PROTOCOL_V2 = "tli-peer-trust-v2"
 MAX_BODY = 131072
 WINDOW = 60
 GRANTS = {"observe", "coordinate", "messages", "inference"}
@@ -40,13 +42,14 @@ HOST_CAPABILITIES = ["system_observation_v1", "coordination_v1", "messages_v1"]
 INFERENCE_CAPABILITIES = ["inference_v1"]
 _PREVIEWS = {}
 _NONCES = {}
+_STATUS = {}
 
 
 class BoundedPeerRoute(APIRoute):
     def get_route_handler(self):
         handler = super().get_route_handler()
         async def bounded(request: Request):
-            if any(k.startswith("x-tli-peer-") for k in request.headers) or request.url.path.startswith(("/mesh/trust/", "/mesh/files", "/agent/peer/files/", "/agent/peer/inference", "/api/ai/lan/")):
+            if any(k.startswith("x-tli-peer-") for k in request.headers) or request.url.path.startswith(("/mesh/trust/", "/mesh/files", "/agent/peer/files/", "/agent/peer/inference", "/api/ai/lan/", "/api/connection/")):
                 raw = bytearray()
                 async for part in request.stream():
                     if len(raw) + len(part) > MAX_BODY:
@@ -80,20 +83,11 @@ def fail(code, reason, message):
 
 
 def origin(value):
-    """Literal private IPv4 only: no DNS, proxy, credentials or URL suffix."""
+    """Private IPv4 or exact .local authority; DNS is never peer identity."""
     try:
-        parsed = urlsplit(value)
-        ip = ipaddress.IPv4Address(parsed.hostname)
-        if (parsed.scheme != "https" or parsed.username is not None or parsed.password is not None
-                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
-                or not any(ip in ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))):
-            raise ValueError()
-        port = 443 if parsed.port is None else parsed.port
-        if not 1 <= port <= 65535:
-            raise ValueError()
-        return f"https://{ip}:{port}"
+        return lan_endpoints.canonical_origin(value)
     except (ValueError, TypeError, AttributeError):
-        fail(422, "invalid_origin", "Use this computer's exact HTTPS private LAN IPv4 address and port.")
+        fail(422, "invalid_origin", "Use the computer's reviewed HTTPS private IPv4 or .local address and port.")
 
 
 def _fingerprint(key):
@@ -112,9 +106,11 @@ def _certificate(card):
     now = datetime.now(timezone.utc)
     if not cert.not_valid_before_utc <= now < cert.not_valid_after_utc:
         raise ValueError("Certificate is not currently valid")
-    address = ipaddress.ip_address(urlsplit(card["origin"]).hostname)
+    host = urlsplit(card["origin"]).hostname
     names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    if address not in names.get_values_for_type(x509.IPAddress):
+    covered = (host in {name.rstrip('.').lower() for name in names.get_values_for_type(x509.DNSName)} if lan_endpoints.stable_name(host)
+               else ipaddress.ip_address(host) in names.get_values_for_type(x509.IPAddress))
+    if not covered:
         raise ValueError("Certificate does not cover the reviewed address")
     return cert
 
@@ -125,7 +121,8 @@ def validate_card(value):
         if not isinstance(value, dict) or set(value) != keys or len(canonical(value)) > 24576:
             raise ValueError("Invalid public card shape")
         card = copy.deepcopy(value)
-        if card["protocol"] != PROTOCOL or card["origin"] != origin(card["origin"]):
+        if (card["protocol"] not in (PROTOCOL, PROTOCOL_V2) or card["origin"] != origin(card["origin"])
+                or lan_endpoints.stable_name(urlsplit(card["origin"]).hostname) and card["protocol"] != PROTOCOL_V2):
             raise ValueError("Unsupported card")
         if any(not isinstance(card[k], str) or not 1 <= len(card[k]) <= 128 for k in ("node_id", "name", "issued_at")):
             raise ValueError("Invalid node metadata")
@@ -170,7 +167,7 @@ def local_card(address, *, capabilities=None, existing_only=False):
     else:
         cfg = S.load_node_config()
         public_key, fingerprint = node_identity.public_key_hex(), node_identity.fingerprint()
-    card = {"protocol": PROTOCOL, "node_id": cfg.node_id, "name": cfg.node_name,
+    card = {"protocol": PROTOCOL_V2 if lan_endpoints.stable_name(urlsplit(address).hostname) else PROTOCOL, "node_id": cfg.node_id, "name": cfg.node_name,
             "origin": address, "public_key": public_key,
             "identity_fingerprint": fingerprint, "certificate_der": bundle["certificate_der"],
             "certificate_sha256": bundle["fingerprint"], "capabilities": list(capabilities),
@@ -182,7 +179,7 @@ def local_card(address, *, capabilities=None, existing_only=False):
 
 def local_setup(request):
     """Describe the running listener and its existing public card, without I/O to peers."""
-    from tls_cert import _local_ipv4_addresses, certificate_bundle
+    from tls_cert import _local_ipv4_addresses, certificate_bundle, stable_lan_origins
 
     result = {"ok": True, "node": {"id": None, "name": None}, "ready": False,
               "code": "identity_unavailable", "reason": None, "origins": [],
@@ -221,6 +218,8 @@ def local_setup(request):
             continue
     if not candidates:
         return unavailable("address_unavailable", "No private LAN IPv4 address is available on this TLI listener. Connect this computer to your home network, then check again.")
+
+    result["stable_origins"] = stable_lan_origins(S.server_port())
 
     certificate_errors = []
     for address in sorted(candidates):
@@ -380,6 +379,46 @@ def message_readiness(device_id):
             "message": "Text messages reviewed on this computer. The other computer must also review this computer and enable Text messages before delivery can succeed."}
 
 
+def status_snapshot(device_id):
+    """Only recent authenticated status, never a discovery heartbeat."""
+    try:
+        _, _, revision = trusted(device_id)
+    except HTTPException:
+        return None
+    with LOCK:
+        cached = _STATUS.get(device_id)
+        if cached and cached['revision'] == revision and time.monotonic() - cached['received'] < 90:
+            return copy.deepcopy(cached['value'])
+    return None
+
+
+def check_status(device_id):
+    entry, card, revision = trusted(device_id)
+    with LOCK:
+        _STATUS.pop(device_id, None)
+    challenge = secrets.token_hex(24)
+    response = request(device_id, 'POST', '/agent/peer/status', json_body={'challenge': challenge}, grant=None, expected_revision=revision)
+    if response.status_code in (404, 405):
+        fail(409, 'peer_status_unsupported', 'This computer needs an update to check shared permissions. Existing reviewed operations remain available.')
+    try:
+        value = response.json()
+    except (ValueError, TypeError):
+        fail(502, 'peer_status_unavailable', 'This computer did not return a valid connection status.')
+    if (response.status_code != 200 or not isinstance(value, dict) or value.get('protocol') != 'tli-peer-status-v1'
+            or value.get('challenge') != challenge or value.get('node_id') != device_id
+            or value.get('identity_fingerprint') != card['identity_fingerprint']
+            or not isinstance(value.get('grants'), list) or any(g not in GRANTS for g in value['grants'])):
+        fail(502, 'peer_status_unavailable', 'This computer did not confirm its connection capabilities. Update both computers if needed.')
+    result = {'online': True, 'node_id': device_id, 'node_name': card['name'], 'checked_at': S.now_iso(),
+              'local_grants': entry['peer_trust']['grants'], 'remote_grants': value['grants'],
+              'ready_grants': sorted(set(entry['peer_trust']['grants']) & set(value['grants']))}
+    with LOCK:
+        if trusted(device_id)[2] != revision:
+            fail(409, 'peer_changed', 'Computer access changed during the check.')
+        _STATUS[device_id] = {'revision': revision, 'received': time.monotonic(), 'value': result}
+    return result
+
+
 def capability(device_id):
     try:
         _, card, revision = trusted(device_id, "observe")
@@ -391,14 +430,18 @@ def capability(device_id):
 
 def public_trust(device_id):
     try:
-        _, card, revision = trusted(device_id)
+        entry, card, revision = trusted(device_id)
         result = {"trust_state": "verified", "trust_revision": revision, "origin": card["origin"],
-                  "identity_fingerprint": card["identity_fingerprint"]}
+                  "identity_fingerprint": card["identity_fingerprint"], "reviewed_grants": entry['peer_trust']['grants']}
         if card["capabilities"] == INFERENCE_CAPABILITIES:
             result["peer_profile"] = "inference_node"
         return result
     except HTTPException:
-        return {"trust_state": "review_required", "trust_revision": None, "origin": None}
+        result = {"trust_state": "review_required", "trust_revision": None, "origin": None}
+        entry = S.load_mesh_directory().get(device_id, {})
+        if not entry.get('peer_trust') and entry.get('discovery', {}).get('capabilities') == INFERENCE_CAPABILITIES:
+            result['peer_profile'] = 'inference_node'
+        return result
 
 
 def _signed(method, path, body, recipient, stamp, nonce, sender):
@@ -461,6 +504,11 @@ async def inference_access(request: Request):
     return await authenticate(request, "inference")
 
 
+async def status_access(request: Request):
+    """A liveness check needs an existing reviewed grant, not system access."""
+    return await authenticate(request, None)
+
+
 async def read_access(request: Request):
     from companion_auth import resolve_user
     # Legacy full system/disk routes are local-console reads. Reviewed peers
@@ -484,17 +532,44 @@ class Response:
         return json.loads(self.content)
 
 
+def _prove_endpoint(conn, card):
+    """Stable-name routes prove the reviewed signing identity before payloads."""
+    if card['protocol'] != PROTOCOL_V2:
+        return
+    nonce = secrets.token_hex(24)
+    conn.request('POST', '/api/connection/v1/identity', body=canonical({'nonce': nonce, 'origin': card['origin'], 'node_id': card['node_id']}),
+                 headers={'Content-Type': 'application/json', 'Accept': 'application/json'})
+    response = conn.getresponse()
+    raw = response.read(4097)
+    try:
+        value = json.loads(raw)
+        signature = value.pop('signature')
+        now = int(time.time())
+        if (response.status != 200 or len(raw) > 4096 or set(value) != {'protocol', 'node_id', 'public_key', 'origin', 'certificate_sha256', 'nonce', 'issued_at', 'expires_at'}
+                or value['protocol'] != 'tli-endpoint-v1' or value['nonce'] != nonce
+                or any(value[k] != card[k] for k in ('node_id', 'public_key', 'origin', 'certificate_sha256'))
+                or type(value['issued_at']) is not int or type(value['expires_at']) is not int
+                or not value['issued_at'] - 5 <= now < value['expires_at'] or value['expires_at'] - value['issued_at'] != 30
+                or not node_identity.verify(canonical(value), signature, card['public_key'])):
+            raise ValueError()
+    except (ValueError, KeyError, TypeError, AttributeError):
+        fail(409, 'peer_identity_changed', 'The endpoint did not prove the reviewed computer identity. Review its connection on the computer.')
+    if conn.sock is None:
+        fail(502, 'peer_connection_closed', 'The verified connection closed before the request. No credentials or request were sent.')
+
+
 def _exchange(card, method, path, body, headers, before_send):
     """Private literal address, trusted certificate, exact pin before headers."""
     cert = _certificate(card)
     context = ssl.create_default_context(cadata=cert.public_bytes(serialization.Encoding.PEM).decode("ascii"))
     parsed = urlsplit(card["origin"])
-    conn = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=5)
+    connection_type = lan_endpoints.LANHTTPSConnection if lan_endpoints.stable_name(parsed.hostname) else http.client.HTTPSConnection
+    conn = connection_type(parsed.hostname, parsed.port, context=context, timeout=5)
     timer = None
     try:
+        if isinstance(conn, lan_endpoints.LANHTTPSConnection):
+            conn.verify_peer = lambda transport: _verify_connection(transport, card)
         conn.connect()
-        if hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest() != card["certificate_sha256"]:
-            fail(502, "peer_certificate_changed", "The computer's HTTPS certificate changed. Review it again before sending a request.")
         sock = conn.sock
         def expire():
             try:
@@ -504,6 +579,8 @@ def _exchange(card, method, path, body, headers, before_send):
         timer = threading.Timer(8, expire)
         timer.daemon = True
         timer.start()
+        if not getattr(conn, 'verify_peer', None):
+            _verify_connection(conn, card)
         before_send()
         conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
@@ -515,6 +592,12 @@ def _exchange(card, method, path, body, headers, before_send):
         return Response(response.status, raw)
     except HTTPException:
         raise
+    except ssl.SSLCertVerificationError:
+        fail(409, "peer_certificate_changed", "The computer's HTTPS certificate did not match the reviewed connection. Review its identity on the computer.")
+    except lan_endpoints.RouteResolutionError:
+        fail(503, "peer_resolution_failed", "No current private address was found for this computer. Check discovery or import a current connection invitation.")
+    except ConnectionRefusedError:
+        fail(503, "peer_listener_refused", "The computer address refused this connection. Check that TLI is running on its reviewed HTTPS port.")
     except (TimeoutError, socket.timeout):
         fail(504, "peer_timeout", "The reviewed computer did not respond in time. No retry was sent.")
     except Exception:
@@ -523,6 +606,12 @@ def _exchange(card, method, path, body, headers, before_send):
         if timer:
             timer.cancel()
         conn.close()
+
+
+def _verify_connection(conn, card):
+    if hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest() != card['certificate_sha256']:
+        fail(409, 'peer_certificate_changed', "The computer's HTTPS certificate changed. Review it before sending a request.")
+    _prove_endpoint(conn, card)
 
 
 def request(device_id, method, path, *, json_body=None, params=None, grant="coordinate", expected_revision=None, check=None):
@@ -578,14 +667,15 @@ def _stream_exchange(card, method, path, body, headers, before_send):
     cert = _certificate(card)
     context = ssl.create_default_context(cadata=cert.public_bytes(serialization.Encoding.PEM).decode("ascii"))
     parsed = urlsplit(card["origin"])
-    conn = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=5)
+    connection_type = lan_endpoints.LANHTTPSConnection if lan_endpoints.stable_name(parsed.hostname) else http.client.HTTPSConnection
+    conn = connection_type(parsed.hostname, parsed.port, context=context, timeout=5)
     timer = None
     expired = threading.Event()
     started = time.monotonic()
     try:
+        if isinstance(conn, lan_endpoints.LANHTTPSConnection):
+            conn.verify_peer = lambda transport: _verify_connection(transport, card)
         conn.connect()
-        if hashlib.sha256(conn.sock.getpeercert(binary_form=True)).hexdigest() != card["certificate_sha256"]:
-            fail(502, "peer_certificate_changed", "The computer's HTTPS certificate changed. Review it again before sending a request.")
         sock = conn.sock
         remaining = 120 - (time.monotonic() - started)
         if remaining <= 0:
@@ -600,6 +690,8 @@ def _stream_exchange(card, method, path, body, headers, before_send):
         timer = threading.Timer(remaining, expire)
         timer.daemon = True
         timer.start()
+        if not getattr(conn, 'verify_peer', None):
+            _verify_connection(conn, card)
         before_send()
         conn.request(method, path, body=body, headers=headers)
         response = conn.getresponse()
@@ -627,6 +719,12 @@ def _stream_exchange(card, method, path, body, headers, before_send):
             yield raw
     except HTTPException:
         raise
+    except ssl.SSLCertVerificationError:
+        fail(409, "peer_certificate_changed", "The computer's HTTPS certificate did not match the reviewed connection. Review its identity on the computer.")
+    except lan_endpoints.RouteResolutionError:
+        fail(503, "peer_resolution_failed", "No current private address was found for this computer. Check discovery or import a current connection invitation.")
+    except ConnectionRefusedError:
+        fail(503, "peer_listener_refused", "The computer address refused this connection. Check that TLI is running on its reviewed HTTPS port.")
     except (TimeoutError, socket.timeout):
         fail(504, "peer_timeout", "The reviewed computer did not respond in time. No retry was sent.")
     except Exception:

@@ -20,9 +20,11 @@ Setup and permission changes happen in a local terminal on the Node computer.
   models to fail rather than being loaded automatically by LM Studio. TLI sends
   no load, switch or download commands, but cannot lock that external runtime.
 - Updated TLI on the primary computer, with HTTPS configured for its LAN address.
-- A stable private IPv4 address for the Node, preferably a DHCP reservation. This
-  version binds to that exact address and refuses to start if it is no longer
-  assigned to the computer. Address/certificate migration is not automated.
+- A private LAN adapter and this computer's own stable `machine-name.local`.
+  New hostname Nodes bind the IPv4 listener across local adapters and advertise
+  the exact HTTPS name/port through DNS-SD. Reviewed keys and certificate pins
+  remain fixed when DHCP changes an adapter's address. Existing IPv4 Nodes still
+  bind their original address and need that address retained.
 
 Install dependencies and models before disconnecting from the internet. The
 runtime needs the LAN and the Node's loopback model server; it does not need a
@@ -41,13 +43,14 @@ py -3 -m venv node\.venv
 
 Choose a new state directory under your own Windows account. Keep this directory
 separate from the full TLI installation and from the extracted application files.
-Replace the example LAN address below with this computer's actual private IPv4
-address. You can inspect your own adapters with `Get-NetIPAddress -AddressFamily IPv4`.
+Replace `gaming-pc.local` below with this computer's exact hostname plus `.local`
+(run `hostname` to see it). Initialization covers that name with the Node's new
+certificate. Names belonging to another computer are refused before state is
+created. You can inspect adapters with `Get-NetIPAddress -AddressFamily IPv4`.
 
 ```powershell
 $nodeState = Join-Path $env:LOCALAPPDATA 'TLI-Node'
-.\TLI_Node.bat init --state-dir "$nodeState" --name "Gaming PC" --origin "https://192.168.1.50:8444" --lm-studio-url "http://127.0.0.1:1234"
-.\TLI_Node.bat card --state-dir "$nodeState" --out ".\gaming-pc-public.json"
+.\TLI_Node.bat init --state-dir "$nodeState" --name "Gaming PC" --origin "https://gaming-pc.local:8444" --lm-studio-url "http://127.0.0.1:1234"
 ```
 
 Initialization creates a persistent Node ID, signing identity and HTTPS
@@ -57,6 +60,42 @@ instead of silently creating a new identity. On Windows, the signing key is
 protected for the current OS account; use the same account to run the Node.
 
 ## Pair both computers explicitly
+
+Start the Node in its local interactive terminal:
+
+```powershell
+.\TLI_Node.bat run --state-dir "$nodeState" --pair
+```
+
+1. On the primary TLI, open **Connect device → Inference Node**, choose the
+   discovered Node and request the connection. The only permission is inference.
+2. Compare the entire code in the primary's browser and the Node terminal.
+   Confirm the matching code on the primary and type that exact code into the
+   Node terminal to approve inference there. Any other terminal input declines.
+3. Return to the connection guide and check the Node's available models. Choose
+   a model explicitly in Ask TLI before sending it work.
+
+No public JSON cards need to be copied in this flow. The Node's public bootstrap
+routes open only when `--pair` was requested; they exchange signed public material
+and cannot approve trust. The window expires after five minutes even if terminal
+input is pending. A successful local confirmation closes it to new requests;
+existing signed status checks remain available until the deadline. The Node keeps
+running for already reviewed inference peers afterward. Close and restart with
+`--pair` to open a new window. Correct clocks are required for signed requests.
+
+Existing or blocked trust cannot be replaced during ordinary pairing. To review
+a replacement, stop the Node and restart with `run --pair --review-update`, choose
+the matching replacement review on the primary, then compare and confirm the new
+code on both computers. A change during that review invalidates it. Approvals
+remain local to each computer; neither device can grant permission on the other.
+
+### Advanced: manual public-card compatibility
+
+Older installations can still use explicit public-card review:
+
+```powershell
+.\TLI_Node.bat card --state-dir "$nodeState" --out ".\gaming-pc-public.json"
+```
 
 1. On the primary TLI, open **Computers & LAN → Review computer trust**. Generate
    its public card using the primary's HTTPS LAN address and save the JSON as
@@ -83,20 +122,36 @@ other computer. Both machines' clocks must be correct for signed requests.
 
 ## Run and use it
 
+If the Node is not listed, export a public connection invitation:
+
+```powershell
+.\TLI_Node.bat invitation --state-dir "$nodeState"
+```
+
+Paste it into **Connect device → Computer not listed?** on the primary. It contains
+the signed public card and bounded private address hints, and grants no access.
+Keep the Node running with `run --pair` for its local comparison and approval
+window (or `run --pair --review-update` for a reviewed replacement). The primary
+then verifies the signed model catalog and offers **Choose AI model**. The Node
+retains inference-only permissions.
+
 ```powershell
 .\TLI_Node.bat run --state-dir "$nodeState"
 ```
 
-The Node runs in the foreground until Ctrl+C. It uses HTTPS only, on the saved
-LAN address/port. The launcher does not install a service, change firewall rules,
+The Node runs in the foreground until Ctrl+C. It uses HTTPS only, with the saved
+name/port and certificate. DNS-SD advertises only `inference_v1`, the actual private
+adapters and its secure port; it never grants access. The public identity challenge
+proves its saved signing identity before an authenticated peer sends work.
+The launcher does not install a service, change firewall rules,
 or download software. If Windows requests firewall access, scope it to your
 private network and intended primary computer. Only one runtime may use this
 state directory at a time.
 
 On the primary, open **Ask TLI → AI: Local / current setup → List trusted
 computers**. Select the Node, check its models, choose a loaded model and use it.
-Checking models is explicit; the Node does not announce availability or send
-background telemetry. General full-host console/observation actions do not apply
+Checking models is explicit; its DNS-SD presence is only a route hint and does not
+announce loaded models or working inference. General full-host console/observation actions do not apply
 to this Node.
 
 Your selected saved-note/history settings apply before text leaves the primary.
@@ -113,6 +168,12 @@ Inspect peer IDs with `peers`, then revoke locally:
 .\TLI_Node.bat revoke --state-dir "$nodeState" --peer-id "EXACT-HOST-NODE-ID"
 ```
 
+Hostname Node advertisements refresh after adapter changes. The same reviewed
+hostname, exact certificate and signed identity are required at a new IP; no
+permission or trust revision is rewritten. A renamed machine, changed key or
+certificate requires local review. Existing IPv4 Node markers and cards stay
+unchanged; they are not silently upgraded or issued new certificates.
+
 The runtime reads current permission state during inference; revocation does not
 require restarting it. A request already sent to the local model cannot be
 retracted, but further result acceptance stops when the next access check runs.
@@ -124,7 +185,7 @@ retaining the separate state directory. Do not rerun `init` over existing state.
 Back up that directory securely as a matching set. Missing keys, mismatched
 certificates, corrupted configuration or the wrong Windows account cause startup
 to fail while preserving the files. This version has no automatic identity reset,
-address migration, TLS renewal, unattended startup or recovery wizard.
+reviewed-name migration, TLS renewal, unattended startup or recovery wizard.
 
 ## Build and verification
 

@@ -23,6 +23,9 @@ def test_saved_pre_setup_hostname_is_projected_without_new_beacon_or_trust(peers
     assert len(listed) == len(chat) == 2
     assert {row["device_id"] for row in listed} == set(directory)
     assert {row["id"] for row in chat} == set(directory)
+    assert len([row for row in chat if not row["previous_discovery"]]) == 1
+    older = next(row for row in chat if row["previous_discovery"])
+    assert older["superseded_by"] in directory and older["superseded_by"] != older["id"]
     assert all(row["display_name"] == "Dell laptop" for row in listed)
     assert all(row["name"] == "Dell laptop" for row in chat)
     for row in listed + chat:

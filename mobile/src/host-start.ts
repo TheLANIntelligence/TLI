@@ -18,7 +18,7 @@ export function validateHostControl(value: unknown, pairing: Pairing): HostContr
   const d = value as HostControl | undefined;
   if (!d || d.schema_version !== 1 || d.enabled !== true || d.available !== true) throw new Error('Host Start is not configured on this computer. On the desktop, open Phone Companion → Start TLI from your phone.');
   if (!/^[0-9a-f]{32,64}$/.test(d.helper_id || '') || d.node_id !== pairing.node_id || !safe(d.node_id, 128) || !safe(d.reason, 1000) || !/^[a-fA-F0-9]{64}$/.test(d.certificate_sha256 || '') || d.status_path !== STATUS_PATH || d.start_path !== START_PATH || d.mode !== 'same_user_sign_in' || d.capabilities?.start_backend !== true || d.capabilities?.wake_host !== false) throw new Error('This TLI returned unsupported Host Start details. No helper connection was trusted.');
-  const origin = validateOrigin(d.origin), paired = new URL(validateOrigin(pairing.origin)), helper = new URL(origin);
+  const origin = validateOrigin(d.origin, pairing.version === 2), paired = new URL(validateOrigin(pairing.origin, pairing.version === 2)), helper = new URL(origin);
   if (helper.hostname !== paired.hostname || origin === pairing.origin) throw new Error('The helper must use a separate HTTPS port on the already paired computer. No new address was trusted.');
   // The independently pinned transport always uses the existing reviewed DER,
   // never a certificate or main-session credential supplied by this descriptor.

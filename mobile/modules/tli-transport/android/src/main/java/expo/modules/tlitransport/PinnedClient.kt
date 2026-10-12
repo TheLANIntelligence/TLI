@@ -3,6 +3,8 @@ package expo.modules.tlitransport
 import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
 import okhttp3.TlsVersion
+import okhttp3.Dns
+import java.net.InetAddress
 import java.net.Proxy
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -15,7 +17,7 @@ import javax.net.ssl.X509TrustManager
 
 /** Production TLS construction, independent of the Expo bridge for JVM verification. */
 internal object PinnedClient {
-  fun create(certificate: X509Certificate): OkHttpClient {
+  fun create(certificate: X509Certificate, hostname: String? = null, addresses: List<String> = emptyList()): OkHttpClient {
     // Fail before a client can send anything, even if its leaf is a trust anchor.
     certificate.checkValidity()
     val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
@@ -26,7 +28,7 @@ internal object PinnedClient {
     val platformTrust = factory.trustManagers.filterIsInstance<X509TrustManager>().single()
     val pinnedTrust = ExactCertificateTrustManager(certificate, platformTrust)
     val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(pinnedTrust), null) }
-    return OkHttpClient.Builder()
+    val builder = OkHttpClient.Builder()
       .sslSocketFactory(ssl.socketFactory, pinnedTrust)
       // Keep OkHttp's default hostname verifier: SAN mismatch is a hard failure.
       .connectionSpecs(listOf(ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
@@ -39,7 +41,18 @@ internal object PinnedClient {
       .readTimeout(120, TimeUnit.SECONDS)
       .writeTimeout(60, TimeUnit.SECONDS)
       .callTimeout(5, TimeUnit.MINUTES)
-      .build()
+    if (hostname != null) {
+      val routes = TransportPolicy.addresses(addresses).map { address ->
+        InetAddress.getByAddress(hostname, address.split('.').map { it.toInt().toByte() }.toByteArray())
+      }
+      builder.dns(object : Dns {
+        override fun lookup(requested: String): List<InetAddress> {
+          if (requested != hostname) throw java.net.UnknownHostException("Unreviewed TLI hostname")
+          return routes
+        }
+      })
+    }
+    return builder.build()
   }
 }
 

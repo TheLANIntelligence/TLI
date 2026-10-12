@@ -3,7 +3,12 @@ import type { ChatEvent, PairingCode, Result, Bootstrap } from './types';
 export const PAIRING_LINK_PATH = '/api/companion/v1/pair';
 export const PAIRING_LINK_LIMIT = 18000;
 
-export function validateOrigin(value: string): string {
+export function validateOrigin(value: string, reviewedName = false): string {
+  if (reviewedName && /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local(?::[1-9]\d{0,4})?\/?$/.test(value)) {
+    const url = new URL(value);
+    if (url.hostname.length > 253) throw new Error('The reviewed LAN hostname is too long.');
+    return `https://${url.hostname}:${url.port || '443'}`;
+  }
   if (!/^https:\/\/\d+\.\d+\.\d+\.\d+(?::[1-9]\d{0,4})?\/?$/.test(value)) throw new Error('Use the secure home-network address from your TLI pairing code.');
   const url = new URL(value);
   if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) throw new Error('Use the secure home-network address from your TLI pairing code.');
@@ -21,10 +26,10 @@ export function parsePairingCode(raw: string, now = Date.now()): PairingCode {
     if (raw.length > 14000) throw new Error('This is not a TLI pairing code.');
     try { value = JSON.parse(raw); } catch { throw new Error('Scan the native companion pairing code in Phone Companion on TLI desktop.'); }
   }
-  if (!value || value.version !== 1 || typeof value.origin !== 'string' || typeof value.token !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(value.token) || typeof value.certificate_der !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.certificate_der) || value.certificate_der.length < 128 || value.certificate_der.length > 12000 || typeof value.node_id !== 'string' || !value.node_id || value.node_id.length > 256 || typeof value.node_name !== 'string' || !value.node_name.trim() || value.node_name.length > 256 || /[\u0000-\u001f\u007f]/.test(value.node_id + value.node_name)) throw new Error('This pairing code is incomplete. Create a new code on your TLI desktop.');
+  if (!value || ![1,2].includes(value.version) || value.version === 2 && !/^[a-f0-9]{64}$/.test(value.public_key || '') || typeof value.origin !== 'string' || typeof value.token !== 'string' || !/^[A-Za-z0-9_-]{20,256}$/.test(value.token) || typeof value.certificate_der !== 'string' || !/^[A-Za-z0-9+/]+={0,2}$/.test(value.certificate_der) || value.certificate_der.length < 128 || value.certificate_der.length > 12000 || typeof value.node_id !== 'string' || !value.node_id || value.node_id.length > 256 || typeof value.node_name !== 'string' || !value.node_name.trim() || value.node_name.length > 256 || /[\u0000-\u001f\u007f]/.test(value.node_id + value.node_name)) throw new Error('This pairing code is incomplete. Create a new code on your TLI desktop.');
   const expiry = typeof value.expires_at === 'number' ? value.expires_at * 1000 : Date.parse(value.expires_at);
   if (!Number.isFinite(expiry) || expiry <= now) throw new Error('This pairing code has expired. Create a new code on your TLI desktop.');
-  return { version: 1, origin: validateOrigin(value.origin), certificate_der: value.certificate_der, token: value.token, expires_at: value.expires_at, node_id: value.node_id, node_name: value.node_name };
+  return { version: value.version, origin: validateOrigin(value.origin, value.version === 2), certificate_der: value.certificate_der, token: value.token, expires_at: value.expires_at, node_id: value.node_id, node_name: value.node_name, ...(value.version === 2 ? {public_key:value.public_key} : {}) };
 }
 
 function pairingLinkValue(raw: string, now: number): PairingCode {
@@ -35,15 +40,16 @@ function pairingLinkValue(raw: string, now: number): PairingCode {
   if (url.username || url.password || url.search || !url.hash || /%(?![0-9a-f]{2})/i.test(url.hash)) throw invalid();
   if (native ? url.host !== '' || url.pathname !== '/pair' : url.protocol !== 'https:' || url.pathname !== PAIRING_LINK_PATH) throw invalid();
   const fields = new URLSearchParams(url.hash.slice(1)), keys = [...fields.keys()];
-  const expected = native ? ['v', 'c', 't', 'e', 'i', 'n', 'o'] : ['v', 'c', 't', 'e', 'i', 'n'];
-  if (keys.length !== expected.length || new Set(keys).size !== keys.length || keys.some(key => !expected.includes(key)) || fields.get('v') !== '1') throw invalid();
-  const origin = validateOrigin(native ? fields.get('o')! : raw.slice(0, raw.indexOf(PAIRING_LINK_PATH)));
+  const version = fields.get('v') === '2' ? 2 : 1;
+  const expected = [...(native ? ['v', 'c', 't', 'e', 'i', 'n', 'o'] : ['v', 'c', 't', 'e', 'i', 'n']), ...(version === 2 ? ['k'] : [])];
+  if (keys.length !== expected.length || new Set(keys).size !== keys.length || keys.some(key => !expected.includes(key)) || !['1','2'].includes(fields.get('v') || '')) throw invalid();
+  const origin = validateOrigin(native ? fields.get('o')! : raw.slice(0, raw.indexOf(PAIRING_LINK_PATH)), version === 2);
   const certificate = fields.get('c')!, expiry = fields.get('e')!;
   if (!/^[A-Za-z0-9_-]{128,12000}$/.test(certificate) || certificate.length % 4 === 1 || !/^\d{1,12}$/.test(expiry)) throw invalid();
   const expires = Number(expiry);
   if (!Number.isSafeInteger(expires) || expires * 1000 > now + 10 * 60 * 1000) throw invalid();
   const certificate_der = certificate.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - certificate.length % 4) % 4);
-  return { version: 1, origin, certificate_der, token: fields.get('t')!, expires_at: expires, node_id: fields.get('i')!, node_name: fields.get('n')! };
+  return { version, origin, certificate_der, token: fields.get('t')!, expires_at: expires, node_id: fields.get('i')!, node_name: fields.get('n')!, ...(version === 2 ? {public_key:fields.get('k')!} : {}) };
 }
 
 // Native modules deliver complete Unicode text chunks, but SSE lines and JSON may

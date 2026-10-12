@@ -12,6 +12,7 @@ export default function TabLayout() {
     <Tabs.Screen name="ask" options={{ title: 'Chat', headerTitle: 'Ask TLI', tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? 'chatbubble' : 'chatbubble-outline'} color={color} size={size} /> }} />
     <Tabs.Screen name="today" options={{ title: 'Today', headerTitle: pairing.node_name, tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? 'sunny' : 'sunny-outline'} color={color} size={size} /> }} />
     <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: ({ color, size, focused }) => <Ionicons name={focused ? 'home' : 'home-outline'} color={color} size={size} /> }} />
+    <Tabs.Screen name="tools" options={{ title: 'Tools', tabBarIcon: ({color,size,focused})=><Ionicons name={focused?'grid':'grid-outline'} color={color} size={size}/> }}/>
     <Tabs.Screen name="index" options={{ href: null }} />
   </Tabs>;
 }

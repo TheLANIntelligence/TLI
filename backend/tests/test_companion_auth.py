@@ -33,6 +33,7 @@ def isolated_companion(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "_active_sessions", {})
     monkeypatch.setattr(S, "load_node_config", lambda: SimpleNamespace(node_id="host-1", node_name="Test host", role="standalone"))
     monkeypatch.setattr(tls_cert, "_local_ipv4_addresses", lambda: ["192.168.1.20", "127.0.0.1", "8.8.8.8"])
+    monkeypatch.setattr(tls_cert, "stable_lan_origins", lambda port: [])
     monkeypatch.setattr(tls_cert, "certificate_bundle", lambda *a: {"certificate_der": "dGVzdC1jZXJ0", "fingerprint": "f" * 64})
     monkeypatch.setattr(ai_routes, "_find_mesh_ai_peer", lambda: None)
     monkeypatch.setattr(ai_routes, "_MESH_CACHE", {"ts": 0, "peers": []})
@@ -295,4 +296,190 @@ def test_bootstrap_selects_existing_transport_without_starting_model(phone, monk
     monkeypatch.setattr(BundledAIManager, "ensure_running", lambda *a: pytest.fail("Bootstrap started inference"))
     assert phone.get(PREFIX + "/bootstrap", headers=cookie()).json()["chat"] == {"path": "/chat", "streaming": False}
     monkeypatch.setattr(ai_routes, "_MESH_CACHE", {"ts": time.time(), "peers": [{"ip": "192.168.1.25"}]})
-    assert phone.get(PREFIX + "/bootstrap", headers=cookie()).json()["chat"] == {"path": "/api/ai/chat/stream", "streaming": True}
+    assert phone.get(PREFIX + "/bootstrap", headers=cookie()).json()["chat"] == {"path": "/chat", "streaming": False}
+
+
+def test_reviewed_stable_upgrade_retains_credential_and_normalizes_default_port(phone, monkeypatch):
+    import node_identity
+    _, device = pair(phone)
+    stable = "https://tli-home.local:443"
+    monkeypatch.setattr(tls_cert, "stable_lan_origins", lambda port: [stable])
+    monkeypatch.setattr(node_identity, "read_existing", lambda root: {"public_key_hex": "a" * 64})
+    invitation = phone.post(PREFIX + "/pairings", json={"origin": stable}, headers=cookie())
+    assert invitation.status_code == 200
+    payload = json.loads(invitation.json()["bundle"])
+    assert payload["version"] == 2 and payload["public_key"] == "a" * 64
+    before = auth._read()["devices"]
+    response = phone.post("https://tli-home.local" + PREFIX + "/pairings/upgrade", json={"token": payload["token"], "device_id": device["device_id"]}, headers=bearer(device))
+    assert response.status_code == 200 and response.json()["credential_retained"] is True
+    assert auth._read()["devices"] == before
+    assert phone.get(PREFIX + "/preferences", headers=bearer(device)).status_code == 200
+    assert phone.post("https://tli-home.local" + PREFIX + "/pairings/upgrade", json={"token": payload["token"], "device_id": device["device_id"]}, headers=bearer(device)).status_code == 403
+
+
+def test_upgrade_refuses_other_owner_or_revoked_credential(phone):
+    _, device = pair(phone)
+    token, _ = auth.create_pairing("other", ORIGIN, "f" * 64)
+    assert phone.post(PREFIX + "/pairings/upgrade", json={"token": token, "device_id": device["device_id"]}, headers=bearer(device)).status_code == 403
+    auth.revoke_device("alice", device["device_id"])
+    assert phone.post(PREFIX + "/pairings/upgrade", json={"token": token, "device_id": device["device_id"]}, headers=bearer(device)).status_code == 401
+
+
+@pytest.fixture
+def workspace_http(tmp_path, monkeypatch):
+    """Real auth/HTTP and persistence, with only model execution substituted."""
+    import threading
+    import host_runs
+    from builder import receipts
+    monkeypatch.setattr(S, 'CONVERSATIONS_FILE', str(tmp_path / 'conversations.json'))
+    monkeypatch.setattr(S, '_CONV_KEY', b'w' * 32)
+    monkeypatch.setattr(receipts, 'BUILDER_DIR', tmp_path / 'builder')
+    monkeypatch.setattr(receipts, 'STATE_PATH', tmp_path / 'builder-state.json')
+    monkeypatch.setattr(receipts, 'RECEIPTS_PATH', tmp_path / 'builder-receipts.json')
+    for service in (ai_routes.case_context, ai_routes.documents, ai_routes.notebook):
+        monkeypatch.setattr(service, 'prepare', lambda *args, **kwargs: None)
+    value = SimpleNamespace(started=threading.Event(), release=threading.Event(), calls=[])
+    yield value
+    value.release.set()
+    with host_runs._lock:
+        active = list(host_runs._runs.values())
+        for run in active:
+            run.stop.set()
+    for run in active:
+        if run.thread:
+            run.thread.join(3)
+
+
+def wait_for_http_run(phone, ident, headers):
+    for _ in range(200):
+        response = phone.get('/api/runs/' + ident, headers=headers)
+        assert response.status_code == 200, response.text
+        value = response.json()
+        if value['status'] in {'completed', 'failed', 'cancelled', 'interrupted'}:
+            return value
+        time.sleep(.01)
+    pytest.fail('Synthetic host run did not finish')
+
+
+def workspace_stream(monkeypatch, state):
+    from intelligence import chat_continuity
+    host = {'id': 'host-1', 'name': 'Test host'}
+    def generate(request, message, conversation_id, *_args, **_kwargs):
+        state.calls.append(message)
+        state.started.set()
+        yield 'data: ' + json.dumps({'type': 'meta', 'conversation_id': conversation_id, 'provider': 'fixture', 'model': 'synthetic-model', 'host': host}) + '\n\n'
+        yield 'data: {"type":"delta","text":"Synthetic "}\n\n'
+        assert state.release.wait(5)
+        # Production persistence performs the retained access/cancellation check.
+        ai_routes._save_turn(conversation_id, 'user', message)
+        ai_routes._save_turn(conversation_id, 'assistant', 'Synthetic answer', provider='fixture', model='synthetic-model', host=host)
+        yield 'data: {"type":"delta","text":"answer"}\n\n'
+        yield 'data: ' + json.dumps({'type': 'meta', **chat_continuity.source_refs(conversation_id)}) + '\n\n'
+        yield 'data: {"type":"done"}\n\n'
+    monkeypatch.setattr(ai_routes, '_stream_response', generate)
+
+
+def test_http_browser_phone_run_resume_owner_and_settings_conflicts(phone, workspace_http, monkeypatch):
+    import host_runs
+    _, device = pair(phone)
+    browser, mobile, foreign = cookie(), bearer(device), cookie('bob')
+    state = workspace_http
+    workspace_stream(monkeypatch, state)
+    submission = {'request_id': 'shared-http-chat-001', 'kind': 'chat', 'payload': {'message': 'Private synthetic prompt', 'conversation_id': 'shared-http-chat'}}
+    created = phone.post('/api/runs', json=submission, headers=browser)
+    assert created.status_code == 202, created.text
+    ident = created.json()['id']
+    assert state.started.wait(3)
+    running = phone.get('/api/runs/' + submission['request_id'], headers=mobile)
+    assert running.status_code == 200 and running.json()['id'] == ident
+    assert phone.get('/api/runs/' + ident, headers=foreign).status_code == 404
+    assert phone.post('/api/runs/' + ident + '/cancel', json={}, headers=foreign).status_code == 404
+    assert phone.get('/api/runs', headers=foreign).json()['runs'] == []
+    conflict = {'compute_selection': None, 'expected_settings_revision': 0}
+    assert phone.patch('/api/ai/conversations/shared-http-chat/settings', json=conflict, headers=mobile).status_code == 409
+    assert phone.post('/api/ai/chat/stream', json={'message': 'Concurrent turn', 'conversation_id': 'shared-http-chat'}, headers=mobile).status_code == 409
+    state.release.set()
+    done = wait_for_http_run(phone, ident, mobile)
+    assert done['status'] == 'completed' and done['text'] == 'Synthetic answer'
+    assert done['metadata']['model'] == 'synthetic-model'
+    assert state.calls == ['Private synthetic prompt']
+    reopened = phone.get('/api/ai/conversations/shared-http-chat', headers=mobile).json()
+    assert reopened == phone.get('/api/ai/conversations/shared-http-chat', headers=browser).json()
+    assert reopened['messages'][-1]['source_ref'] == done['metadata']['source_ref']
+    assert reopened['messages'][-1]['host'] == done['metadata']['host']['name']
+    assert S.load_conversations()['shared-http-chat']['messages'][-1]['run_id'] == ident
+    duplicate = phone.post('/api/runs', json=submission, headers=mobile)
+    assert duplicate.status_code == 200 and duplicate.json()['id'] == ident and len(state.calls) == 1
+    assert phone.post('/api/runs', json={**submission, 'payload': {'message': 'Changed'}}, headers=mobile).status_code == 409
+    # Simulate replay-buffer eviction: result comes from saved owned history.
+    with host_runs._lock:
+        host_runs._runs.pop(ident)
+    replay = phone.get('/api/runs/' + ident, headers=mobile).json()
+    assert replay['result']['reply'] == 'Synthetic answer' and replay['result']['model'] == 'synthetic-model'
+    stream = phone.get('/api/runs/' + ident + '/events?after=' + str(done['cursor']), headers=mobile)
+    assert stream.status_code == 200 and 'event: snapshot' in stream.text and 'Synthetic answer' in stream.text
+    changed = phone.patch('/api/ai/conversations/shared-http-chat/settings', json=conflict, headers=mobile)
+    assert changed.status_code == 200 and changed.json()['settings_revision'] == 1
+    assert phone.patch('/api/ai/conversations/shared-http-chat/settings', json=conflict, headers=browser).status_code == 409
+    assert phone.get('/api/ai/conversations/shared-http-chat/settings', headers=foreign).status_code == 404
+    journal = host_runs._path().read_text()
+    assert 'Private synthetic prompt' not in journal and device['credential'] not in journal
+
+
+def test_http_revoked_phone_stops_detached_run_before_saving(phone, workspace_http, monkeypatch):
+    _, device = pair(phone)
+    state = workspace_http
+    workspace_stream(monkeypatch, state)
+    created = phone.post('/api/runs', json={'request_id': 'revoked-http-chat-001', 'kind': 'chat', 'payload': {'message': 'Do not retain after revocation'}}, headers=bearer(device))
+    assert created.status_code == 202, created.text
+    ident = created.json()['id']
+    assert state.started.wait(3)
+    assert phone.delete(PREFIX + '/paired-devices/' + device['device_id'], headers=cookie()).status_code == 200
+    state.release.set()
+    done = wait_for_http_run(phone, ident, cookie())
+    assert done['status'] == 'failed'
+    assert phone.get('/api/runs/' + ident, headers=bearer(device)).status_code == 401
+    assert phone.post('/api/runs/' + ident + '/cancel', json={}, headers=bearer(device)).status_code == 401
+    assert S.load_conversations()[done['conversation_id']]['messages'] == []
+    assert len(state.calls) == 1
+
+
+def test_http_phone_builder_cookie_resume_and_owned_source_revision(phone, workspace_http, monkeypatch):
+    import host_runs
+    from builder import llm_client
+    from tests.test_builder_web_apps import bundle
+    _, device = pair(phone)
+    state = workspace_http
+    def complete(messages, *_args):
+        state.calls.append(messages)
+        state.started.set()
+        assert state.release.wait(5)
+        return json.dumps(bundle()), 'fixture-local/synthetic-model'
+    monkeypatch.setattr(llm_client, '_chat', complete)
+    mobile, browser, foreign = bearer(device), cookie(), cookie('bob')
+    submission = {'request_id': 'shared-http-builder-001', 'kind': 'builder_create', 'payload': {'brief': 'Build a synthetic counter'}}
+    created = phone.post('/api/runs', json=submission, headers=mobile)
+    assert created.status_code == 202, created.text
+    ident = created.json()['id']
+    assert state.started.wait(3)
+    assert phone.get('/api/runs/' + ident, headers=browser).status_code == 200
+    assert phone.get('/api/runs/' + ident, headers=foreign).status_code == 404
+    state.release.set()
+    done = wait_for_http_run(phone, ident, browser)
+    assert done['status'] == 'completed', done
+    app_id = done['app_id']
+    project = phone.get('/api/builder/web-apps/' + app_id, headers=mobile).json()['project']
+    assert project == phone.get('/api/builder/web-apps/' + app_id, headers=browser).json()['project']
+    assert project['revisions'][0]['backend'] == 'fixture-local/synthetic-model'
+    assert project['revisions'][0]['run_id'] == ident
+    assert phone.get('/api/builder/web-apps/' + app_id, headers=foreign).status_code == 404
+    denied = phone.post('/api/runs', json={'request_id': 'foreign-http-builder-001', 'kind': 'builder_revise', 'app_id': app_id,
+                          'payload': {'feedback': 'Replace it', 'expected_revision': 1}}, headers=foreign)
+    assert denied.status_code == 404, denied.text
+    duplicate = phone.post('/api/runs', json=submission, headers=browser)
+    assert duplicate.status_code == 200 and duplicate.json()['id'] == ident and len(state.calls) == 1
+    with host_runs._lock:
+        host_runs._runs.pop(ident)
+    resumed = phone.get('/api/runs/' + ident, headers=mobile).json()
+    assert resumed['result']['project']['revisions'] == project['revisions']
+    assert len(state.calls) == 1

@@ -378,7 +378,7 @@ def test_image_request_keeps_owner_provider_and_private_context(app, conversatio
     assert foreign.status_code == 404
 
 
-def test_bootstrap_uses_fresh_observations_without_mesh_probes(tmp_path, monkeypatch):
+def test_bootstrap_does_not_select_transport_from_mesh_advertisements(tmp_path, monkeypatch):
     import tli_state as S
     from ai import ai_routes
     from routers import companion_routes
@@ -393,7 +393,7 @@ def test_bootstrap_uses_fresh_observations_without_mesh_probes(tmp_path, monkeyp
     entries = {"peer": {"ip": "192.168.1.25", "status": "allowed", "ai_healthy": True,
                         "ai_observed_at": datetime.fromtimestamp(now, timezone.utc).isoformat()}}
     monkeypatch.setattr(S, "load_mesh_directory", lambda: entries)
-    assert companion_routes.bootstrap(Response(), "alice")["chat"]["streaming"] is True
+    assert companion_routes.bootstrap(Response(), "alice")["chat"]["streaming"] is False
     entries["peer"]["ai_observed_at"] = datetime.fromtimestamp(now - companion_routes.AI_ADVERTISEMENT_TTL - 5, timezone.utc).isoformat()
     assert companion_routes.bootstrap(Response(), "alice")["chat"]["streaming"] is False
     monkeypatch.setattr(ai_routes, "_MESH_CACHE", {"ts": now - ai_routes._MESH_CACHE_TTL - 5, "peers": [{"ip": "192.168.1.25"}]})

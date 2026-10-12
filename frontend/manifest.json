@@ -3,7 +3,7 @@
   "name": "TheLANIntelligence",
   "short_name": "TLI",
   "description": "Your private AI. On your network. Think, create and connect your everyday tools.",
-  "start_url": "/companion",
+  "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",

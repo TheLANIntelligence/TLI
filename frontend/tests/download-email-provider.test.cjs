@@ -62,6 +62,28 @@ test('provider failures cannot count as an accepted verification email or expose
   }
 });
 
+test('Android verification email identifies Companion Beta and contains only its one-use verification link', async () => {
+  const { sendVerificationEmail } = await sender;
+  const calls = [];
+  const fetcher = async (url, options) => {
+    calls.push({ url, options, body: JSON.parse(options.body) });
+    return { ok: true, json: async () => ({ id: 'synthetic-companion-message' }) };
+  };
+  const companion = { ...message, platform: 'android', version: 'synthetic-companion-beta', token: 'b'.repeat(64) };
+  assert.equal(await sendVerificationEmail(env, companion, fetcher), true);
+  assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://api.resend.com/emails');
+  const mail = calls[0].body;
+  assert.deepEqual(mail.to, [message.email]);
+  assert.equal(mail.subject, 'Verify your email — TLI Companion Beta for Android');
+  assert.match(mail.text, /TLI Companion Beta synthetic-companion-beta for Android/);
+  assert.match(mail.html, /TLI Companion Beta synthetic-companion-beta for Android/);
+  assert.match(mail.text, /\/download\/#verify=b{64}/);
+  assert.match(mail.html, /\/download\/#verify=b{64}/);
+  assert.doesNotMatch(mail.text + mail.html, /\.apk|releases\/download\//);
+  assert.ok(!JSON.stringify(mail).includes(env.RESEND_API_KEY));
+  assert.match(calls[0].options.headers['Idempotency-Key'], /^tli-verification-[a-f0-9]{64}$/);
+});
+
 test('missing sender settings and untrusted origins or tokens never contact the email provider', async () => {
   const { sendVerificationEmail } = await sender;
   let calls = 0;

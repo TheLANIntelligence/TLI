@@ -1,9 +1,12 @@
 import type { CaseRef } from './case-context';
+import type { ComputeSelection } from './workspace-model';
+import type { SelectedDocument } from './documents';
 export type ThemePreference = 'system' | 'light' | 'dark';
 export type Preferences = { favorite_devices: string[]; favorite_scenes: string[]; theme: ThemePreference };
-export type PairingCode = { version: 1; origin: string; certificate_der: string; token: string; expires_at: string | number; node_id: string; node_name: string };
+export type PairingCode = { version: 1 | 2; origin: string; certificate_der: string; public_key?:string; resolved_addresses?:string[]; token: string; expires_at: string | number; node_id: string; node_name: string };
 export type Pairing = Omit<PairingCode, 'token' | 'expires_at'> & { device_id: string; owner_id: string; credential: string };
 export type Bootstrap = {
+  protocols?: Record<string, string>;
   api_version: 1; node: { id: string; name: string };
   ai?: { status: 'available' | 'unavailable' | 'unknown'; provider?: string; model?: string; detail: string; checked_at: string };
   chat?: { path: string; streaming: boolean };
@@ -21,7 +24,7 @@ export type Conversation = { id: string; title: string; last_updated?: string; m
 export type SourceRef = { conversation_id: string; message_index: number; revision: string };
 export type AnswerEvidence = { memory_context?: unknown; conversation_context?: unknown; observation_context?: unknown; evidence_context?: unknown; input_budget?: unknown; document_context?: unknown; case_context?: unknown; source_ref?: SourceRef; user_source_ref?: SourceRef };
 export type ResponseTiming = { elapsed_ms: number; first_text_ms?: number; outcome: 'waiting' | 'streaming' | 'complete' | 'interrupted' };
-export type Message = AnswerEvidence & { role: 'user' | 'assistant'; content: string; state?: 'streaming' | 'interrupted' | 'complete'; provider?: string; model?: string; host?: string; photo?: boolean; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext; timing?: ResponseTiming };
+export type Message = AnswerEvidence & { role: 'user' | 'assistant'; content: string; state?: 'streaming' | 'interrupted' | 'complete'; provider?: string; model?: string; host?: string; inference_host?: {id:string;name:string}; photo?: boolean; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext; timing?: ResponseTiming };
 export type NoteRef = { id: string; revision: string };
 export type NoteSummary = NoteRef & { title: string; source: string; category: string; device_id?: string | null; updated_at?: string };
 export type Note = NoteSummary & { text: string; created_at?: string; client_device_id?: string | null };
@@ -33,5 +36,5 @@ export type ScreenshotOptions = { task: ScreenshotTask; target_id?: string; othe
 export type ScreenshotComputer = { id: string; name: string; node_id: string; source?: string };
 export type ScreenshotReceipt = { task: ScreenshotTask; computer: { id?: string; name: string; node_id?: string | null }; report_id?: string | null; capture: 'user_shared_snapshot'; actions_performed: false };
 export type ScreenshotReview = { host: { id: string; name: string }; computers: ScreenshotComputer[]; provider: { key: string; provider: string; model: string; destination: string; port?: number | null; note?: string } | null; reason?: string; checked_at: string };
-export type ChatContext = { target_id?: string; diagnostic_id?: string; photo?: Photo; screenshot?: ScreenshotOptions; image_provider_key?: string; note_refs?: NoteRef[]; case_ref?: CaseRef; use_saved_memory?: boolean; use_conversation_history?: boolean };
-export type ChatEvent = AnswerEvidence & { type: 'meta' | 'delta' | 'done' | 'error'; text?: string; detail?: string; error?: string; session_id?: string; conversation_id?: string; provider?: string; model?: string; handled_by?: string; host?: { name?: string } | string; mesh_node?: { name?: string }; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext };
+export type ChatContext = { target_id?: string; diagnostic_id?: string; photo?: Photo; screenshot?: ScreenshotOptions; image_provider_key?: string; note_refs?: NoteRef[]; case_ref?: CaseRef; use_saved_memory?: boolean; use_conversation_history?: boolean; documents?: SelectedDocument[]; lan_inference?: ComputeSelection | null };
+export type ChatEvent = AnswerEvidence & { type: 'meta' | 'delta' | 'done' | 'error'; text?: string; detail?: string; error?: string; session_id?: string; conversation_id?: string; provider?: string; model?: string; handled_by?: string; host?: { name?: string } | string; inference_host?: {id:string;name:string}; mesh_node?: { name?: string }; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext };

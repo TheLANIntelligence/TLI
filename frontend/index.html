@@ -49,7 +49,7 @@
 <link rel="stylesheet" href="storage-workspace.css?v=f9b180cec9e6" />
 <link rel="stylesheet" href="network-workspace.css?v=e4f39adb29c2" />
 <link rel="stylesheet" href="peer-transfers.css?v=0e824adf206d" />
-<link rel="stylesheet" href="peer-pairing.css?v=1" />
+<link rel="stylesheet" href="peer-pairing.css?v=7e73a33bf5d5" />
 <link rel="stylesheet" href="ui-foundation.css?v=e84846edbf95" />
 <link rel="stylesheet" href="theme-library.css?v=24f5ffb7f762" />
 <link rel="stylesheet" href="vault-workspace.css?v=5112506d29fd" />
@@ -111,6 +111,7 @@
     />
     <div class="tli-lock-error" id="tli-lock-error" aria-live="polite"></div>
     <button class="btn-primary tli-lock-btn" id="tli-lock-submit">Unlock</button>
+    <a id="tli-host-restart-handoff" class="btn-outline" hidden rel="noreferrer">Continue at the reviewed TLI address</a>
     <button class="tli-lock-forgot-btn" id="tli-lock-forgot" type="button" aria-expanded="false" aria-controls="tli-lock-reset-panel">Forgot PIN?</button>
     <div id="tli-lock-reset-panel" class="tli-lock-reset-panel hidden" aria-hidden="true">
       <div class="tli-lock-reset-warn">This screen cannot remove or bypass your PIN. If saved security files are unavailable, stop TLI and preserve the existing files. Restore a matching backup using the original operating-system account; Windows-protected keys may also require the original computer. Do not run setup over this installation.</div>
@@ -1764,14 +1765,18 @@
               </div>
               <div class="mcd-header-right">
                 <span class="mcd-last-updated" id="mcd-last-updated"></span>
-                <button class="btn-primary" data-panel-target="panel-companion">Connect phone</button>
-                <details class="ui-connection-secondary"><summary>Browser connection</summary><p>Connect a browser as a satellite. This invitation is separate from the native Phone Companion app.</p><button class="mcd-add-sat-btn" id="mcd-add-sat-btn" title="Create a browser-satellite invitation">Browser satellite</button></details>
                 <button class="mcd-refresh-btn" id="mcd-refresh-btn" title="Refresh now">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
                   Refresh
                 </button>
               </div>
             </div>
+
+            <details id="tli-connections-advanced" class="ui-connection-secondary">
+              <summary>Advanced connections</summary>
+              <p>Compatibility tools and saved permission management.</p>
+              <button class="mcd-add-sat-btn" id="mcd-add-sat-btn" title="Create a browser-satellite invitation">Browser satellite</button>
+            </details>
 
             <!-- Node grid -->
             <div class="mcd-grid" id="mcd-grid">
@@ -3276,9 +3281,10 @@
   <script src="/js/room-display.js?v=52948454ea67"></script>
   <script src="/js/ui-health.js?v=f0512d10910f"></script>
   <script src="/js/local-voice.js?v=23aa2949b2d5"></script>
-  <script src="/app.js?v=ef932a3ade67"></script>
+  <script src="/js/workspace-client.js?v=2ce68c918bcc"></script>
+  <script src="/app.js?v=0ba1b9fbdd38"></script>
   <script src="/js/onboarding.js?v=fa6217060510"></script>
-  <script src="/js/lan-inference.js?v=f4d181d981ad"></script>
+  <script src="/js/lan-inference.js?v=11031503d49b"></script>
   <script src="/js/vault.js?v=f12ddafda69f"></script>
   <script src="/js/vault-backups.js?v=a01c7a5a5e84"></script>
   <script src="/js/guided-checks.js?v=f51836795ee8"></script>
@@ -3291,10 +3297,10 @@
   <script src="/js/storage-map.js?v=e0d71a2e9317"></script>
   <script src="/js/visualizer.js?v=eda07c706257"></script>
   <script src="/js/tools.js?v=70a69656ca97"></script>
-  <script src="/js/mesh.js?v=6e3ba2be9b12"></script>
-  <script src="/js/peer-pairing.js?v=1"></script>
+  <script src="/js/mesh.js?v=ba20e39dc3a0"></script>
+  <script src="/js/peer-pairing.js?v=0e01ce2d8946"></script>
   <script src="/js/settings.js?v=f8f068e2d980"></script>
-  <script src="/js/host-lifecycle.js?v=2832267926fd"></script>
+  <script src="/js/host-lifecycle.js?v=ea9085f5fef0"></script>
   <script src="/js/uninstall.js?v=0ba8c5adbe82"></script>
   <script src="/js/home-auto.js?v=29cbf030a921"></script>
   <script src="/js/satellite.js?v=31ccd65094b9"></script>
@@ -3304,14 +3310,14 @@
   <script src="/js/tli-update.js?v=a84095bffb80"></script>
   <!-- app.js second-pass split (2026-04-11) -->
   <script src="/js/peer-transfers.js?v=a486068529b8"></script>
-  <script src="/js/tli-chat.js?v=f6be11e1e2d4"></script>
+  <script src="/js/tli-chat.js?v=140a99440ba1"></script>
   <script src="/js/routine-workspace.js?v=1c80b6bd1585"></script>
   <script src="/js/automations.js?v=91f7bcfa81ab"></script>
   <script src="/js/ai-source.js?v=bfd4acaf1dd1"></script>
   <script src="/js/ai-model-manager.js?v=52970e3a6385"></script>
   <script src="/js/live-feed.js?v=9b9bdba2c5ac"></script>
   <script src="/js/activity-summary.js?v=28c2ec5b447e"></script>
-  <script src="/js/mesh-control.js?v=1031ea359fc8"></script>
+  <script src="/js/mesh-control.js?v=b5a61738cd2f"></script>
   <script src="/js/printers-ext.js?v=b6978ef09172"></script>
   <script src="/js/action-engine.js?v=8299f0ce9d05"></script>
   <script src="/js/pwa.js?v=285162ce5d41"></script>
@@ -3321,9 +3327,9 @@
   <script src="/js/performance-workspace.js?v=6f7816b380b2"></script>
 <script src="/js/tli-games.js?v=8e346a9f4b74"></script>
   <script src="/js/tli-system.js?v=b9db8b973af6"></script>
-  <script src="/js/builder-web-apps.js?v=e2c1cc4a9ad1"></script>
+  <script src="/js/builder-web-apps.js?v=75e5488a05eb"></script>
   <script src="/js/builder.js?v=a1cef232b467"></script>
-  <script src="/js/mesh-service.js?v=e6ceba17542f"></script>
+  <script src="/js/mesh-service.js?v=0b20fc7eddb3"></script>
 <script src="/js/pin-lock.js?v=e366f62ec3f7"></script>
 <script src="/js/cmd-palette.js?v=043431b7c323"></script>
   <script src="/js/fetch-interceptor.js?v=eae0038f9c0b"></script>
@@ -3573,13 +3579,15 @@
 <script src="/js/document-context.js?v=47d6c3a3d184"></script>
 <script src="/js/data-recovery.js?v=a7ffad975e2e"></script>
 <script src="/js/saved-places.js?v=ae76fc521040"></script>
-<script src="/js/native-companion.js?v=91eaa58e1f45"></script>
+<script src="/js/native-companion.js?v=0ec9fa115d79"></script>
 <script src="/js/chat-workspace.js?v=90c2adc4bec8"></script>
 <script src="/js/tli-experience.js?v=98b34d5179ff"></script>
 <script src="/js/settings-workspace.js?v=ad50ac7c12cf"></script>
 <script src="js/theme-library.js?v=8594ac9f72d2"></script>
 <script src="/js/storage-workspace.js?v=9b1e04e9e4e3"></script>
 <script src="/js/network-workspace.js?v=4dd891ec2eb7"></script>
+<script src="/js/connection-setup.js?v=2c8454d2fb45"></script>
+<script src="/js/connect-device.js?v=4d3f3ab61127"></script>
 <script src="/js/mcp-bridge.js?v=88ed3d81fbee"></script>
 <script src="/js/mcp-client.js?v=15f66dddf270"></script>
 <script src="/js/home-assistant.js?v=c470463eeed7"></script>

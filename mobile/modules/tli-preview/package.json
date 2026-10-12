@@ -1,0 +1,1 @@
+{"name":"tli-preview","version":"0.1.0","private":true,"main":"index.tsx","types":"index.tsx","peerDependencies":{"expo":"*","expo-modules-core":"*","react-native":"*","react":"*"}}

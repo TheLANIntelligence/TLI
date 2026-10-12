@@ -24,9 +24,9 @@ def test_health_keeps_same_name_computers_and_shared_address_installations(monke
     result=mesh_routes.mesh_health()
     peers=[n for n in result['nodes'] if not n['is_self']]
     assert {n['peer_id'] for n in peers}=={'peer-a','peer-b','peer-c'}
-    assert all(n['online'] for n in peers)
-    assert len(calls)==3
-    assert ('peer-c','https://192.168.2.3:8443','GET','/agent/peer/health') in calls
+    assert all(n['online'] is None for n in peers)
+    assert calls==[]  # Cached roster never fans out authenticated requests.
+    assert next(n for n in peers if n['peer_id']=='peer-c')['port']==8443
     assert records['peer-a']['display_name']==records['peer-b']['display_name']
 
 

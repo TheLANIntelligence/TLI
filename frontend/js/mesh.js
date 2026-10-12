@@ -116,6 +116,7 @@ function renderMeshDirectory(directory) {
   const listEl   = $("mesh-directory-list");
 
   if (!hostCard || !statusEl || !listEl) return;
+  listEl._healthExpiryUnsubscribe?.(); listEl._healthExpiryUnsubscribe = null;
 
   // Is this node currently the Host?
   const isHostNode =
@@ -176,55 +177,19 @@ function renderMeshDirectory(directory) {
 
   statusEl.textContent = `Total nodes: ${devices.length}`;
 
-  // Helper: compute health state from last_seen + mesh status
+  // Reviewed authority and the shared expiring receipt determine presence.
   function computeNodeHealth(device) {
-    try {
-      const state = (device.state || device.status || "").toLowerCase();
-      const lastSeenStr =
-        device.last_seen || device.lastSeen || device.lastHeartbeat;
-      const now = Date.now();
-
-      let ageMs = null;
-      if (lastSeenStr) {
-        const t = Date.parse(lastSeenStr);
-        if (!isNaN(t)) {
-          ageMs = now - t;
-        }
-      }
-
-      // If explicitly blocked, treat as "offline" from a control perspective
-      if (state === "blocked") {
-        return { key: "blocked", label: "Blocked" };
-      }
-      if (device.peer_profile === "inference_node" && state === "allowed" && device.trust_state === "verified") {
-        return { key: "unknown", label: "Compute only" };
-      }
-
-      // If no age info, fall back to state alone
-      if (ageMs == null) {
-        if (state === "allowed") {
-          return { key: "good", label: "Online" };
-        }
-        if (state === "pending") {
-          return { key: "pending", label: "Pending" };
-        }
-        return { key: "unknown", label: "Unknown" };
-      }
-
-      // Age thresholds (tweak as you like)
-      const sec = ageMs / 1000;
-
-      if (sec <= 20) {
-        return { key: "good", label: "Online" };
-      } else if (sec <= 60) {
-        return { key: "warn", label: "Stale" };
-      } else {
-        return { key: "bad", label: "Offline" };
-      }
-    } catch (e) {
-      console.warn("computeNodeHealth failed", e, device);
-      return { key: "unknown", label: "Unknown" };
+    if (device.status === 'blocked') return {key:'blocked',label:'Blocked'};
+    if (device.status !== 'allowed' || device.trust_state !== 'verified') return {key:'pending',label:'Needs approval'};
+    const connection = window.MeshService?.projectConnection?.(device.connection);
+    if (connection?.state === 'connected' && connection.fresh === true) {
+      return {key:'good',label:connection.capabilities?.inference?.state === 'no_model' ? 'Connected · no model' : 'Connected'};
     }
+    if (connection?.state === 'unreachable' && connection.fresh === true) return {key:'bad',label:'Temporarily unreachable'};
+    if (connection?.state === 'checking') return {key:'warn',label:'Checking connection'};
+    if (connection?.state === 'identity_changed') return {key:'warn',label:'Identity needs review'};
+    if (connection?.state === 'review_required') return {key:'pending',label:'Needs review'};
+    return {key:'unknown',label:'Connection not checked'};
   }
 
   const html = devices
@@ -349,6 +314,16 @@ function renderMeshDirectory(directory) {
     .join("");
 
   listEl.innerHTML = html;
+  // Expire existing badges even if the next host fetch fails. Keep drafts,
+  // keyboard focus and all controls intact; this callback never fetches.
+  listEl._healthExpiryUnsubscribe = window.MeshService?.subscribeExpiry?.(() => {
+    if (meshUiLocked || !listEl.getClientRects().length) return;
+    listEl.querySelectorAll('.mesh-pill-health').forEach((badge,index) => {
+      const health = computeNodeHealth(devices[index]);
+      badge.textContent = health.label;
+      badge.className = 'mesh-pill mesh-pill-health mesh-pill-' + health.key;
+    });
+  }) || null;
 }
 
 
@@ -1495,8 +1470,9 @@ window.TLIPeerTrust=(()=>{
   function privateOrigin(value){
     try{const u=new URL(value),parts=u.hostname.split('.').map(Number);
       return u.protocol==='https:'&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash&&
+        ((/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local$/.test(u.hostname))||
         /^\d+\.\d+\.\d+\.\d+$/.test(u.hostname)&&parts.every(x=>x>=0&&x<=255)&&
-        (parts[0]===10||parts[0]===192&&parts[1]===168||parts[0]===172&&parts[1]>=16&&parts[1]<=31);
+        (parts[0]===10||parts[0]===192&&parts[1]===168||parts[0]===172&&parts[1]>=16&&parts[1]<=31));
     }catch{return false;}
   }
   function localCardPanel(){
@@ -1504,8 +1480,8 @@ window.TLIPeerTrust=(()=>{
     const section=n('section');section.id='tli-peer-local-card';section.style.minWidth='0';
     const heading=n('h3','1. This computer’s card');
     const status=n('p','Reading this computer’s secure LAN setup…');status.id='tli-peer-card-status';status.setAttribute('role','status');
-    const addressLabel=n('label'),address=n('select');address.id='tli-peer-card-address';address.setAttribute('aria-label','This computer’s HTTPS LAN IPv4 address and port');address.style.width='100%';address.style.maxWidth='100%';address.disabled=true;
-    addressLabel.append(n('span','This computer’s HTTPS LAN IPv4 address and port'),address);
+    const addressLabel=n('label'),address=n('select');address.id='tli-peer-card-address';address.setAttribute('aria-label','This computer’s HTTPS LAN address and port');address.style.width='100%';address.style.maxWidth='100%';address.disabled=true;
+    addressLabel.append(n('span','This computer’s HTTPS LAN address and port'),address);
     const outputLabel=n('label'),output=n('textarea');output.readOnly=true;output.rows=5;output.style.width='100%';output.style.boxSizing='border-box';output.placeholder='Your public card will appear here after TLI checks this computer’s secure LAN setup.';
     outputLabel.append(n('span','Your public computer card; contains no private key'),output);
     const fingerprints=n('p');fingerprints.style.overflowWrap='anywhere';
@@ -1574,11 +1550,13 @@ window.TLIPeerTrust=(()=>{
                 values.length?'Choose this computer’s address on the same network as the other computer.':older.reason||'No certificate-covered private LAN address is available. Open connection settings to check this host.'};
           }
           if(!Array.isArray(setup.origins)||setup.origins.length>32||!setup.origins.every(privateOrigin))throw Error('TLI returned incomplete secure LAN addresses. Reload the card.');
+          const stable=Array.isArray(setup.stable_origins)?setup.stable_origins.filter(value=>privateOrigin(value)&&new URL(value).hostname.endsWith('.local')).slice(0,8):[];
+          if(stable.length)setup={...setup,origins:[...new Set([...stable,...setup.origins])],ready:true,selected_origin:stable[0]};
           node=setup.node;heading.textContent='1. '+(node?.name||'This computer')+' — your public card';
           if(setup.ready!==true&&setup.code!=='choose_address'){
             choices([],null);status.textContent=setup.reason||'This computer’s secure LAN setup is unavailable. Open connection settings to check it.';settings.hidden=false;return;
           }
-          if(!legacy&&setup.ready===true&&!setup.card)throw Error('TLI did not provide this computer’s public card. Reload the card.');
+          if(!legacy&&setup.ready===true&&!setup.card&&!stable.length)throw Error('TLI did not provide this computer’s public card. Reload the card.');
           const selected=setup.origins.includes(previous)?previous:setup.selected_origin;
           if(selected&&!setup.origins.includes(selected))throw Error('The selected address was not found on this computer. Reload the card.');
           choices(setup.origins,selected);
@@ -1645,8 +1623,8 @@ window.TLIPeerTrust=(()=>{
       row.append(button('Review computer',()=>open({deviceId:entry.device_id})));if(entry.status!=='blocked')row.append(button('Revoke access',()=>revoke(entry.device_id)));list.append(row);}
   }
   function install(){if(document.getElementById('tli-peer-trust-open'))return;const anchor=document.querySelector('#panel-mesh .mcd-header');if(!anchor)return;
-    const wrap=n('div'),b=button('Review computer trust',open);b.id='tli-peer-trust-open';wrap.style.padding='0 0 18px';wrap.append(b,n('p','Both computers explicitly review identity and HTTPS fingerprints before communicating.'));
-    const details=n('details');details.append(n('summary','Reviewed computer access'));const list=n('div');list.id='tli-peer-trust-list';details.append(list);wrap.append(details);anchor.after(wrap);renderDirectory(meshDirectoryCache);
+    const wrap=n('div'),b=button('Manual public-card review',open);b.id='tli-peer-trust-open';wrap.style.padding='0 0 18px';wrap.append(b,n('p','Advanced compatibility: review public identity cards on both computers.'));
+    const details=n('details');details.append(n('summary','Reviewed computer access'));const list=n('div');list.id='tli-peer-trust-list';details.append(list);wrap.append(details);(document.getElementById('tli-connections-advanced')||anchor.parentElement).append(wrap);renderDirectory(meshDirectoryCache);
   }
   window.addEventListener('tli-session-locked',()=>{epoch++;cancelCardLoad();review=null;busy=false;if(dialog){body.replaceChildren();notice.textContent='';dialog.close();}document.getElementById('tli-peer-trust-list')?.replaceChildren();});window.addEventListener('pagehide',()=>{epoch++;cancelCardLoad();review=null;dialog?.close();});return{open,revoke,install,renderDirectory};
 })();

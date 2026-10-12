@@ -634,3 +634,19 @@ messages and produces only model metadata, text deltas and explicit completion.
 It cannot call tools, execute device actions or access either user's saved
 conversation. See [TLI LAN intelligence](TLI_LAN_INTELLIGENCE.md) for setup,
 limits and the physical two-computer acceptance checklist.
+
+## Detached host runs
+
+Clients advertising `tli-runs-v1` submit Chat through `POST /api/runs` with a
+durable `request_id` and the existing Chat payload. The host consumes the same
+`meta`, `delta`, `done`, `error` events independently of the client connection.
+`GET /api/runs/{id}/events?after=N` assigns monotonically increasing SSE IDs to
+those events. A `snapshot` event contains current status/text/metadata/result
+when the bounded replay buffer no longer covers the supplied cursor or only a
+durable terminal result remains. A disconnected subscriber never cancels work.
+
+`POST /api/runs/{id}/cancel` explicitly requests cancellation. Lost acceptance
+responses are recovered by GET using the original request ID; clients must not
+create a new request automatically. Restarted hosts mark unfinished work
+`interrupted`, without replay. Settings and owner boundaries are documented in
+[the shared workspace contract](TLI_SHARED_WORKSPACE.md).

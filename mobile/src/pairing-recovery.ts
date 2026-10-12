@@ -3,6 +3,7 @@ import { ConnectionError, connectionIssue, readConnection } from './connection';
 import { parsePairingCode, validateOrigin } from './protocol';
 import type { Pairing, PairingCode } from './types';
 import { HOST_START_STORAGE_KEY } from './host-start';
+import { configurePairing } from './paired-transport';
 
 export const PAIRING_STORAGE_KEY = 'tli.pairing.envelope';
 export type PairingStore = { get(key: string): Promise<string | null>; set(key: string, value: string): Promise<void>; remove(key: string): Promise<void> };
@@ -16,8 +17,8 @@ const storageError = (detail: string) => new ConnectionError({ kind: 'storage', 
 const safeString = (value: unknown, min = 1, max = 256): value is string => typeof value === 'string' && value.length >= min && value.length <= max && !/[\u0000-\u001f]/.test(value);
 export function validateSavedPairing(value: unknown): Pairing {
   const saved = value as Pairing | undefined;
-  if (!saved || saved.version !== 1 || !safeString(saved.origin) || !safeString(saved.node_id) || !safeString(saved.node_name) || !safeString(saved.device_id) || !safeString(saved.owner_id) || !safeString(saved.credential, 20) || !safeString(saved.certificate_der, 128, 12000) || !/^[A-Za-z0-9+/]+={0,2}$/.test(saved.certificate_der)) throw storageError('The stored pairing is incomplete. Its existing files were kept. Review a fresh desktop code to replace it.');
-  return { version: 1, origin: validateOrigin(saved.origin), certificate_der: saved.certificate_der, node_id: saved.node_id, node_name: saved.node_name, device_id: saved.device_id, owner_id: saved.owner_id, credential: saved.credential };
+  if (!saved || ![1,2].includes(saved.version) || saved.version === 2 && !/^[a-f0-9]{64}$/.test(saved.public_key || '') || !safeString(saved.origin) || !safeString(saved.node_id) || !safeString(saved.node_name) || !safeString(saved.device_id) || !safeString(saved.owner_id) || !safeString(saved.credential, 20) || !safeString(saved.certificate_der, 128, 12000) || !/^[A-Za-z0-9+/]+={0,2}$/.test(saved.certificate_der)) throw storageError('The stored pairing is incomplete. Its existing files were kept. Review a fresh desktop code to replace it.');
+  return { version: saved.version, origin: validateOrigin(saved.origin, saved.version === 2), certificate_der: saved.certificate_der, node_id: saved.node_id, node_name: saved.node_name, device_id: saved.device_id, owner_id: saved.owner_id, credential: saved.credential, ...(saved.version === 2 ? {public_key:saved.public_key} : {}) };
 }
 export async function loadSavedPairing(store: PairingStore): Promise<Pairing | null> {
   const envelope = await store.get(PAIRING_STORAGE_KEY);
@@ -98,12 +99,14 @@ export class PairingReplacement {
       catch { throw storageError('The existing protected pairing could not be read for recovery. It was left unchanged; no replacement was attempted.'); }
       assertCurrent();
       options.previousClient?.pause(); previousPaused = true;
-      await options.transport.configure({ origin: code.origin, certificateDer: code.certificate_der }); assertCurrent();
-      const invite = new Client(options.transport, ''); attempt.client = invite;
-      const redeemed = await invite.json<{ node: { id: string; name: string }; device_id: string; owner_id: string; credential: string }>('/api/companion/v1/pairings/redeem', 'POST', { token: code.token, name: options.name.trim(), platform: options.platform });
+      await configurePairing(options.transport, code); assertCurrent();
+      const upgrade = code.version === 2 && options.previous && options.previous.node_id === code.node_id && options.previous.certificate_der === code.certificate_der && (!options.previous.public_key || options.previous.public_key === code.public_key);
+      const invite = new Client(options.transport, upgrade ? options.previous!.credential : ''); attempt.client = invite;
+      const redeemed = await invite.json<{ node: { id: string; name: string }; device_id: string; owner_id: string; credential?: string; credential_retained?:boolean }>(upgrade ? '/api/companion/v1/pairings/upgrade' : '/api/companion/v1/pairings/redeem', 'POST', upgrade ? {token:code.token,device_id:options.previous!.device_id} : { token: code.token, name: options.name.trim(), platform: options.platform });
       assertCurrent();
       if (!redeemed?.node || redeemed.node.id !== code.node_id) throw new ConnectionError({ kind: 'trust', title: 'Pairing identity mismatch', detail: 'The pairing response does not match the reviewed TLI. Create and review a fresh desktop code.' });
-      const pairing = validateSavedPairing({ version: 1, origin: code.origin, certificate_der: code.certificate_der, node_id: redeemed.node.id, node_name: redeemed.node.name, device_id: redeemed.device_id, owner_id: redeemed.owner_id, credential: redeemed.credential });
+      if (upgrade && (redeemed.credential_retained !== true || redeemed.owner_id !== options.previous!.owner_id || redeemed.device_id !== options.previous!.device_id)) throw new Error('The host did not confirm retained phone access. The previous pairing was kept.');
+      const pairing = validateSavedPairing({ version: code.version, origin: code.origin, certificate_der: code.certificate_der, node_id: redeemed.node.id, node_name: redeemed.node.name, device_id: redeemed.device_id, owner_id: redeemed.owner_id, credential: upgrade ? options.previous!.credential : redeemed.credential, public_key:code.public_key });
       const candidate = new Client(options.transport, pairing.credential); attempt.client = candidate;
       const checked = await readConnection(candidate, pairing); assertCurrent();
       // The reviewed commit is one non-cancellable secure-store write. Requests
@@ -124,7 +127,7 @@ export class PairingReplacement {
       let restored = !previousPaused;
       if (previousPaused) {
         try {
-          if (options.previous) await options.transport.configure({ origin: options.previous.origin, certificateDer: options.previous.certificate_der });
+          if (options.previous) await configurePairing(options.transport, options.previous);
           else await options.transport.reset();
           options.previousClient?.resume(); restored = true;
         } catch { /* Keep the previous credential, but never claim restored transport. */ }

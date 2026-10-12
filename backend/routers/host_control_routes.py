@@ -235,6 +235,15 @@ def lifecycle_confirm(body: LifecycleConfirm, request: Request, response: Respon
     try:
         check()
         result = lifecycle.confirm(S.BASE_DIR, principal, body.preview_id, body.request_id)
+        if result.get('action') == 'restart' and result.get('status') == 'accepted':
+            current, next_address = urlsplit(str(request.base_url)), urlsplit(result.get('next_url', ''))
+            def origin(address):
+                return (address.scheme, address.hostname, address.port or (443 if address.scheme == 'https' else 80))
+            if next_address.scheme in {'http', 'https'} and origin(current) != origin(next_address):
+                # Cookies are not scoped by port/scheme. Expire the browser's old
+                # cookie before the explicit navigation; retain the captured
+                # server session just long enough for the authorized dispatch.
+                response.delete_cookie('tli_session', path='/', httponly=True, samesite='strict', secure=S.TLS_ENABLED)
         tasks.add_task(_dispatch_lifecycle, principal, body.request_id, check)
         return {**result, "schema_version": 1}
     except H.HostControlError as error:

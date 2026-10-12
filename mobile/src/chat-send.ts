@@ -4,6 +4,9 @@ import type { AnswerEvidence, Bootstrap, ChatContext, Message, NoteContext, Scre
 import { validateNoteContext } from './notebook';
 import { answerEvidence } from './answer-evidence';
 import { casePointer, checkCaseCapability, confirmCaseReceipt, validateCaseContext } from './case-context';
+import { validateDocumentContext } from './documents';
+import { validSelection } from './workspace-model';
+import type { ChatEvent } from './types';
 
 type SendTicket = { interrupted?: Error; onInterrupt?: () => void };
 
@@ -47,6 +50,7 @@ type SendOptions = {
   onError: (error: unknown) => void;
   onSettled: () => void;
   now?: () => number;
+  runRequest?: (payload:Record<string,unknown>,path:string,onEvent:(event:ChatEvent)=>void)=>Promise<void>;
 };
 
 export function hasReviewedImageProvider(context: ChatContext): boolean {
@@ -59,6 +63,8 @@ export async function sendChat(options: SendOptions): Promise<void> {
   if (!message.trim()) throw new Error('Write a question before sending.');
   validateCaseContext(context, message);
   validateNoteContext(context);
+  validateDocumentContext(context,message);
+  if(context.lan_inference&&(!validSelection(context.lan_inference)||context.photo||context.documents?.length||context.note_refs?.length||context.case_ref||context.target_id||context.diagnostic_id||/\[vault:/i.test(message)))throw new Error('LAN inference accepts ordinary text with your conversation and saved-note settings. Remove attached context or select Local.');
   if (context.use_saved_memory === false && context.note_refs?.length) throw new Error('Turn on Use saved notes or remove the attached notes before sending.');
   if (context.screenshot && !context.photo) throw new Error('Add the screenshot before sending this guidance request.');
   if (context.photo && !hasReviewedImageProvider(context)) throw new Error('Review the image provider before sending this photo.');
@@ -92,7 +98,8 @@ export async function sendChat(options: SendOptions): Promise<void> {
     }
     // A selected-note question cannot become a device intent, even when its
     // wording resembles a command. Keep its configured local-provider route.
-    const route = chatRoute(bootstrap, !!context.photo, context.note_refs?.length || context.case_ref ? '' : message);
+    if(context.documents?.length){const capability=await client.json<{ok?:boolean;protocol?:string}>('/api/ai/documents/capabilities');guard.assertCurrent(ticket,options.isCurrent());if(capability.ok!==true||capability.protocol!=='tli-document-questions-v1')throw new Error('Update your host before asking about documents. Nothing was sent.');}
+    const route = context.lan_inference ? {path:'/api/ai/chat/stream',streaming:true} : chatRoute(bootstrap, !!context.photo, context.note_refs?.length || context.case_ref || context.documents?.length ? '' : message);
     const payload = {
       message, conversation_id: options.conversationId, device_id: options.deviceId,
       target_id: context.target_id, diagnostic_id: context.diagnostic_id,
@@ -103,28 +110,35 @@ export async function sendChat(options: SendOptions): Promise<void> {
       ...(context.image_provider_key ? { image_provider_key: context.image_provider_key } : {}),
       ...(context.note_refs?.length ? { note_refs: context.note_refs.map(({ id, revision }) => ({ id, revision })) } : {}),
       ...(context.case_ref ? { case_ref: casePointer(context.case_ref) } : {}),
-      ...((context.note_refs?.length || context.case_ref) && !route.streaming ? { brain: 'lmstudio' } : {}),
+      ...((context.note_refs?.length || context.case_ref || context.documents?.length) && !route.streaming ? { brain: 'lmstudio' } : {}),
       retention_days: 0,
+      ...(context.documents?.length?{documents:context.documents}:{}),
+      ...(context.lan_inference!==undefined?{lan_inference:context.lan_inference}:{}),
     };
-    if (route.streaming) {
-      await client.stream(route.path, payload, event => {
+    const eventUpdate=(event:ChatEvent)=>{
         if (!accepting()) return;
         if (event.session_id || event.conversation_id) options.onConversation((event.conversation_id || event.session_id)!);
         if (event.type === 'delta') assistant.content += event.text || '';
         if (event.provider) assistant.provider = event.provider;
         if (event.model) assistant.model = event.model;
+        if(event.inference_host)assistant.inference_host=event.inference_host;
         if (event.mesh_node?.name) assistant.host = event.mesh_node.name;
         else if (event.host) assistant.host = typeof event.host === 'string' ? event.host : event.host.name;
         if (event.screenshot_context) assistant.screenshot_context = event.screenshot_context;
         if (event.note_context) assistant.note_context = event.note_context;
         Object.assign(assistant, answerEvidence(event)); measure(); update();
-      });
+    };
+    if(options.runRequest){await options.runRequest(payload,route.path,eventUpdate);}
+    else if (route.streaming) {
+      await client.stream(route.path, payload, eventUpdate);
     } else {
-      const result = await client.json<AnswerEvidence & { reply: string; conversation_id: string; model_used?: string; brain_used?: string; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext }>(route.path, 'POST', payload);
+      const result = await client.json<AnswerEvidence & { reply: string; conversation_id: string; model_used?: string; brain_used?: string; host?:ChatEvent['host'];inference_host?:ChatEvent['inference_host']; screenshot_context?: ScreenshotReceipt; note_context?: NoteContext }>(route.path, 'POST', payload);
       guard.assertCurrent(ticket, options.isCurrent());
       if (!result || typeof result.reply !== 'string' || !result.reply.trim()) throw new Error('TLI returned no answer. Review the conversation before sending again.');
       if (result.conversation_id) options.onConversation(result.conversation_id);
       assistant.content = result.reply; assistant.model = result.model_used; assistant.provider = result.brain_used;
+      if(result.host)assistant.host=typeof result.host==='string'?result.host:result.host.name;
+      if(result.inference_host)assistant.inference_host=result.inference_host;
       if (result.screenshot_context) assistant.screenshot_context = result.screenshot_context;
       if (result.note_context) assistant.note_context = result.note_context;
       Object.assign(assistant, answerEvidence(result));

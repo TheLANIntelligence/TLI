@@ -17,16 +17,21 @@ import { SaveNoteReview } from '../../src/save-note-review';
 import { CaseContextReview } from '../../src/case-context-review';
 import { validateCaseContext } from '../../src/case-context';
 import type { Conversation, Device, ImageTask, Photo, Report, Message, SourceRef } from '../../src/types';
+import { RichMessage } from '../../src/rich-message';
+import { DocumentReview } from '../../src/document-review';
+import { ComputePicker } from '../../src/compute-picker';
+import type { SelectedDocument } from '../../src/documents';
 
 export default function AskScreen() {
   const t = useTheme(), router = useRouter(), state = useCompanion(), headerHeight = useHeaderHeight();
-  const params = useLocalSearchParams<{ target?: string; report?: string; conversation?: string; prompt?: string; photo?: string }>();
+  const params = useLocalSearchParams<{ target?: string; report?: string; conversation?: string; run?:string; prompt?: string; photo?: string }>();
   const inventory = useResource<{ devices: Device[] }>('/api/intelligence/devices');
   const reports = useResource<{ reports: Report[] }>('/api/intelligence/diagnostics');
   const conversations = useResource<{ conversations: Conversation[] }>('/api/ai/conversations');
   const [useHistory, setUseHistory] = useState(true);
   const [useSaved, setUseSaved] = useState(true), [saveSource, setSaveSource] = useState<SourceRef>();
   const [reviewCase, setReviewCase] = useState<string>();
+  const [documents,setDocuments]=useState<SelectedDocument[]>([]),[documentReview,setDocumentReview]=useState(false);
   const [draft, setDraft] = useState(''), [target, setTarget] = useState<string>(), [reportId, setReportId] = useState<string>();
   const [photo, setPhoto] = useState<Photo>(), [photoBusy, setPhotoBusy] = useState(false), [error, setError] = useState('');
   const [reviewOpen, setReviewOpen] = useState(false), [imageTask, setImageTask] = useState<ImageTask>('photo');
@@ -46,8 +51,8 @@ export default function AskScreen() {
   const updateDraft = (text: string) => { draftRef.current = text; setDraft(text); };
   const targetDevice = inventory.data?.devices.find(d => d.id === target);
   const report = reports.data?.reports.find(r => r.id === reportId);
-  const contextCount = state.selectedNotes.length + Number(!!state.selectedCase) + Number(!!photo) + Number(!!target) + Number(!!reportId);
-  const contextConflict = !!state.selectedCase && !!(photo || target || reportId || state.selectedNotes.length) || !!state.selectedNotes.length && !!(photo || target || reportId);
+  const contextCount = state.selectedNotes.length + Number(!!state.selectedCase) + Number(!!photo) + Number(!!target) + Number(!!reportId)+documents.length;
+  const contextConflict = !!state.selectedCase && !!(photo || target || reportId || state.selectedNotes.length) || !!state.selectedNotes.length && !!(photo || target || reportId)||!!documents.length&&!!(photo||target||reportId||state.selectedNotes.length||state.selectedCase||state.computeSelection);
   const contextSummary = [state.selectedCase?.title, state.selectedNotes.length ? `${state.selectedNotes.length} selected notes` : '', photo ? 'Photo' : '', target ? targetDevice?.name || 'Selected device' : '', reportId ? 'Saved report' : ''].filter(Boolean).join(' · ');
   const sharingSummary = [!useSaved ? 'Saved-note recall off' : '', !useHistory ? 'Earlier conversation off' : ''].filter(Boolean).join(' · ');
   const openPanel = (next: 'context' | 'status') => { Keyboard.dismiss(); setPanel(next); };
@@ -69,10 +74,11 @@ export default function AskScreen() {
       if (params.prompt) updateDraft(params.prompt);
     } else if (params.target || params.report || params.prompt) setError('Your current draft and context were kept. Finish them before opening another suggested question.');
     if (params.conversation) void changeConversation(params.conversation);
+    if (params.run) void attachRun(params.run);
     if (params.photo) setPanel('context');
     if (params.photo && !state.bootstrap?.capabilities.vision) setError('Photo help needs an available vision model. Configure a vision model on your TLI desktop, then refresh your connection.');
     // Remove consumed navigation parameters so tab revisits never reload or resend.
-    if (Object.keys(params).length) router.setParams({ target: undefined, report: undefined, conversation: undefined, prompt: undefined, photo: undefined });
+    if (Object.keys(params).length) router.setParams({ target: undefined, report: undefined, conversation: undefined, run:undefined, prompt: undefined, photo: undefined });
     // The key represents new navigation context, not unrelated resource refreshes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramsKey]);
@@ -80,13 +86,13 @@ export default function AskScreen() {
   const replacePhoto = (next?: Photo) => { if (photoRef.current) void disposePhoto(photoRef.current.uri); photoRef.current = next; setPhoto(next); setReviewOpen(false); setImageTask('photo'); setComputer('unknown'); setOtherComputer(''); };
   useEffect(() => {
     // A revoked or changed pairing must not carry a private draft into another home.
-    if (previousClient.current !== state.client) { replacePhoto(); updateDraft(''); setTarget(undefined); setReportId(undefined); setError(''); setUseSaved(true); setUseHistory(true); setSaveSource(undefined); setPanel(null); setChooser(null); setReviewCase(undefined); pendingSheetAction.current = null; navigationEpoch.current++; }
+    if (previousClient.current !== state.client) { replacePhoto();setDocuments([]);setDocumentReview(false); updateDraft(''); setTarget(undefined); setReportId(undefined); setError(''); setUseSaved(true); setUseHistory(true); setSaveSource(undefined); setPanel(null); setChooser(null); setReviewCase(undefined); pendingSheetAction.current = null; navigationEpoch.current++; }
     previousClient.current = state.client;
   }, [state.client]);
   useEffect(() => { if (!state.foreground && hadCase.current) { replacePhoto(); updateDraft(''); setReviewCase(undefined); setTarget(undefined); setReportId(undefined); setError(''); hadCase.current = false; } }, [state.foreground]);
-  useEffect(() => { if (!state.foreground) { setPanel(null); setChooser(null); setReviewOpen(false); setSaveSource(undefined); setReviewCase(undefined); pendingSheetAction.current = null; navigationEpoch.current++; } }, [state.foreground]);
+  useEffect(() => { if (!state.foreground) { setDocumentReview(false);setDocuments([]);setPanel(null); setChooser(null); setReviewOpen(false); setSaveSource(undefined); setReviewCase(undefined); pendingSheetAction.current = null; navigationEpoch.current++; } }, [state.foreground]);
   const changeConversation = async (id?: string) => {
-    if (draftRef.current.trim() || photoRef.current || state.selectedCase) { setError('Your draft is still here. Send it or explicitly clear the draft and remove selected case context before replacing this conversation.'); return; }
+    if (draftRef.current.trim() || photoRef.current || state.selectedCase||documents.length) { setError('Your draft is still here. Send it or explicitly clear the draft and remove selected context before replacing this conversation.'); return; }
     const token = ++navigationEpoch.current, client = state.client, text = draftRef.current, selected = photoRef.current;
     try {
       await state.openConversation(id);
@@ -95,6 +101,12 @@ export default function AskScreen() {
       if (draftRef.current === text) updateDraft('');
       if (photoRef.current === selected) replacePhoto();
     } catch (error) { if (mounted.current && clientRef.current === client && token === navigationEpoch.current) setError(errorText(error)); }
+  };
+  const attachRun=async(id:string)=>{
+    if(photoRef.current||documents.length||state.selectedCase||state.selectedNotes.length||target||reportId){setError('Your draft and selected context were kept. Remove the selected context before opening this saved answer.');return;}
+    const client=state.client,token=++navigationEpoch.current;setError('');setChooser(null);
+    try{await state.attachChatRun(id);}catch(e){if(mounted.current&&clientRef.current===client&&token===navigationEpoch.current)setError(errorText(e));}
+    // Following accepted work never removes or resends an unsent composer draft.
   };
   const pick = async (source: 'camera' | 'library') => {
     if (photoBusy || state.sending || state.loadingConversation) return; setPhotoBusy(true); setError('');
@@ -109,7 +121,7 @@ export default function AskScreen() {
     const text = draft, selected = photo, client = state.client;
     setError('');
     try {
-      const reviewedContext = { target_id: target, diagnostic_id: reportId, photo: selected, note_refs: state.selectedNotes.map(({ id, revision }) => ({ id, revision })), case_ref: state.selectedCase?.ref, use_saved_memory: useSaved, use_conversation_history: useHistory };
+      const reviewedContext = { target_id: target, diagnostic_id: reportId, photo: selected, note_refs: state.selectedNotes.map(({ id, revision }) => ({ id, revision })), case_ref: state.selectedCase?.ref, use_saved_memory: useSaved, use_conversation_history: useHistory,documents };
       validateCaseContext(reviewedContext, text);
       validateNoteContext(reviewedContext);
       const context = reviewedImageContext(reviewedContext, imageReview.data, imageTask, computer, otherComputer);
@@ -119,6 +131,7 @@ export default function AskScreen() {
       if (mounted.current && clientRef.current === client) {
         if (draftRef.current === text) updateDraft('');
         if (photoRef.current === selected) replacePhoto();
+        setDocuments([]);
         setUseHistory(true);
         void conversations.reload();
       }
@@ -129,10 +142,11 @@ export default function AskScreen() {
   return <KeyboardAvoidingView testID="chat-screen" style={{ flex: 1, minHeight: 0, backgroundColor: t.background }} behavior={Platform.OS === 'ios' ? 'padding' : Platform.OS === 'android' ? 'height' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}>
     <View style={{ flex: 1, minHeight: 0 }} onLayout={event => setCompactChat(event.nativeEvent.layout.height < 330)}>
     <View testID="chat-status" style={{ paddingHorizontal: 16, paddingVertical: 4, borderBottomWidth: 1, borderColor: t.border }}>
-      <Row style={{ gap: 8 }}><View style={{ flex: 1, minWidth: 0 }}><Copy size={13} weight="600" numberOfLines={1}>{state.bootstrap?.node.name || state.pairing?.node_name || 'Your TLI'}</Copy><Copy size={12} muted numberOfLines={2}>{!state.foreground ? 'Paused · earlier status' : state.connection === 'checking' ? 'Checking connection…' : state.connection !== 'connected' ? 'Connection unavailable · draft kept' : state.bootstrap?.ai?.status === 'available' ? 'Connected · AI available at last check' : state.bootstrap?.ai?.status === 'unavailable' ? 'Connected · AI unavailable' : 'Connected · AI readiness unknown'}</Copy></View><ChatAction title="Details" accessibilityLabel="Connection details" onPress={() => openPanel('status')} /></Row>
+      <Row style={{ gap: 8 }}><View style={{ flex: 1, minWidth: 0 }}><Copy size={13} weight="600" numberOfLines={1}>{state.bootstrap?.node.name || state.pairing?.node_name || 'Your TLI'}</Copy><Copy size={12} muted numberOfLines={2}>{!state.foreground ? 'Paused · earlier status' : state.connection === 'checking' ? 'Checking connection…' : state.connection !== 'connected' ? 'Connection unavailable · draft kept' : state.computeSelection?'Connected · reviewed LAN model selected':state.bootstrap?.ai?.status === 'available' ? 'Connected · AI available at last check' : state.bootstrap?.ai?.status === 'unavailable' ? 'Connected · AI unavailable' : 'Connected · AI readiness unknown'}</Copy></View><ChatAction title="Details" accessibilityLabel="Connection details" onPress={() => openPanel('status')} /></Row>
     </View>
     {!compactChat && <Row style={{ paddingHorizontal: 12, gap: 6, borderBottomWidth: 1, borderColor: t.border }}><Copy size={12} muted style={{ flex: 1 }}>{state.conversationId ? 'Shared chat' : 'New chat'}</Copy><ChatAction title="New chat" disabled={state.sending || state.loadingConversation} onPress={() => void changeConversation()} /><ChatAction title="History" accessibilityLabel="History" disabled={state.sending} onPress={() => { Keyboard.dismiss(); setChooser('conversations'); void conversations.reload(); }} /></Row>}
     <ScrollView testID="chat-messages" ref={list} style={{ flex: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive" contentContainerStyle={{ padding: 16, gap: 14, flexGrow: 1 }} onContentSizeChange={() => { if (state.sending) list.current?.scrollToEnd({ animated: false }); }}>
+      {!!state.workspaceNotice&&<Notice structured><Copy size={13}>{state.workspaceNotice}</Copy>{state.conversationId&&!state.sending&&<Button secondary title="Refresh shared conversation" disabled={state.loadingConversation} onPress={()=>void changeConversation(state.conversationId)}/>}</Notice>}
       {!state.messages.length && <Hero eyebrow="Your private AI" title="What's on your mind?" detail="Think it through. Make something. Or simply ask." icon="sparkles-outline">
         <Row style={{ flexWrap: 'wrap', gap: 8 }}>{([
           ['Explain something', 'Help me understand '], ['Help me write', 'Help me write '], ['Make a plan', 'Help me plan '],
@@ -142,11 +156,11 @@ export default function AskScreen() {
         <Label>{message.role === 'user' ? 'You' : 'TLI'}</Label>
         {message.photo && <Copy size={12} muted>Photo attached to this question · no image retention</Copy>}
         {message.role === 'assistant' && answerReport(message).supplied && <ReportFacts value={answerReport(message).facts} compact />}
-        <Copy selectable>{message.content || (message.state === 'streaming' ? 'Waiting for TLI to respond…' : 'No response text was received.')}</Copy>
+        {message.role==='assistant'?<RichMessage text={message.content||(message.state==='streaming'?'Waiting for TLI to respond…':'No response text was received.')}/>:<Copy selectable>{message.content}</Copy>}
         {message.state === 'interrupted' && <Copy size={13} style={{ color: t.amber }}>Response interrupted · may be incomplete</Copy>}
         {message.role === 'assistant' && <AnswerDetails message={message} />}
         {message.role === 'assistant' && validSourceRef(message.source_ref) && message.state !== 'streaming' && message.state !== 'interrupted' && <MessageActions disabled={state.sending} saveDisabled={state.connection !== 'connected'} save={() => setSaveSource(message.source_ref)} link={() => router.push({ pathname: '/cases', params: { kind: 'chat', evidence: message.source_ref!.conversation_id, message_index: String(message.source_ref!.message_index) } })} />}
-        {message.role === 'assistant' && (message.model || message.host || message.provider) && <Copy muted size={12}>{[message.host, message.provider, message.model].filter(Boolean).join(' · ')}</Copy>}
+        {message.role === 'assistant' && (message.model || message.host || message.inference_host?.name || message.provider) && <Copy muted size={12}>{[message.inference_host?.name||message.host, message.provider, message.model].filter(Boolean).join(' · ')}</Copy>}
         {message.role === 'assistant' && screenshotReceiptText(message.screenshot_context) && <Copy muted size={12}>{screenshotReceiptText(message.screenshot_context)}</Copy>}
         {message.role === 'assistant' && noteReceiptText(message.note_context) && <View style={{ gap: 8 }}><Copy muted size={12}>{noteReceiptText(message.note_context)}</Copy>{message.note_context!.notes.map(note => <Button secondary key={note.id} title={`Open note: ${note.title || 'Untitled note'}`} onPress={() => router.push({ pathname: '/notebook', params: { note: note.id, revision: note.revision } })} disabled={state.sending} />)}</View>}
       </View>)}
@@ -163,6 +177,11 @@ export default function AskScreen() {
     <Modal visible={!!panel && state.foreground} animationType="slide" presentationStyle="pageSheet" onDismiss={contextDismissed} onRequestClose={() => setPanel(null)}><SafeAreaView testID={panel === 'context' ? 'chat-context-sheet' : 'chat-status-sheet'} style={{ flex: 1, backgroundColor: t.background }}><View style={{ paddingHorizontal: 18, borderBottomWidth: 1, borderColor: t.border }}><Row style={{ justifyContent: 'space-between' }}><Copy size={20} weight="600">{panel === 'context' ? 'Message context' : 'Connection details'}</Copy><IconButton icon="close-outline" label={panel === 'context' ? 'Close message context' : 'Close connection details'} onPress={() => setPanel(null)} /></Row></View><Screen contentContainerStyle={{ padding: 18, gap: 16 }}>
       {panel === 'status' ? <><Copy weight="600">{state.bootstrap?.node.name || state.pairing?.node_name || 'Your TLI'}</Copy><ConnectionNotice /><Copy selectable muted size={13}>{state.pairing?.origin}</Copy><Copy muted size={12}>Last connected {formatTime(state.checkedAt)}</Copy><AIReadinessNotice /><Copy muted size={13}>Replies use your TLI host and its configured provider. A connected host does not guarantee an available AI model.</Copy></> : <>
       <Copy muted size={14}>Optional context for your next message. Nothing is sent until you press Send.</Copy>
+      <ComputePicker/>
+      <Button secondary title="Documents" icon="document-attach-outline" disabled={state.sending||state.loadingConversation} onPress={()=>leaveContext(()=>setDocumentReview(true))}/>
+      {documents.map(d=><Row key={d.name}><Copy style={{flex:1}} size={14}>{d.name}</Copy><IconButton icon="close-outline" label={`Remove ${d.name}`} disabled={state.sending} onPress={()=>setDocuments(old=>old.filter(v=>v!==d))}/></Row>)}
+      <Button secondary title="Build an app" icon="code-slash-outline" onPress={()=>leaveContext(()=>router.push('/builder'))}/>
+      <Button secondary title="Search all conversations" icon="search-outline" onPress={()=>leaveContext(()=>router.push('/history'))}/>
       {state.selectedCase && <Card><Label>Case selected for this question</Label><Copy weight="600">{state.selectedCase.title}</Copy><Copy muted size={12}>Saved {formatTime(state.selectedCase.updated_at)} · {state.selectedCase.ref.step_ids.length} whole steps · {state.selectedCase.ref.evidence_refs.length} link descriptions · resolution {state.selectedCase.ref.include_resolution ? 'included' : 'excluded'}. Linked bodies, earlier conversation and automatic saved-note recall are excluded.</Copy><Button secondary title="Review case selection" disabled={state.sending || state.loadingConversation} onPress={() => leaveContext(() => setReviewCase(state.selectedCase!.ref.id))} /><Button secondary title="Remove selected case" disabled={state.sending || state.loadingConversation} onPress={() => { try { state.selectCase(); } catch (e) { setError(errorText(e)); } }} />{(photo || target || reportId || !!state.selectedNotes.length) && <Notice error>Cases need their own question. Remove the other attached context or remove this case; nothing is removed automatically.</Notice>}</Card>}
       {!!state.selectedNotes.length && <Card><Label>Notes attached to this question</Label><Copy muted size={12}>Reviewed versions · provided to AI only when you send · no device actions.</Copy>{state.selectedNotes.map(note => <Row key={note.id}><View style={{ flex: 1 }}><Copy size={14}>{note.title}</Copy><Copy muted size={12}>{note.updated_at ? formatTime(note.updated_at) : 'Updated time unavailable'}</Copy></View><IconButton icon="close-outline" label={`Remove attached note ${note.title}`} disabled={state.sending || state.loadingConversation} onPress={() => { try { state.selectNotes(state.selectedNotes.filter(item => item.id !== note.id)); } catch (error) { setError(errorText(error)); } }} /></Row>)}
         {(photo || target || reportId) && <><Notice error>Notes need their own question. Remove the photo, device and report context, or remove the notes before sending.</Notice><Button secondary title="Remove photo, device and report context" disabled={state.sending} onPress={() => { replacePhoto(); setTarget(undefined); setReportId(undefined); }} /></>}
@@ -188,6 +207,7 @@ export default function AskScreen() {
       {chooser === 'devices' ? <><Copy muted>The latest saved diagnostic for this device will be attached when available.</Copy><Button secondary title="No device context" onPress={() => selectTarget()} />{inventory.data?.devices.map(device => <Card key={device.id}><Copy weight="600">{device.name}</Copy><Copy muted size={13}>{device.room || device.kind}</Copy><Button secondary title="Choose this device" onPress={() => selectTarget(device)} /></Card>)}{inventory.error && <Notice error>{inventory.error}</Notice>}</> : <><Copy muted>These conversations are shared with your TLI desktop.</Copy>{conversations.data?.conversations.map(conversation => <Card key={conversation.id}><Copy weight="600">{conversation.title}</Copy><Copy muted size={12}>{formatTime(conversation.last_updated)}</Copy><Button secondary title="Continue conversation" disabled={state.loadingConversation} onPress={() => void changeConversation(conversation.id)} /></Card>)}{conversations.error && <Notice error>{conversations.error}</Notice>}{!conversations.busy && !conversations.data?.conversations.length && <Copy muted>No saved conversations yet.</Copy>}</>}
     </Screen></SafeAreaView></Modal>
     <SaveNoteReview source={saveSource} close={() => setSaveSource(undefined)} />
+    <DocumentReview open={documentReview} documents={documents} close={()=>setDocumentReview(false)} use={setDocuments}/>
     <CaseContextReview caseId={reviewCase} close={() => setReviewCase(undefined)} />
     {photo && <PhotoReview photo={photo} open={reviewOpen} onClose={() => setReviewOpen(false)} disabled={state.sending} review={imageReview} task={imageTask} setTask={setImageTask} computer={computer} setComputer={setComputer} other={otherComputer} setOther={setOtherComputer} reportId={reportId} clearReport={() => setReportId(undefined)} />}
   </KeyboardAvoidingView>;

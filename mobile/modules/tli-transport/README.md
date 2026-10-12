@@ -21,7 +21,9 @@ reject and redirects are never followed. Cancellation rejects with `E_CANCELLED`
 `configure` and `reset` cancel all prior requests, discard old connection pools
 and clear previous trust. Failed reconfiguration leaves the module unconfigured.
 
-The beta accepts canonical numeric RFC1918 or IPv4 link-local HTTPS origins only.
+Legacy pairings use canonical numeric RFC1918 or IPv4 link-local HTTPS origins.
+Android also supports reviewed `.local` origins as described below; iOS retains
+the numeric-address contract for this release.
 The actual URL hostname must match the QR certificate's SANs. New certificates
 require a fresh desktop pairing; unknown certificates are never learned from a
 network response. No credential is sent until exact-certificate, date and
@@ -85,8 +87,8 @@ the preview release gate). Gradle logs passed/skipped/failed test names so EAS
 build logs contain the test evidence. The podspec includes an XCTest `Tests` test specification for
 the iOS helpers. These tests require their platform build toolchains.
 
-Before distributing even the private beta, verify on a physical iPhone and
-Android phone:
+Before distributing a native build on a platform, verify on its physical phone
+(this release targets Android; iPhone delivery remains pending):
 
 1. Pair and POST over the actual generated self-signed TLI certificate; confirm
    token-by-token SSE, UTF-8 text, cancellation and JSON photo uploads.
@@ -103,3 +105,33 @@ Android phone:
 Windows can run TypeScript/autolinking checks and Android tooling when installed.
 Building/testing Swift and iOS TLS requires a Mac/Xcode or EAS plus physical
 iPhone testing. Static checks are not a substitute for this transport gate.
+## Native additions: reviewed reconnects and bounded files
+
+`request()` remains the text/JSON/SSE interface. `uploadFile()` sends raw bytes
+(not multipart), up to 8 MiB, from a canonical path inside the app cache.
+`downloadFile()` writes at most 16 MiB into a randomly named app-cache file and
+returns its `fileUri`; non-2xx responses return bounded text and remove the file.
+Both share the existing cancellation, exact certificate pin, hostname validation
+and redirect refusal. Failed/cancelled downloads are removed. The UI should use
+the platform share sheet only after a successful explicit download.
+
+On Android, `discover({timeoutMs})` returns bounded, untrusted `_tli._tcp.` hints.
+`probeConnection()` validates the saved Ed25519 public key/node ID using a fresh
+nonce and exact-pinned HTTPS before any bearer is sent. For `.local` connections,
+`configure()` requires saved `nodeId`, `publicKey`, and 1–8 private literal
+`resolvedAddresses`; it runs that probe before activating the connection. Its
+client routes only that hostname to those candidates while retaining the
+hostname in SNI, certificate checks, and HTTP Host. It never uses general DNS or
+redirects as a fallback. Numeric IPv4 configurations retain their original
+behavior. The helper remains on its separately reviewed numeric address.
+
+Only the single private address observed on the successfully proved socket is
+activated for authenticated requests. A proof does not authorize the rest of a
+discovery result. Every new route/configuration repeats the signed challenge;
+every later TLS socket validates the same exact leaf and hostname. The identity
+proof is tied to the configured route, not repeated for each application request.
+
+Discovery/probe and hostname reconnect are explicitly unsupported on iOS in this
+Android release. iOS retains numeric-IP pinned transport and the bounded file
+APIs. No Expo Go/web real-network fallback is supplied.
+

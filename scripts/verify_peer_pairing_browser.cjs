@@ -87,7 +87,7 @@ async function main() {
         await dialog.waitFor({state:'visible'});
       };
       const close=()=>dialog.getByRole('button',{name:'Close',exact:true}).click();
-      const confirm=()=>dialog.getByRole('button',{name:'Codes match — allow messages',exact:true});
+      const confirm=()=>dialog.getByRole('button',{name:'Codes match — connect',exact:true});
       const checkboxes=()=>dialog.locator('input[type="checkbox"]');
       // Polling an existing outgoing request may refresh its remote status; it
       // never starts, confirms or cancels the locally reviewed connection.
@@ -100,10 +100,12 @@ async function main() {
         await entry.waitFor({state:'attached'});
         assert.equal(await entry.locator('xpath=..').locator('.mcd-node-name').textContent(),peer.name);
         assert.equal(await page.locator('[data-pairing-device-id="fixture-studio"]').count(),0);
-        assert.equal(await page.locator('[data-pairing-device-id="fixture-inference-only"]').count(),0);
+        assert.equal(await page.locator('[data-pairing-device-id="fixture-inference-only"]').count(),1);
         assert.equal(await page.locator('[data-pairing-device-id="fixture-address-unavailable"]').count(),0);
         assert.equal(await entry.isVisible(),true,'The Computers connection entry must be reachable in the visible interface');
-        await entry.click();
+        // The production card now enters the persistent connection controller.
+        // Exercise this lower-level review surface directly in this suite.
+        await open({deviceId:peer.id,name:peer.name});
         await dialog.waitFor({state:'visible'});
         await dialog.getByRole('heading',{name:peer.name,exact:true}).waitFor();
         const start=dialog.getByRole('button',{name:'Request connection',exact:true});

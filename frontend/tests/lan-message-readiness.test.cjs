@@ -132,6 +132,27 @@ test('a failed directory refresh cannot reuse stale permission or erase the curr
   assert.match(f.notice().textContent, /could not be checked/);
 });
 
+test('previous discoveries stay collapsed while their exact conversation and draft remain selectable', async () => {
+  const old = {...pending('old-installation'), previous_discovery:true, superseded_by:'current-installation'};
+  const f = fixture([old, pending('current-installation')]); await f.api.onOpen();
+  const list = f.nodes.get('tli-chat-buddies-list');
+  assert.equal(list.children.length, 2);
+  assert.equal(list.children[0]['data-node-id'], 'current-installation');
+  const previous = list.children[1];
+  assert.equal(previous.tagName, 'details'); assert.equal(previous.open, false);
+  assert.match(previous.children[0].textContent, /Previous discoveries \(1\)/);
+  assert.equal(f.nodes.get('tli-chat-buddies-meta').textContent, '1/1');
+  await previous.children[1].emit('click'); await tick(); f.input.value = 'Old identity draft';
+  assert.match(f.notice().textContent, /older discovery record/);
+  assert.equal(f.send.disabled, true);
+  await list.children[0].emit('click'); await tick(); assert.equal(f.input.value, '');
+  f.input.value = 'Current identity draft';
+  await list.children[1].children[1].emit('click'); await tick();
+  assert.equal(f.input.value, 'Old identity draft'); assert.equal(f.sends().length, 0);
+  assert.equal(list.children[1].open, true);
+  await f.refresh(); assert.equal(f.input.value, 'Old identity draft');
+});
+
 test('remote rejection retains the draft and retries only on an explicit action with the same message identifier', async () => {
   const f = fixture([reviewed()]); await f.api.onOpen(); await f.select(0); f.input.value = 'Hello Dell';
   f.delivery({ok:false, status:409, data:{detail:{code:'peer_review_required', message:'Review FOX on the other computer.'}}});

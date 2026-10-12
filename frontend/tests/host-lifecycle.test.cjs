@@ -22,7 +22,7 @@ function fixture(handler,{url=currentURL,userAgent='Desktop test',mobile=false}=
  document={readyState:'complete',hidden:false,activeElement:null,getElementById:id=>nodes[id]||null,addEventListener:(name,fn)=>(docEvents[name]||=[]).push(fn)};
  const location=new URL(url);location.assign=next=>navigations.push(next);
  const window={location,crypto:{randomUUID:()=> '11111111-1111-4111-8111-111111111111'},TLIHostIdentity:{get:()=>({status:'known'})},addEventListener:(name,fn)=>(events[name]||=[]).push(fn)};
- const ctx=vm.createContext({window,document,navigator:{userAgent,userAgentData:{mobile}},URL,AbortController,Uint8Array,Date,console,setTimeout:(fn,ms)=>{timers.set(++serial,{fn,ms});return serial;},clearTimeout:id=>timers.delete(id),fetch:async(url,options)=>{const body=options.body?JSON.parse(options.body):null;calls.push({url,options,body});let result=handler?await handler(url,body,options):undefined;if(result===undefined)result=url===base?capabilities:url===base+'/preview'?preview(body.action):url===base+'/confirm'?{schema_version:1,status:'accepted',request_id:body.request_id,action:nodes['tli-host-lifecycle-title'].textContent.includes('Quit')?'quit':'restart'}:identity;return result&&typeof result.json==='function'?result:{ok:true,status:200,json:async()=>result};}});
+ const ctx=vm.createContext({window,document,navigator:{userAgent,userAgentData:{mobile}},URL,URLSearchParams,AbortController,Uint8Array,Date,console,setTimeout:(fn,ms)=>{timers.set(++serial,{fn,ms});return serial;},clearTimeout:id=>timers.delete(id),fetch:async(url,options)=>{const body=options.body?JSON.parse(options.body):null;calls.push({url,options,body});let result=handler?await handler(url,body,options):undefined;if(result===undefined)result=url===base?capabilities:url===base+'/preview'?preview(body.action):url===base+'/confirm'?{schema_version:1,status:'accepted',request_id:body.request_id,action:nodes['tli-host-lifecycle-title'].textContent.includes('Quit')?'quit':'restart'}:identity;return result&&typeof result.json==='function'?result:{ok:true,status:200,json:async()=>result};}});
  vm.runInContext(source,ctx);
  return {nodes,window,document,calls,timers,navigations,async open(action='restart'){await nodes['tli-host-settings-'+action].click();await flush();},async event(name){for(const fn of events[name]||[])await fn();await flush();},async visibility(hidden){document.hidden=hidden;for(const fn of docEvents.visibilitychange||[])await fn();await flush();},async poll(){const entry=[...timers].find(([,v])=>v.ms===1000||v.ms===2000);if(entry){timers.delete(entry[0]);await entry[1].fn();await flush();}}};
 }
@@ -32,6 +32,29 @@ test('restart and quit use native review, fresh capabilities and explicit confir
  assert.deepEqual(f.calls.map(c=>[c.url,c.options.method]),[[base,'GET'],[base+'/preview','POST']]);assert.equal(f.nodes['tli-host-lifecycle-confirm'].disabled,false);
  await f.nodes['tli-host-lifecycle-cancel'].click();assert.equal(f.document.activeElement,f.nodes['tli-host-settings-restart']);assert.equal(f.calls.length,2);
  await f.open('quit');await f.nodes['tli-host-lifecycle-confirm'].click();assert.equal(f.calls.at(-1).url,base+'/confirm');assert.deepEqual(f.calls.at(-1).body,{preview_id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',request_id:'11111111111141118111111111111111'});assert.match(f.nodes['tli-host-lifecycle-status'].textContent,/acknowledgement does not prove/);assert.equal([...f.timers.values()].some(t=>t.ms===1000),false);
+});
+
+test('connection setup handoff adds only a continuation at explicit reviewed navigation',async()=>{
+ const next='https://localhost:8443/';
+ const f=fixture((url,body)=>url===base+'/preview'?preview('restart',{next_url:next}):undefined);
+ let handoffs=0;
+ f.window.TLIConnectDevice={isOpen:()=>true,resumeURL:value=>{handoffs++;assert.equal(value,next);return value+'#connect_device=computer&setup_receipt='+'a'.repeat(32);}};
+ await f.open();await f.nodes['tli-host-lifecycle-confirm'].click();assert.equal(handoffs,1);assert.equal(f.navigations.length,0);
+ await f.nodes['tli-host-lifecycle-reload'].click();assert.equal(handoffs,1);assert.equal(f.navigations.length,1);
+ assert.equal(f.calls.filter(c=>c.url===base+'/confirm').length,1);assert.equal(f.calls.some(c=>c.url.startsWith('https:')),false);
+});
+
+test('accepted setup restart retains only reviewed navigation after a background session lock',async()=>{
+ const next='https://localhost:8443/';
+ const f=fixture((url,body)=>url===base+'/preview'?preview('restart',{next_url:next}):undefined);
+ f.window.TLIConnectDevice={isOpen:()=>true,resumeURL:()=>next+'#connect_device=computer&peer=peer-one&setup_receipt='+'b'.repeat(32)+'&token=private-token&pin=1234&grants=inference'};
+ await f.open();await f.nodes['tli-host-lifecycle-confirm'].click();
+ const link=f.nodes['tli-host-restart-handoff'];assert.equal(link.hidden,false);
+ // This is the same lock event dispatched when a background fetch receives401.
+ f.window.TLIConnectDevice={isOpen:()=>false,resumeURL:()=>{throw Error('Guide was cleared');}};
+ await f.event('tli-session-locked');assert.equal(f.nodes['tli-host-lifecycle-dialog'].open,false);assert.equal(link.hidden,false);
+ const destination=link.getAttribute('href');assert.equal(new URL(destination).origin,'https://localhost:8443');assert.match(destination,/setup_receipt=b{32}/);assert.doesNotMatch(destination,/token|pin|grants|private/);
+ assert.equal(f.navigations.length,0);assert.equal(f.calls.filter(c=>c.url===base+'/confirm').length,1);
 });
 test('remote browsers and mobile loopback cannot request application control',async()=>{
  for(const options of [{url:'https://192.168.1.30:8000/'},{mobile:true},{userAgent:'Mozilla/5.0 iPhone Mobile'}]){const f=fixture(null,options);await f.open();assert.equal(f.calls.length,0);assert.equal(f.nodes['tli-host-settings-quit'].disabled,true);assert.match(f.nodes['tli-host-lifecycle-help'].textContent,/Remote browsers and phones/);}

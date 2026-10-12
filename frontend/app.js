@@ -652,7 +652,7 @@ const CHAT_HISTORY_DRAFT_ID = "__draft__";
 let currentConversationId = null;  // tracks active conversation thread
 window.TLIConversationLoad = {
   contract: "v1", generation: 0,
-  invalidate() { this.generation++; },
+  invalidate() { this.generation++; this.loading = false; },
   deleted(id) {
     this.invalidate();
     if (id && currentConversationId !== id) return;
@@ -1233,6 +1233,12 @@ function appendMessage(role, text, options = {}) {
 // Bundled AI SSE Streaming Helper (POST with GET fallback)
 // ===============================
 async function tliBundledChatStream({ message, raw_input, session_id, active_panel, max_tokens, temperature, image_b64, image_mime, onDelta, onMeta, signal, ...context }) {
+  if (window.TLIWorkspace) {
+    const result = await window.TLIWorkspace.chat({ ...context, message, raw_input: raw_input || '', conversation_id: session_id || null,
+      active_panel: active_panel || null, max_tokens: max_tokens ?? 300, temperature: temperature ?? 0.2,
+      image_b64: image_b64 || null, image_mime: image_mime || null }, {signal, onMeta, onDelta, chatPath:'/api/ai/chat/stream'});
+    if (result) return true;
+  }
   const res = await fetch("/api/ai/chat/stream", {
     method: "POST", signal,
     headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
@@ -2799,6 +2805,7 @@ async function sendChat() {
   const sendBtn = $("chat-send-btn");
   const abortBtn = $("abort-chat-btn");
   if (!input || !sendBtn || !abortBtn || sendBtn.disabled) return;
+  if (window.TLIConversationLoad?.loading) { showToast('Wait for the saved conversation to finish loading before sending.', 'info'); return; }
 
   const requestImageB64 = _chatImageB64, requestImageMime = _chatImageMime;
   const requestImageVersion = _chatImageReadVersion;
@@ -2864,7 +2871,8 @@ const requestController = new AbortController();
 inFlightController = requestController;
 abortBtn.disabled = false;
 let responseOutcome = null, responseBubble = null, requestStillCurrent = () => false;
-// Stop only ends this browser's wait. It cannot attest to cancellation of host actions.
+// Managed runs receive an explicit cancellation request. Previously completed
+// actions remain recorded; the legacy transport can only stop its browser wait.
 const waitForResponse = promise => new Promise((resolve, reject) => {
   const stopped = () => { const error = new Error('You stopped waiting for this response.'); error.name = 'AbortError'; reject(error); };
   if (requestController.signal.aborted) { stopped(); return; }
@@ -3014,11 +3022,6 @@ try {
   }
 } catch (e) { if (requestController.signal.aborted) throw e; }
 
-// If a LAN AI peer is available but local bundled AI is off, force the /api/ai/chat
-// path anyway — the backend already has mesh routing built in and will proxy to the peer.
-if (!useBundled && AIStatus.lan.available) {
-  useBundled = true;
-}
 if (checkingAIStatus) useBundled = true;
 
 if (requestImageB64 || requestContext.note_refs?.length || requestContext.documents?.length || requestContext.case_ref || /^(?:turn|switch|toggle|check|run .*diagnostics)\b/i.test(text)) useBundled = true;
@@ -3124,12 +3127,7 @@ window.TLIMemory?.decorateMessage(userBubble, { source_ref: screenshotMeta?.user
 }
 
 
-const res = await waitForResponse(fetch(endpoint, {
-
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: requestController.signal,
-      body: JSON.stringify({
+const payload = {
         ...requestContext,
         device_id: currentDeviceId || "dev-browser",
         message: text,
@@ -3142,7 +3140,10 @@ const res = await waitForResponse(fetch(endpoint, {
         conversation_id: currentConversationId || null,
         include_vault_secrets: secretKeys.length > 0,         // vault hook
         secret_keys: secretKeys.length ? secretKeys : null    // vault hook
-      })
+      };
+    const managed = window.TLIWorkspace ? await window.TLIWorkspace.chat(payload, { signal: requestController.signal, chatPath: '/chat' }) : null;
+    const res = managed ? new Response(JSON.stringify(managed), { status: 200, headers: { 'Content-Type': 'application/json' } }) : await waitForResponse(fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: requestController.signal, body: JSON.stringify(payload)
     }));
     if (!res.ok) {
       let detail = "HTTP " + res.status;
@@ -3189,6 +3190,7 @@ if (!data.conversation_id && data.session_id) {
 window.currentConversationId = currentConversationId;
 thinkingBubble.textContent = reply;
     thinkingBubble.classList.remove("chat-bubble-thinking");
+    window.TLILanInference?.annotateReply(thinkingBubble, data);
     window.TLINotebook?.annotateReply(thinkingBubble, data);
     window.TLINotebook?.sent(requestContext);
     window.TLIDocuments?.sent(requestContext, data);
@@ -3785,20 +3787,25 @@ async function loadConversation(convId, title, options = {}) {
   }
   if (options.restore && (navigation.generation || currentConversationId || draft.trim())) return false;
   const generation = ++navigation.generation;
+  navigation.loading = true;
   const current = () => generation === navigation.generation && (input?.value || "") === draft && !$("chat-send-btn")?.disabled;
   // A document question belongs to the conversation in which it was sent.
   // Invalidate its callbacks before awaiting another conversation's history.
-  window.TLIDocuments?.clear();
-  window.TLICaseContext?.clear();
-  window.TLIMemory?.clear();
+  if (!options.refresh) {
+    window.TLIDocuments?.clear();
+    window.TLICaseContext?.clear();
+    window.TLIMemory?.clear();
+  }
   try {
     const r = await fetch(`/api/ai/conversations/${encodeURIComponent(convId)}`, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const conv = await r.json();
     if (!current()) return false;
     if (!Array.isArray(conv.messages)) throw new Error("Conversation messages were not returned.");
-    window.TLIIntelligence?.clearContext?.();
-    // Set as active conversation
+    const commitSelection = await window.TLILanInference?.prepareConversation?.(convId, { current });
+    if (!current() || (commitSelection && !commitSelection())) return false;
+    if (!options.refresh) window.TLIIntelligence?.clearContext?.();
+    // Commit identity, AI selection and visible history together after both reads.
     currentConversationId = convId;
     window.currentConversationId = convId;
     if (typeof chatHistory !== "undefined") chatHistory = conv.messages.filter(m => ["user", "assistant"].includes(m.role) && typeof m.content === "string").map(m => ({ role: m.role, content: m.content }));
@@ -3815,13 +3822,13 @@ async function loadConversation(convId, title, options = {}) {
       });
     }
     // Focus input
-    if (!options.restore && input) input.focus();
-    if (!options.restore && typeof showToast === "function") showToast(`Resumed: ${title}`, "info");
+    if (!options.restore && !options.refresh && input) input.focus();
+    if (!options.restore && !options.refresh && typeof showToast === "function") showToast(`Resumed: ${title}`, "info");
     return true;
   } catch (e) {
     if (current() && typeof showToast === "function") showToast("Could not load conversation.", "warn");
     return false;
-  }
+  } finally { if (generation === navigation.generation) navigation.loading = false; }
 }
 
 function addPreviousPrompt(_text) {
@@ -3952,82 +3959,88 @@ function setupNodeSwitcher() {
   const label = document.getElementById("node-switcher-label");
   const items = document.getElementById("node-switcher-items");
   if (!btn || !menu || !items) return;
-
-  // Populate label from device name chip
   const chipName = document.getElementById("device-name-chip");
   if (chipName && label) label.textContent = chipName.textContent.trim() || "This Node";
-
-  async function refreshSwitcher() {
-    try {
-      const dir = await fetch("/mesh/directory", { cache: "no-store" }).then(r => r.json());
-      const devices = Array.isArray(dir.devices) ? dir.devices : [];
-      const thisId = dir.this_device_id || "";
-
-      if (devices.length <= 1) {
-        // Only self — no peers yet
-        items.innerHTML = '<div class="node-switcher-empty">No other nodes on LAN yet</div>';
-        return;
-      }
-
-      const now = Date.now();
-      const ONLINE_MS = 90 * 1000;
-      items.innerHTML = devices.map(d => {
-        const name = d.display_name || d.device_id || "Node";
-        const ip = d.ip || "";
-        const port = d.tli_port || 8000;
-        const isSelf = d.device_id === thisId;
-        const lastSeen = d.last_seen ? new Date(d.last_seen).getTime() : 0;
-        const isOnline = d.is_host || (lastSeen && (now - lastSeen) < ONLINE_MS);
-        const url = ip ? `http://${ip}:${port}` : null;
-
-        if (isSelf) {
-          return `<div class="node-switcher-item node-switcher-item--self" role="menuitem">
-            <span class="node-switcher-item-dot node-switcher-item-dot--self"></span>
-            <span class="node-switcher-item-name">${escapeHtml(String(name))}</span>
-            <span class="node-switcher-item-badge">Here</span>
-          </div>`;
-        }
-        if (!url) {
-          return `<div class="node-switcher-item node-switcher-item--offline" role="menuitem">
-            <span class="node-switcher-item-dot"></span>
-            <span class="node-switcher-item-name">${escapeHtml(String(name))}</span>
-            <span class="node-switcher-item-badge">No IP</span>
-          </div>`;
-        }
-        return `<a class="node-switcher-item${isOnline ? " node-switcher-item--online" : " node-switcher-item--offline"}"
-            href="${url}" target="_blank" rel="noopener" role="menuitem"
-            title="Open ${escapeHtml(String(name))}'s TLI at ${url}">
-          <span class="node-switcher-item-dot${isOnline ? " node-switcher-item-dot--online" : ""}"></span>
-          <span class="node-switcher-item-name">${escapeHtml(String(name))}</span>
-          <span class="node-switcher-item-ip">${escapeHtml(ip)}:${port}</span>
-        </a>`;
-      }).join("");
-    } catch {
-      items.innerHTML = '<div class="node-switcher-empty">Could not load nodes</div>';
+  let records = [], generation = 0, locked = false, request = null, unsubscribe = null;
+  const element = (tag, text, cls) => { const node = document.createElement(tag); if (text != null) node.textContent = text; if (cls) node.className = cls; return node; };
+  function closeMenu() {
+    menu.classList.add('hidden'); btn.setAttribute('aria-expanded','false');
+    unsubscribe?.(); unsubscribe = null;
+  }
+  function rowState(record) {
+    const connection = window.MeshService?.projectConnection?.(record.connection);
+    const reviewed = record.status === 'allowed' && record.trust_state === 'verified';
+    const online = reviewed && connection?.state === 'connected' && connection.fresh === true;
+    const state = record.status === 'blocked' ? 'Access removed' : !reviewed ? 'Needs approval' : online ? 'Connected' :
+      connection?.state === 'checking' ? 'Checking' : connection?.state === 'unreachable' && connection.fresh ? 'Unreachable' : 'Not checked';
+    return {reviewed,online,state};
+  }
+  function expireStatuses() {
+    if (locked || menu.classList.contains('hidden')) return;
+    const byId = new Map(records.map(record => [record.device_id,record]));
+    for (const row of items.querySelectorAll('.node-switcher-item')) {
+      const record = byId.get(row.dataset.deviceId); if (!record) continue;
+      const {online,state} = rowState(record);
+      row.classList.toggle('node-switcher-item--online',online);
+      row.querySelector('.node-switcher-item-dot')?.classList.toggle('node-switcher-item-dot--online',online);
+      const badge = row.querySelector('.node-switcher-item-badge'); if (badge) badge.textContent = state;
     }
   }
-
-  // Toggle dropdown
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    const isOpen = !menu.classList.contains("hidden");
-    if (isOpen) {
-      menu.classList.add("hidden");
-      btn.setAttribute("aria-expanded", "false");
-    } else {
-      menu.classList.remove("hidden");
-      btn.setAttribute("aria-expanded", "true");
-      refreshSwitcher();
+  function paint() {
+    if (locked || menu.classList.contains('hidden')) return;
+    items.replaceChildren();
+    if (!records.length) { items.append(element('div','No other computers are listed yet','node-switcher-empty')); return; }
+    for (const record of records) {
+      const {reviewed,online,state} = rowState(record);
+      const node = record.peer_profile === 'inference_node';
+      const name = String(record.display_name || record.device_id || 'Computer');
+      const row = element('button',null,'node-switcher-item' + (online ? ' node-switcher-item--online' : ''));
+      Object.assign(row.style,{width:'100%',border:'0',background:'transparent',color:'inherit',font:'inherit',textAlign:'left',cursor:'pointer'});
+      row.type = 'button'; row.setAttribute('role','menuitem'); row.dataset.deviceId = record.device_id;
+      row.append(element('span',null,'node-switcher-item-dot' + (online ? ' node-switcher-item-dot--online' : '')),
+        element('span',name,'node-switcher-item-name'));
+      row.append(element('span',state,'node-switcher-item-badge'));
+      row.title = reviewed && !node ? 'Open the reviewed HTTPS console for ' + name : 'Review the connection to ' + name;
+      row.addEventListener('click', () => {
+        if (locked) return;
+        closeMenu();
+        if (reviewed && !node && window.MeshService?.openNodePanel) window.MeshService.openNodePanel(record,'');
+        else window.TLIConnectDevice?.open({kind:node?'node':'computer',deviceId:record.device_id});
+      });
+      items.append(row);
+    }
+  }
+  async function refreshSwitcher() {
+    const ticket = ++generation;
+    request?.abort(); const controller = new AbortController(); request = controller;
+    const timeout = setTimeout(() => controller.abort(),10000);
+    try {
+      const response = await fetch('/mesh/directory',{cache:'no-store',signal:controller.signal});
+      if (!response.ok) throw Error('Computer directory unavailable');
+      const directory = await response.json();
+      if (locked || ticket !== generation) return;
+      if (!Array.isArray(directory.devices) || directory.devices.length > 4096) throw Error('Computer directory incomplete');
+      records = directory.devices.filter(record => typeof record.device_id === 'string' && record.device_id !== directory.this_device_id);
+      paint();
+    } catch {
+      if (!locked && ticket === generation) { records = []; items.replaceChildren(element('div','Computer list unavailable. Open Connect device to review.','node-switcher-empty')); }
+    } finally { clearTimeout(timeout); if (request === controller) request = null; }
+  }
+  btn.addEventListener('click', event => {
+    event.stopPropagation(); if (locked) return;
+    if (!menu.classList.contains('hidden')) closeMenu();
+    else {
+      menu.classList.remove('hidden'); btn.setAttribute('aria-expanded','true');
+      paint(); refreshSwitcher();
+      unsubscribe = window.MeshService?.subscribeExpiry?.(expireStatuses) || null;
     }
   });
-
-  // Close on outside click
-  document.addEventListener("click", (e) => {
-    if (!btn.contains(e.target) && !menu.contains(e.target)) {
-      menu.classList.add("hidden");
-      btn.setAttribute("aria-expanded", "false");
-    }
+  document.addEventListener('click', event => { if (!btn.contains(event.target) && !menu.contains(event.target)) closeMenu(); });
+  for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed']) window.addEventListener(event, () => {
+    locked = true; generation++; request?.abort(); request = null; records = []; items.replaceChildren(); closeMenu();
   });
+  window.addEventListener('tli-session-unlocked', () => { locked = false; generation++; });
+  window.addEventListener('pagehide', closeMenu);
 }
 
 // ---------- init ----------

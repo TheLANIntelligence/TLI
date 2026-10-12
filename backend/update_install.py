@@ -30,12 +30,14 @@ FRONTEND_DIRS = {"js", "css", "assets", "history"}
 ROOT_FILES = {
     "README.md", "START_HERE.md", "LICENSE", "SECURITY.md", "TLI_MANUAL.md",
     "TLI.exe", "TLI_Start.bat", "TLI_Diagnostics.bat", "TLI_Bootstrap.ps1",
-    "TLI_Setup.bat", "TLI_Setup.ps1", "tli_sentinel.ps1", "TLI_Start.command",
+    "TLI_Setup.bat", "TLI_Setup.ps1", "TLI_Network_Setup.ps1", "tli_sentinel.ps1", "TLI_Start.command",
     "TLI_Start.sh", "TLI_Update.bat", "TLI_Update.ps1", "TLI_Update.command", "TLI_Update.sh",
     "Uninstall_TLI.bat", "TLI_Uninstall.ps1",
     "Uninstall_TLI.command", "Uninstall_TLI.sh",
 }
 PUBLIC_GUIDES = {
+    "TLI_SEAMLESS_CONNECTIONS.md",
+    "TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "SSE_SCHEMA.md",
     "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
     "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
     "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",

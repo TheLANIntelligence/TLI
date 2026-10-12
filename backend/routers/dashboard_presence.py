@@ -915,10 +915,10 @@ def _mesh_snapshot(node: dict) -> dict:
         if isinstance(info, dict):
             peers.append(info)
 
-    online_peers = [
-        p for p in peers
-        if str(p.get("status") or p.get("mesh_status") or "online").lower() != "offline"
-    ]
+    import peer_connections
+    online_peers = [info for dev_id,info in (directory or {}).items()
+                    if dev_id != node_id and isinstance(info,dict)
+                    and peer_connections.snapshot(dev_id,info).get('online') is True]
     return {
         "role": node.get("role", "standalone"),
         "status": node.get("mesh_status", "unpaired"),

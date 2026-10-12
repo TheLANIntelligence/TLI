@@ -168,44 +168,19 @@ def _check_mesh_nodes() -> None:
     try:
         directory = S.load_mesh_directory()
         node_cfg  = S.load_node_config()
-        # Dedup by IP + name so one physical machine with multiple node_ids
-        # only generates one alert regardless of how many directory entries it has.
-        seen_ips:   set = set()
-        seen_names: set = set()
-        for node_id, node in directory.items():
-            if node_id == node_cfg.node_id:
+        import peer_connections
+        for node_id,node in directory.items():
+            if node_id==node_cfg.node_id:
                 continue
-            ip   = node.get("ip", "")
-            name = (node.get("display_name") or node_id).strip().lower()
-            if ip and ip in seen_ips:
-                continue
-            if name and name in seen_names:
-                continue
-            if ip:
-                seen_ips.add(ip)
-            if name:
-                seen_names.add(name)
-            ts   = node.get("last_seen") or ""
-            if not ts:
-                continue
-            # Use a stable kind keyed on display name so both entries share one alert slot
-            kind = f"mesh_offline_{name}"
-            mins = _minutes_since(ts)
-            if mins > _OFFLINE_MINS:
-                new_alert = S.add_alert(kind,
-                            f"Mesh node offline: {node.get('display_name') or node_id}",
-                            detail=f"Last seen {int(mins)} min ago",
-                            severity="warn")
-                if new_alert:
-                    try:
-                        import event_bus as _eb
-                        _eb.emit_event("mesh", "warn",
-                                       f"Mesh node offline: {node.get('display_name') or node_id}",
-                                       f"Last seen {int(mins)} min ago")
-                    except Exception:
-                        pass
-            else:
+            state=peer_connections.snapshot(node_id,node)
+            kind=f'mesh_offline_{node_id}'
+            if state['fresh'] and state['state']=='connected':
                 S.resolve_alert(kind)
+            elif state['fresh'] and state['state']=='unreachable' and state.get('unreachable_since'):
+                mins=_minutes_since(state['unreachable_since'])
+                if mins>_OFFLINE_MINS:
+                    S.add_alert(kind,f"Computer unreachable: {node.get('display_name') or node_id}",
+                                detail=f'Authenticated connection checks have failed for {int(mins)} min',severity='warn')
     except Exception as e:
         S.log_debug("ambient", "WARN", "Mesh node check failed", error=str(e))
 
@@ -278,10 +253,11 @@ def get_home_snapshot() -> Dict[str, Any]:
         node_cfg  = S.load_node_config()
         snap["mesh_role"]  = node_cfg.role
         snap["mesh_peers"] = len(directory)
+        import peer_connections
         snap["mesh_online"] = [
             n.get("display_name", nid)
             for nid, n in directory.items()
-            if n.get("status") == "allowed"
+            if nid != node_cfg.node_id and peer_connections.snapshot(nid,n).get("online") is True
         ]
     except Exception:
         pass

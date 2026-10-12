@@ -22,7 +22,8 @@ def invoke(*arguments, patch="", timeout=30):
         "import tls_cert", "tls_cert._local_ipv4_addresses = lambda: ['192.168.50.9']",
         patch, "raise SystemExit(N.main(sys.argv[1:]))",
     ])
-    return subprocess.run([sys.executable, "-c", program, *map(str, arguments)], capture_output=True, text=True, encoding="utf-8", timeout=timeout)
+    return subprocess.run([sys.executable, "-c", program, *map(str, arguments)], stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, encoding="utf-8", timeout=timeout)
 
 
 @pytest.fixture(scope="module")
@@ -185,7 +186,7 @@ def test_trust_requires_separate_fingerprints_and_revokes_persistently(state, sa
 def test_runtime_has_only_signed_inference_routes_and_does_not_load_host(state):
     patch = "\n".join([
         "import uvicorn, json", "from fastapi.testclient import TestClient", "def inspect(app, **kw):",
-        "    assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream'}",
+        "    assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream', '/api/connection/v1/identity'}",
         "    with TestClient(app, base_url='https://192.168.50.9:8444') as client:",
         "        assert client.get('/agent/peer/inference').status_code == 401",
         "        assert client.post('/agent/peer/inference/stream', json={}).status_code == 401",
@@ -196,6 +197,7 @@ def test_runtime_has_only_signed_inference_routes_and_does_not_load_host(state):
         "    assert kw['proxy_headers'] is False and kw['access_log'] is False",
         "    assert kw['ssl_certfile'] and kw['ssl_keyfile']",
         "    assert not {'main', 'ai.ai_manager', 'routers.system_routes', 'vault_security', 'providers.lmstudio'} & set(sys.modules)",
+        "import node_discovery", "node_discovery.Advertiser.start = lambda self: None",
         "uvicorn.run = inspect",
     ])
     result = invoke("run", "--state-dir", state, patch=patch)
@@ -225,6 +227,50 @@ def test_admin_writer_lock_prevents_a_second_mutation(state):
     assert fingerprints(state) == before
 
 
+def test_pairing_cli_requires_local_interactive_console_and_explicit_update_flag(state):
+    before = fingerprints(state)
+    patch = "import uvicorn\nuvicorn.run = lambda *a, **k: (_ for _ in ()).throw(AssertionError('No listener permitted in this test'))"
+    result = invoke('run', '--state-dir', state, '--pair', patch=patch)
+    assert result.returncode == 1 and 'interactive local terminal' in result.stderr
+    result = invoke('run', '--state-dir', state, '--review-update')
+    assert result.returncode == 1 and 'requires an explicit local run --pair' in result.stderr
+    assert fingerprints(state) == before
+
+
+def test_pairing_run_exposes_only_public_handshake_and_keeps_browser_code_out(state):
+    before = fingerprints(state)
+    patch = '''
+import uvicorn
+N._interactive_console = lambda: True
+def inspect(app, **kw):
+    import node_pairing, peer_pairing as Q, node_discovery
+    from fastapi.testclient import TestClient
+    node_discovery.Advertiser.start = lambda self: None
+    original = node_pairing.PairingWindow.start
+    node_pairing.PairingWindow.start = lambda self: original(self, console=False)
+    paths = {'/agent/peer/inference', '/agent/peer/inference/stream', '/api/connection/v1/identity'} | Q._PATHS
+    assert set(app.openapi()['paths']) == paths
+    with TestClient(app, base_url='https://192.168.50.9:8444', client=('192.168.50.20',4321)) as client:
+        window = Q._NODE_PAIRING
+        assert window is not None and window.review_update is True and not window.closed
+        assert client.get('/agent/peer/inference').status_code == 401
+        for path in ('/', '/docs', '/redoc', '/api/ai/chat', '/mesh/pairing/requests', '/mesh/pairing/x/confirm', '/vault/status', '/agent/pairing/confirm'):
+            assert client.get(path).status_code == 404
+            assert client.post(path, json={}).status_code == 404
+        assert client.post('/agent/pairing/request', json={}).status_code == 422
+        window.expires = 0
+        for path in Q._PATHS:
+            result = client.post(path, json={})
+            assert result.status_code == 404 and result.json()['detail']['code'] == 'pairing_window_closed'
+    assert Q._NODE_PAIRING is window and window.closed
+    assert not {'main', 'ai.ai_manager', 'routers.peer_pairing_routes', 'routers.system_routes', 'vault_security', 'companion_auth', 'lan_discovery'} & set(sys.modules)
+uvicorn.run = inspect
+'''
+    result = invoke('run', '--state-dir', state, '--pair', '--review-update', patch=patch)
+    assert result.returncode == 0, result.stderr+result.stdout
+    assert fingerprints(state) == before
+
+
 @pytest.mark.parametrize("relative", ["node.json", "data", "data/tls", "data/mesh"])
 def test_marker_and_required_paths_reject_windows_reparse_points_before_bootstrap(state, monkeypatch, relative):
     import tli_node as N
@@ -238,3 +284,55 @@ def test_marker_and_required_paths_reject_windows_reparse_points_before_bootstra
     monkeypatch.setattr(Path, "lstat", metadata)
     with pytest.raises(N.NodeError):
         N._read_marker(state)
+
+
+def test_stable_name_node_keeps_identity_and_pin_across_dhcp_and_exposes_only_compute(tmp_path):
+    root = tmp_path / 'stable-node'
+    own_name = "N.socket.gethostname = lambda: 'Node-Fixture'"
+    created = invoke('init', '--state-dir', root, '--name', 'Stable compute', '--origin', 'https://node-fixture.local:8444', patch=own_name)
+    assert created.returncode == 0, created.stderr
+    marker = json.loads((root / 'node.json').read_text())
+    assert marker['version'] == 2
+    before = fingerprints(root)
+    changed_adapter = own_name + "\nN._local_addresses = lambda: {'192.168.50.77'}\ntls_cert._local_ipv4_addresses = lambda: ['192.168.50.77']"
+    exported = invoke('card', '--state-dir', root, patch=changed_adapter)
+    assert exported.returncode == 0, exported.stderr
+    card = json.loads(exported.stdout)
+    assert card['protocol'] == 'tli-peer-trust-v2' and card['origin'] == marker['origin']
+    assert card['capabilities'] == ['inference_v1']
+    assert card['identity_fingerprint'] == marker['identity_fingerprint'] and card['certificate_sha256'] == marker['certificate_sha256']
+    assert fingerprints(root) == before
+    inspect = '''
+import uvicorn, node_discovery
+node_discovery.Advertiser.start = lambda self: None
+def inspect(app, **kw):
+    import peer_trust as P, node_identity
+    from fastapi.testclient import TestClient
+    marker = N._read_marker(N._root(sys.argv[sys.argv.index('--state-dir') + 1]))
+    assert kw['host'] == '0.0.0.0' and kw['port'] == 8444
+    assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream', '/api/connection/v1/identity'}
+    with TestClient(app, base_url=marker['origin'], client=('192.168.50.20',4321)) as client:
+        challenge = {'nonce':'ab'*24, 'origin':marker['origin'], 'node_id':marker['node_id']}
+        response = client.post('/api/connection/v1/identity', json=challenge)
+        assert response.status_code == 200, response.text
+        proof = response.json(); signature = proof.pop('signature')
+        assert node_identity.verify(P.canonical(proof), signature, proof['public_key'])
+        assert proof['certificate_sha256'] == marker['certificate_sha256']
+        assert client.post('/api/connection/v1/identity', json=challenge, headers={'Authorization':'Bearer forbidden'}).status_code == 403
+        assert client.get('/agent/peer/inference').status_code == 401
+        for path in ('/', '/docs', '/api/ai/chat', '/mesh/pairing/requests', '/agent/peer/status', '/vault/status'):
+            assert client.get(path).status_code == 404
+    assert not {'main','ai.ai_manager','routers.system_routes','vault_security','companion_auth','lan_discovery'} & set(sys.modules)
+uvicorn.run = inspect
+'''
+    started = invoke('run', '--state-dir', root, patch=changed_adapter + '\n' + inspect)
+    assert started.returncode == 0, started.stderr
+    assert fingerprints(root) == before
+    renamed = invoke('card', '--state-dir', root, patch="N.socket.gethostname = lambda: 'different-computer'")
+    assert renamed.returncode == 1 and fingerprints(root) == before
+
+
+def test_new_node_rejects_someone_elses_stable_name_before_creating_state(tmp_path):
+    root = tmp_path / 'not-created'
+    result = invoke('init', '--state-dir', root, '--name', 'No', '--origin', 'https://someone-else.local:8444', patch="N.socket.gethostname = lambda: 'my-computer'")
+    assert result.returncode == 1 and not root.exists()

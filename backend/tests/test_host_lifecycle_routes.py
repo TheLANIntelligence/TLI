@@ -170,3 +170,17 @@ def test_session_cookie_never_passed_to_service(local, monkeypatch):
     assert client.post(PREFIX + "/preview", json={"action": "quit"}, headers={"Origin": ORIGIN}).status_code == 200
     assert "private-session" not in str(calls)
     assert len(calls[0][1]) == 64
+
+
+@pytest.mark.parametrize('next_url,expires_cookie', [('https://localhost:8000', True), ('http://localhost:8443', True), ('http://localhost:8000', False)])
+def test_reviewed_cross_origin_restart_expires_browser_cookie_without_revoking_dispatch(local, monkeypatch, next_url, expires_cookie):
+    _, client, calls = local
+    client.cookies.set('tli_session', 'private-session')
+    monkeypatch.setattr(S, 'load_pin_config', lambda: {'enabled': True})
+    monkeypatch.setattr(S, 'validate_session_token', lambda token: token == 'private-session')
+    monkeypatch.setattr(S, 'get_session_user_id', lambda token: 'local')
+    monkeypatch.setattr(lifecycle, 'confirm', lambda *args: {'request_id': REQUEST, 'action': 'restart', 'status': 'accepted', 'next_url': next_url})
+    response = client.post(PREFIX + '/confirm', json={'preview_id': PREVIEW, 'request_id': REQUEST}, headers={'Origin': ORIGIN})
+    assert response.status_code == 202
+    assert ('Max-Age=0' in response.headers.get('set-cookie', '')) is expires_cookie
+    assert [call[0] for call in calls] == ['dispatch']

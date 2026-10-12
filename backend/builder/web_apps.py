@@ -97,6 +97,8 @@ def _save(project: dict[str, Any], owner: str) -> None:
         with temp.open("x", encoding="utf-8") as handle:
             json.dump(project, handle, ensure_ascii=False)
         os.replace(temp, path)
+        from workspace_events import publish
+        publish(owner, "builder", project["id"])
     finally:
         if temp.exists():
             temp.unlink()
@@ -268,6 +270,8 @@ def _parse(text: str) -> dict[str, Any]:
 
 def generate_app(brief: str = "", app_id: str | None = None, feedback: str = "", *, owner: str,
                  expected_revision: int | None = None, complete=None) -> dict[str, Any]:
+    from run_context import checkpoint, run_id
+    checkpoint()
     if not _LOCK.acquire(blocking=False):
         raise AppBusy("Another small app is being generated. Wait, then retry.")
     try:
@@ -286,6 +290,9 @@ def generate_app(brief: str = "", app_id: str | None = None, feedback: str = "",
                        "created_at": S.now_iso(), "revisions": []}
         project.update(status="generating", updated_at=S.now_iso(), last_error="", last_feedback=feedback)
         _save(project, owner)
+        from run_context import current
+        if current.get() is not None:
+            current.get().bind_app(project["id"])
         content = {}
         if project["revisions"]:
             content["previous_files"] = project["revisions"][-1]["files"]
@@ -295,7 +302,9 @@ def generate_app(brief: str = "", app_id: str | None = None, feedback: str = "",
         messages = [{"role": "system", "content": _PROMPT}, {"role": "user", "content": json.dumps(content, ensure_ascii=False)}]
         try:
             for attempt in range(2):
+                checkpoint()
                 raw, backend = (complete or llm_client._chat)(messages, 0.15, 6000)
+                checkpoint()
                 try:
                     bundle = _parse(raw)
                     break
@@ -304,6 +313,8 @@ def generate_app(brief: str = "", app_id: str | None = None, feedback: str = "",
                         raise ValueError("The local model could not produce a valid app: " + str(exc)) from exc
                     messages.extend([{"role": "assistant", "content": raw[:160_000]}, {"role": "user", "content": "Repair the complete JSON app. Validation failure: " + str(exc)}])
             bundle.update(revision=len(project["revisions"]) + 1, created_at=S.now_iso(), backend=backend, feedback=feedback)
+            if run_id():
+                bundle["run_id"] = run_id()
             project["revisions"].append(bundle)
             project.update(name=bundle["name"], status="ready_for_preview", last_error="")
         except HTTPException:

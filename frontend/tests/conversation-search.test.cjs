@@ -225,3 +225,15 @@ test('Actual session lock clears pending history and an active reply blocks navi
   f.reply(0,[{role:'assistant',content:'Private old answer'}]);assert.equal(await pending,false);
   assert.equal(f.rendered.length,0);assert.equal(f.ctx.currentConversationId,null);assert.equal(f.ctx.chatHistory.length,0);
 });
+
+for(const outcome of ['failure','draft','success'])test('history and AI settings commit together after settings '+outcome,async()=>{
+  const f=loaderFixture();let initial=f.ctx.loadConversation('old','Old');f.reply(0,[{role:'assistant',content:'Old answer'}]);assert.equal(await initial,true);
+  let resolve,reject,commits=0;const prepared=new Promise((res,rej)=>{resolve=res;reject=rej;});
+  f.ctx.TLILanInference={prepareConversation:()=>prepared,annotateReply(){}};
+  const loading=f.ctx.loadConversation('new','New');f.reply(1,[{role:'assistant',content:'New answer'}]);await tick();
+  assert.equal(f.ctx.currentConversationId,'old');assert.equal(f.ctx.chatHistory[0].content,'Old answer');assert.equal(f.ctx.TLIConversationLoad.loading,true);
+  if(outcome==='failure')reject(Error('Settings unavailable'));else{if(outcome==='draft')f.nodes['chat-input'].value='New draft';resolve(()=>{commits++;return true;});}
+  assert.equal(await loading,outcome==='success');assert.equal(f.ctx.TLIConversationLoad.loading,false);
+  assert.equal(f.ctx.currentConversationId,outcome==='success'?'new':'old');assert.equal(commits,outcome==='success'?1:0);
+  assert.equal(f.ctx.chatHistory[0].content,outcome==='success'?'New answer':'Old answer');
+});

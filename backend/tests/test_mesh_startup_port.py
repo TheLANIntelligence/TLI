@@ -111,25 +111,17 @@ def test_presence_refreshes_existing_self_port(installation, monkeypatch):
     monkeypatch.setattr(node_identity, "fingerprint", lambda: "fixture-fingerprint")
     def finish(_):
         raise StopIteration("one isolated iteration")
-    monkeypatch.setattr(mesh.time, "sleep", finish)
+    monkeypatch.setattr(mesh, "_background_stop", SimpleNamespace(is_set=lambda:False,wait=finish))
     with pytest.raises(StopIteration):
         mesh._self_presence_loop()
     assert directory[cfg.node_id]["tli_port"] == 8443
     assert directory["fixture-peer"]["tli_port"] == 9123
 
 
-def test_firewall_web_rule_uses_running_port_with_fake_process(installation, monkeypatch):
-    monkeypatch.setattr(S, "SERVER_BIND_PORT", 9443)
-    monkeypatch.setattr(lan_discovery.platform, "system", lambda: "Windows")
-    calls = []
-    def run(command, **kwargs):
-        calls.append(command)
-        return SimpleNamespace(returncode=0)
-    monkeypatch.setattr(lan_discovery.subprocess, "run", run)
-    lan_discovery._try_open_firewall()
-    assert len(calls) == 2
-    assert "protocol=TCP" in calls[0] and "localport=9443" in calls[0]
-    assert "protocol=UDP" in calls[1] and "localport=47474" in calls[1]
+def test_discovery_never_changes_firewall(installation,monkeypatch):
+    import subprocess
+    monkeypatch.setattr(subprocess,'run',lambda *args,**kwargs:pytest.fail('No automatic firewall changes'))
+    assert lan_discovery._try_open_firewall() is None
 
 
 @pytest.mark.parametrize("advertised", [9123, "9123"])

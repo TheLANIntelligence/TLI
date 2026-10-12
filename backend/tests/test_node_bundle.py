@@ -79,21 +79,36 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import tli_state as S
 import lan_inference as L
-from peer_inference_routes import make_peer_router
+from tli_node import make_app
+import node_pairing, peer_pairing as Q
 S.lm_provider = SimpleNamespace(chat_url='http://127.0.0.1:1234/v1/chat/completions', models_url='http://127.0.0.1:1234/v1/models')
 L._local_json = lambda *args, **kwargs: {'models': []}
 assert L._resources(include_bundled=False) == []
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-app.include_router(make_peer_router(resource_loader=lambda **kwargs: L._resources(include_bundled=False, **kwargs)))
-assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream'}
+app = make_app({'origin':'https://fixture.local:8443', 'name':'Fixture', 'node_id':'fixture'}, advertise=False)
+assert set(app.openapi()['paths']) == {'/agent/peer/inference', '/agent/peer/inference/stream', '/api/connection/v1/identity'}
 with TestClient(app, base_url='https://192.168.2.10:8443') as client:
     assert client.get('/agent/peer/inference').status_code == 401
     assert client.post('/agent/peer/inference/stream', json={}).status_code == 401
+    assert client.post('/api/connection/v1/identity', json={'nonce':'aa'*24, 'node_id':'fixture', 'origin':'https://fixture.local:8443'}).status_code == 403
     for path in ('/', '/docs', '/redoc', '/openapi.json', '/api/ai/chat', '/vault/status', '/open_reveal', '/mesh/trust/approve'):
         assert client.get(path).status_code == 404
         assert client.post(path, json={}).status_code == 404
 assert not {'main', 'ai.ai_manager', 'routers.system_routes', 'vault_security', 'companion_auth'} & set(sys.modules)
 assert not Path(S.CONVERSATIONS_FILE).exists()
+window = node_pairing.PairingWindow({'origin':'https://fixture.local:8443', 'name':'Fixture', 'node_id':'fixture'})
+original = node_pairing.PairingWindow.start
+node_pairing.PairingWindow.start = lambda self: original(self, console=False)
+paired_app = make_app(window.marker, advertise=False, pairing_window=window)
+assert set(paired_app.openapi()['paths']) == set(app.openapi()['paths']) | Q._PATHS
+with TestClient(paired_app, base_url='https://fixture.local:8443') as client:
+    for path in ('/mesh/pairing/requests', '/mesh/pairing/x/confirm', '/agent/pairing/confirm', '/api/ai/chat'):
+        assert client.get(path).status_code == 404
+        assert client.post(path, json={}).status_code == 404
+    window.expires = 0
+    for path in Q._PATHS:
+        assert client.post(path, json={}).status_code == 404
+assert window.closed and Q._NODE_PAIRING is window
+assert not {'main', 'ai.ai_manager', 'routers.peer_pairing_routes', 'routers.system_routes', 'vault_security', 'companion_auth'} & set(sys.modules)
 print(json.dumps({'isolated_compute_only': True}))
 """
     result = subprocess.run([sys.executable, "-c", code], cwd=extracted, env=environment,

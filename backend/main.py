@@ -343,10 +343,16 @@ from routers.companion_routes import router as companion_router
 app.include_router(companion_router)
 from routers.host_control_routes import router as host_control_router
 app.include_router(host_control_router)
+from routers.network_setup_routes import router as network_setup_router
+app.include_router(network_setup_router)
 from routers.peer_transfer_routes import router as peer_transfer_router
 app.include_router(peer_transfer_router)
 from routers.lan_inference_routes import router as lan_inference_router
 app.include_router(lan_inference_router)
+from routers.workspace_routes import router as workspace_router
+app.include_router(workspace_router)
+from connection_identity import router as connection_identity_router
+app.include_router(connection_identity_router)
 from companion_auth import validate_authorization as _validate_companion_authorization
 app.middleware("http")(_validate_companion_authorization)
 
@@ -476,13 +482,8 @@ def _is_mobile_ua(ua: str) -> bool:
 
 @app.get("/")
 def serve_index(request: Request, desktop: str = ""):
-    # If ?desktop=1 is set, always serve the full UI regardless of UA
-    if not desktop:
-        ua = request.headers.get("user-agent", "")
-        if _is_mobile_ua(ua):
-            companion_path = os.path.join(S.FRONTEND_DIR, "companion.html")
-            if os.path.exists(companion_path):
-                return FileResponse(companion_path)
+    # One responsive workspace on every screen. User-agent sniffing used to
+    # send phones to a separate, local-history-only satellite interface.
     index_path = os.path.join(S.FRONTEND_DIR, "index.html")
     if not os.path.exists(index_path):
         return {"ok": True, "name": "TLI Backend"}
@@ -490,7 +491,12 @@ def serve_index(request: Request, desktop: str = ""):
 
 
 @app.get("/companion")
-def serve_companion():
+def serve_companion(request: Request):
+    return serve_index(request)
+
+
+@app.get("/companion/legacy")
+def serve_legacy_companion():
     path = os.path.join(S.FRONTEND_DIR, "companion.html")
     if not os.path.exists(path):
         from fastapi.responses import RedirectResponse
@@ -579,7 +585,7 @@ except Exception as e:
 #  Startup / Shutdown hooks
 # ============================================
 
-from routers.mesh_routes import start_background_loops, _set_presence_loop, _broadcast_presence
+from routers.mesh_routes import start_background_loops, stop_background_loops, _set_presence_loop, _broadcast_presence
 from ambient import run_ambient_loop
 import lan_discovery
 
@@ -603,7 +609,7 @@ async def on_startup():
     start_background_loops()
     # Ambient awareness loop (disk, shelly, mesh health checks)
     _asyncio.create_task(run_ambient_loop())
-    # LAN auto-discovery: UDP beacon + listener + firewall rules
+    # Secure LAN discovery and coalesced checks. OS changes require local review.
     try:
         lan_discovery.set_presence_broadcast(_broadcast_presence)
         lan_discovery.start()
@@ -642,12 +648,15 @@ async def on_startup():
 
 @app.on_event("shutdown")
 def on_shutdown():
+    import host_runs
+    host_runs.shutdown()
     _auto_update.stop_auto_check()
     from storage_jobs import shutdown as _storage_jobs_shutdown
     _storage_jobs_shutdown()
     _event_bus.unregister_post_emit_hook(_dp_on_event)
     _event_bus.set_event_loop(None)
     lan_discovery.stop()
+    stop_background_loops()
     try:
         from routers.dashboard_presence import stop_polling as _dp_stop
         _dp_stop()

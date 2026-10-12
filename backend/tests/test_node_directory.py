@@ -2,17 +2,18 @@
 from types import SimpleNamespace
 
 from routers import mesh_routes, system_routes
+from tests.test_peer_trust import computer, entry
 
 
 def install_directory(monkeypatch):
     monkeypatch.setattr(mesh_routes, "_ensure_host_in_mesh_directory", lambda: None)
     monkeypatch.setattr(mesh_routes.S, "load_node_config", lambda: SimpleNamespace(node_id="primary", role="host"))
-    monkeypatch.setattr(mesh_routes.S, "load_mesh_directory", lambda: {
-        "compute": {"display_name": "Gaming PC", "ip": "192.168.1.50", "tli_port": 8444, "status": "allowed"},
-        "host": {"display_name": "Other full TLI", "ip": "192.168.1.51", "tli_port": 8000, "status": "allowed"}})
-    monkeypatch.setattr(mesh_routes.peer_trust, "public_trust", lambda ident: {
-        "trust_state": "verified", "trust_revision": "a" * 64,
-        **({"peer_profile": "inference_node"} if ident == "compute" else {})})
+    key,node=computer('compute','192.168.1.50',8444)
+    node['capabilities']=['inference_v1']; node.pop('signature')
+    node['signature']=key.sign(mesh_routes.peer_trust.canonical(node)).hex()
+    _,host=computer('host','192.168.1.51',8000)
+    records={'compute':entry(node,grants=['inference']),'host':entry(host)}
+    monkeypatch.setattr(mesh_routes.S, 'load_mesh_directory', lambda:records)
 
 
 def test_directory_preserves_compute_profile_without_changing_full_host(monkeypatch):
@@ -28,18 +29,15 @@ def test_collective_health_does_not_probe_compute_nodes_or_label_them_offline(mo
     install_directory(monkeypatch)
     monkeypatch.setattr(system_routes, "agent_health", lambda: {"node_name": "Primary"})
     contacted = []
-    def trusted(ident, grant):
-        assert ident == "host" and grant == "coordinate"
     def health(ident):
         assert ident == "host"
         contacted.append(ident)
         return {"node_name": "Other full TLI"}
-    monkeypatch.setattr(mesh_routes.peer_trust, "trusted", trusted)
     monkeypatch.setattr(mesh_routes.peer_trust, "health", health)
     result = mesh_routes.mesh_health(_session="local")
     nodes = {row.get("peer_id"): row for row in result["nodes"]}
     assert nodes["compute"]["online"] is None
-    assert nodes["compute"]["connection_state"] == "inference_only"
+    assert nodes["compute"]["connection_state"] in {'unknown','discovered'}
     assert nodes["compute"]["trust_state"] == "verified"
-    assert nodes["host"]["online"] is True
-    assert contacted == ["host"]
+    assert nodes["host"]["online"] is None
+    assert contacted == []

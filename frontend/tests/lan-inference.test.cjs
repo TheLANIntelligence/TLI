@@ -159,3 +159,35 @@ test('reopened conversations keep the reported model and inference host receipt'
   assert.equal(rendered[0].children[0].textContent, 'AI model: historical-model · Gaming PC');
   assert.equal(f.api.capture().selection, null, 'Historical source never selects the model for a new request');
 });
+
+test('conversation settings prepare without replacing the active selection until a current commit', async () => {
+  const f=fixture();await f.select();f.context.window.TLIWorkspace={supported:async()=>true};
+  f.handler(async()=>({compute_selection:null,settings_revision:2}));let current=true;
+  const commit=await f.api.prepareConversation('another',{current:()=>current});
+  assert.deepEqual(plain(f.api.capture().selection),fields());current=false;assert.equal(commit(),false);
+  assert.deepEqual(plain(f.api.capture().selection),fields());
+  const next=await f.api.prepareConversation('another',{current:()=>true});assert.equal(next(),true);assert.equal(f.api.capture().selection,null);
+});
+
+test('obsolete capability read cannot invalidate a newer conversation model selection', async () => {
+  const f=fixture();let release,checks=0;f.context.window.TLIWorkspace={supported:()=>++checks===1?new Promise(resolve=>{release=resolve;}):Promise.resolve(true)};
+  f.handler(async()=>({compute_selection:fields(),settings_revision:1}));
+  const old=f.api.prepareConversation('old');await tick();
+  const commit=await f.api.prepareConversation('new');assert.equal(commit(),true);release(true);assert.equal((await old)(),false);
+  assert.deepEqual(plain(f.api.capture().selection),fields());assert.equal(f.calls.length,1);assert.match(f.calls[0].url,/conversations\/new\/settings$/);
+});
+
+for(const change of ['session','conversation'])test('model setting save cannot PATCH after a '+change+' change during its preflight',async()=>{
+  const f=fixture();await f.check();f.ids['lan-inference-resource'].value='c'.repeat(64);await f.ids['lan-inference-resource'].fire('change');
+  f.context.window.currentConversationId='old';f.context.window.TLIConversationLoad={generation:0};f.context.window.TLIWorkspace={supported:async()=>true};
+  let release;f.handler(()=>new Promise(resolve=>{release=resolve;}));
+  const choosing=f.ids['lan-inference-use'].click();await tick();
+  if(change==='session'){f.emit('tli-session-locked');f.emit('tli-session-unlocked');}else{f.context.window.currentConversationId='new';f.context.window.TLIConversationLoad.generation++;}
+  release({compute_selection:null,settings_revision:0});await choosing;
+  assert.equal(f.calls.filter(call=>call.options.method==='PATCH').length,0);assert.equal(f.api.capture().selection,null);
+});
+
+test('sending while shared conversation settings load preserves the draft and makes no chat request',async()=>{
+  const f=fixture(),chat=installChat(f);f.context.window.TLIConversationLoad={loading:true};await f.context.sendChat();
+  assert.equal(chat.requests.length,0);assert.equal(f.ids['chat-input'].value,'Explain my project');assert.match(chat.toasts[0],/finish loading/);
+});

@@ -10,11 +10,12 @@
     catch (_) { fragment = ''; failure = 'Open TLI Companion and scan a fresh code inside the app.'; }
     try {
     const url = entry, fields = new URLSearchParams(fragment), keys = [...fields.keys()];
-    const expected = ['v', 'c', 't', 'e', 'i', 'n'];
+    const version = fields.get('v');
+    const expected = ['v', 'c', 't', 'e', 'i', 'n', ...(version === '2' ? ['k'] : [])];
     const parts = url.hostname.split('.').map(Number), [a,b] = parts;
-    const local = /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) && parts.every(n=>n>=0&&n<=255) && (a===10 || a===172&&b>=16&&b<=31 || a===192&&b===168 || a===169&&b===254);
+    const local = /^\d+\.\d+\.\d+\.\d+$/.test(url.hostname) && parts.every(n=>n>=0&&n<=255) && (a===10 || a===172&&b>=16&&b<=31 || a===192&&b===168 || a===169&&b===254) || version === '2' && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+local$/.test(url.hostname) && /^[a-f0-9]{64}$/.test(fields.get('k') || '');
     const certificate = fields.get('c') || '', token = fields.get('t') || '', id = fields.get('i') || '', name = fields.get('n') || '', expiry = fields.get('e') || '';
-    if (fragment.length > 18000 || /%(?![0-9a-f]{2})/i.test(fragment) || url.protocol !== 'https:' || !local || url.username || url.password || url.search || url.pathname !== '/api/companion/v1/pair' || keys.length !== expected.length || new Set(keys).size !== keys.length || keys.some(key=>!expected.includes(key)) || fields.get('v') !== '1' || !/^[A-Za-z0-9_-]{128,12000}$/.test(certificate) || certificate.length%4===1 || !/^[A-Za-z0-9_-]{20,256}$/.test(token) || !id || id.length>256 || !name.trim() || name.length>256 || /[\u0000-\u001f\u007f]/.test(id+name) || !/^\d{1,12}$/.test(expiry) || Number(expiry)*1000<=Date.now() || Number(expiry)*1000>Date.now()+600000) throw new Error();
+    if (fragment.length > 18000 || /%(?![0-9a-f]{2})/i.test(fragment) || url.protocol !== 'https:' || !local || url.username || url.password || url.search || url.pathname !== '/api/companion/v1/pair' || keys.length !== expected.length || new Set(keys).size !== keys.length || keys.some(key=>!expected.includes(key)) || !['1','2'].includes(version) || version === '2' && !/^[a-f0-9]{64}$/.test(fields.get('k') || '') || !/^[A-Za-z0-9_-]{128,12000}$/.test(certificate) || certificate.length%4===1 || !/^[A-Za-z0-9_-]{20,256}$/.test(token) || !id || id.length>256 || !name.trim() || name.length>256 || /[\u0000-\u001f\u007f]/.test(id+name) || !/^\d{1,12}$/.test(expiry) || Number(expiry)*1000<=Date.now() || Number(expiry)*1000>Date.now()+600000) throw new Error();
     fields.set('o', url.origin);
     invitation = { fragment: fields.toString(), origin: url.origin, name, expires: Number(expiry)*1000 };
     } catch (_) { failure = failure || 'This invitation is missing, invalid or expired. Create a fresh pairing code on your TLI desktop.'; }
