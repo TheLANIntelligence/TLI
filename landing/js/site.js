@@ -173,7 +173,7 @@ const connections = {
   host: ['THE STARTING POINT', 'Your main computer', 'Your conversations and saved work stay with the TLI host. Run an installed local model here to use general AI without the internet.'],
   model: ['COMPUTE YOU CHOOSE', 'Another trusted computer', 'Review the computer’s identity and inference permission, then explicitly select its model. The host keeps the conversation context. Requests do not silently fall back to another peer.'],
   home: ['CONTROLS WITH CONTEXT', 'Shelly and other supported devices', 'Turn a configured, compatible Shelly switch on or off by name, check its reported state, and see power readings where supported. Other adapters have their own requirements. Saved routines are reviewed and run manually.'],
-  phone: ['COMPANION BETA', 'A familiar space, on your phone', 'The separate Android Companion beta brings conversation and supported shared workflows to a compatible, configured host on your LAN. The phone app is not included in these desktop ZIPs, and this website does not offer a phone download.'],
+  phone: ['COMPANION BETA', 'A familiar space, on your phone', 'The separate Android Companion Beta 13 shares Chat, selected documents and Builder with your running TLI 1.4.5-beta home host. Start from Connect device → Phone or phone browser on the desktop, then get the Android APK from the download page. Physical phone and network testing remains in progress.'],
 };
 document.querySelectorAll('[data-network]').forEach((button) => {
   button.addEventListener('click', () => {

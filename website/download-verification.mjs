@@ -1,4 +1,5 @@
 import { PUBLIC_RELEASE } from '../landing/js/release.js';
+import { COMPANION_RELEASE } from '../landing/js/companion-release.js';
 import { isDisposableDomain } from './disposable-domains.mjs';
 import { sendVerificationEmail } from './send-verification-email.mjs';
 
@@ -126,10 +127,9 @@ async function challenge(env, origin, token, ip, fetcher) {
   } finally { clearTimeout(timeout); }
 }
 
-async function reserve(env, { tokenHash, email, emailKey, ipKey, platform, now }) {
+async function reserve(env, { tokenHash, email, emailKey, ipKey, platform, release, now }) {
   const db = env.DOWNLOAD_DB;
   const day = Math.floor(now / DAY) * DAY;
-  const release = PUBLIC_RELEASE[platform];
   // D1 batch is a transaction. The conditional INSERT serializes the quota
   // decision with its reservation; there is no read-then-increment race.
   const result = await db.batch([
@@ -145,13 +145,23 @@ async function reserve(env, { tokenHash, email, emailKey, ipKey, platform, now }
         emailKey, day, ipKey, now - HOUR, day),
     db.prepare(`INSERT INTO pending_downloads(token_hash, email, platform, release_version, asset_filename, requested_at, expires_at)
       SELECT token_hash, ?, ?, ?, ?, ?, ? FROM download_rate_events WHERE token_hash = ?`).bind(
-      email, platform, PUBLIC_RELEASE.version, release.filename, now, now + TOKEN_LIFETIME, tokenHash),
+      email, platform, release.version, release.filename, now, now + TOKEN_LIFETIME, tokenHash),
   ]);
   return result[2]?.results?.length === 1;
 }
 
 export function createDownloadHandlers({ fetcher = globalThis.fetch, clock = Date.now,
-  sendEmail = sendVerificationEmail, cryptoImpl = globalThis.crypto } = {}) {
+  sendEmail = sendVerificationEmail, cryptoImpl = globalThis.crypto,
+  desktopRelease = PUBLIC_RELEASE, companionRelease = COMPANION_RELEASE } = {}) {
+  // Desktop and Companion ship independently. A token is bound to the exact
+  // platform, version and asset that its verification email was requested for.
+  const releaseFor = platform => {
+    if (platform === 'android') return companionRelease;
+    if (platform === 'windows' || platform === 'macos') {
+      return { ...desktopRelease[platform], version: desktopRelease.version };
+    }
+    return null;
+  };
   const digest = async value => hex(await cryptoImpl.subtle.digest('SHA-256', encode(value)));
   const keyed = async (key, value) => {
     const material = await cryptoImpl.subtle.importKey('raw', encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -177,7 +187,8 @@ export function createDownloadHandlers({ fetcher = globalThis.fetch, clock = Dat
       onlyKeys(body, ['email', 'platform', 'turnstileToken', 'website']);
       if (body.website !== '') fail(400, 'invalid_request', 'The request could not be accepted.');
       const address = emailAddress(body.email);
-      if (!['windows', 'macos'].includes(body.platform)) fail(400, 'invalid_platform', 'Choose Windows or macOS.');
+      if (!['windows', 'macos', 'android'].includes(body.platform)) fail(400, 'invalid_platform', 'Choose Windows, macOS or Android.');
+      const release = releaseFor(body.platform);
       const ip = request.headers.get('CF-Connecting-IP');
       if (!ip || ip.length > 64 || !/^[a-f0-9:.]+$/i.test(ip)) fail(503, 'unavailable', 'Email verification is temporarily unavailable.');
       await challenge(env, origin, body.turnstileToken, ip, fetcher);
@@ -187,11 +198,11 @@ export function createDownloadHandlers({ fetcher = globalThis.fetch, clock = Dat
       const [emailKey, ipKey] = await Promise.all([
         keyed(env.DOWNLOAD_HASH_KEY, 'email:' + address.canonical), keyed(env.DOWNLOAD_HASH_KEY, 'ip:' + ip.toLowerCase()),
       ]);
-      if (!await reserve(env, { tokenHash, email: address.email, emailKey, ipKey, platform: body.platform, now })) {
+      if (!await reserve(env, { tokenHash, email: address.email, emailKey, ipKey, platform: body.platform, release, now })) {
         fail(429, 'rate_limited', 'Please wait before requesting another verification email.');
       }
       let accepted = false;
-      try { accepted = await sendEmail(env, { email: address.email, platform: body.platform, version: PUBLIC_RELEASE.version, token }, fetcher) === true; }
+      try { accepted = await sendEmail(env, { email: address.email, platform: body.platform, version: release.version, token }, fetcher) === true; }
       catch { /* Never disclose provider responses or recipient details. */ }
       if (!accepted) {
         await env.DOWNLOAD_DB.prepare('DELETE FROM pending_downloads WHERE token_hash = ?').bind(tokenHash).run();
@@ -211,27 +222,31 @@ export function createDownloadHandlers({ fetcher = globalThis.fetch, clock = Dat
       const tokenHash = await digest(body.token);
       const now = clock();
       const db = env.DOWNLOAD_DB;
+      const windows = releaseFor('windows'), macos = releaseFor('macos'), android = releaseFor('android');
       const result = await db.batch([
         db.prepare(`INSERT INTO verified_downloads(token_hash, email, platform, release_version, asset_filename, requested_at, verified_at)
           SELECT token_hash, email, platform, release_version, asset_filename, requested_at, ? FROM pending_downloads
-          WHERE token_hash = ? AND sent_at IS NOT NULL AND expires_at > ? AND release_version = ?
-            AND ((platform = 'windows' AND asset_filename = ?) OR (platform = 'macos' AND asset_filename = ?))
-          RETURNING platform, release_version, asset_filename`).bind(now, tokenHash, now, PUBLIC_RELEASE.version,
-          PUBLIC_RELEASE.windows.filename, PUBLIC_RELEASE.macos.filename),
+          WHERE token_hash = ? AND sent_at IS NOT NULL AND expires_at > ?
+            AND ((platform = 'windows' AND release_version = ? AND asset_filename = ?)
+              OR (platform = 'macos' AND release_version = ? AND asset_filename = ?)
+              OR (platform = 'android' AND release_version = ? AND asset_filename = ?))
+          RETURNING platform, release_version, asset_filename`).bind(now, tokenHash, now,
+          windows.version, windows.filename, macos.version, macos.filename, android.version, android.filename),
         db.prepare(`DELETE FROM pending_downloads WHERE token_hash = ?
           AND EXISTS (SELECT 1 FROM verified_downloads WHERE token_hash = ?)`).bind(tokenHash, tokenHash),
       ]);
       const record = result[0]?.results?.[0];
       if (!record) {
-        const pending = await db.prepare('SELECT expires_at, release_version FROM pending_downloads WHERE token_hash = ?').bind(tokenHash).first();
-        if (pending && (pending.expires_at <= now || pending.release_version !== PUBLIC_RELEASE.version)) {
-          await db.prepare('DELETE FROM pending_downloads WHERE token_hash = ? AND (expires_at <= ? OR release_version <> ?)')
-            .bind(tokenHash, now, PUBLIC_RELEASE.version).run();
+        const pending = await db.prepare('SELECT platform, expires_at, release_version, asset_filename FROM pending_downloads WHERE token_hash = ?').bind(tokenHash).first();
+        const expected = pending && releaseFor(pending.platform);
+        if (pending && expected && (pending.expires_at <= now || pending.release_version !== expected.version || pending.asset_filename !== expected.filename)) {
+          await db.prepare('DELETE FROM pending_downloads WHERE token_hash = ? AND (expires_at <= ? OR release_version <> ? OR asset_filename <> ?)')
+            .bind(tokenHash, now, expected.version, expected.filename).run();
           fail(410, 'expired_token', 'This verification link has expired. Request a new link.');
         }
         fail(400, 'invalid_token', 'This verification link is invalid or already used. Request a new link.');
       }
-      return json({ status: 'verified', platform: record.platform, version: record.release_version, url: PUBLIC_RELEASE[record.platform].url });
+      return json({ status: 'verified', platform: record.platform, version: record.release_version, url: releaseFor(record.platform).url });
     }),
   };
 }
