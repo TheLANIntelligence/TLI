@@ -11,7 +11,7 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Desktop release: 1.4.2-beta.** Download the prepared
+**Desktop release: 1.4.3-beta.** Download the prepared
 [Windows and macOS packages](https://thelanintelligence.com/download/), then follow
 [START_HERE.md](START_HERE.md). Each includes the current desktop experience and
 its platform's inference runtime; Python dependencies and model weights are

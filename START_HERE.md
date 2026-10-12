@@ -1,4 +1,4 @@
-# Welcome to TLI 1.4.2-beta
+# Welcome to TLI 1.4.3-beta
 
 This is the new TLI desktop experience: Ask TLI, the refreshed workspace,
 appearance themes, Files, Vault, reviewed LAN connections and small-app Builder.
@@ -12,7 +12,7 @@ checks its signature before running it. Windows may ask you to approve that
 Microsoft installer. Setup never restarts your computer automatically.
 
 1. Extract the **entire** Windows ZIP into a new, writable folder, such as
-   `Documents\TLI-1.4.2-beta`. Do not run it inside the ZIP or copy it over an old TLI.
+   `Documents\TLI-1.4.3-beta`. Do not run it inside the ZIP or copy it over an old TLI.
 2. Open **TLI.exe** and choose **Set up TLI** when prompted. Progress stays in
    the TLI window. Internet is only needed to download missing Python or TLI
    components; a prepared installation can start offline. Your browser opens
@@ -42,7 +42,7 @@ Closing the browser leaves the Windows host running; use Local Setup to stop it.
 Requires **macOS 14 or newer on Apple Silicon**, or **macOS 13.3 or newer on
 Intel**, for the bundled inference runtime.
 
-1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.2-beta`.
+1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.3-beta`.
 2. Install Python 3.10 or newer from
    [python.org](https://www.python.org/downloads/macos/) if it is not already present.
    For a python.org installation, run **Install Certificates.command** from the
@@ -141,4 +141,4 @@ externally stored models, browser data and the separate phone Companion are
 not removed with the desktop folder.
 
 Release notes, checksums and support:
-[TLI 1.4.2-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.2-beta).
+[TLI 1.4.3-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.3-beta).

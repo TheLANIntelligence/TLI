@@ -643,7 +643,7 @@ if (false) (function _tliAmbientAlerts() {
   window._tliShowUpgradeModal = _showUpgradeModal;
 })();
 
-const TLI_VERSION        = "1.4.2-beta";
+const TLI_VERSION        = "1.4.3-beta";
 const DEFAULT_THEME      = "emeraldLight";
 const previousPromptsKey = "tli_previous_prompts";
 
@@ -3666,12 +3666,11 @@ function setupChat() {
         if (typeof switchPanel === "function") switchPanel("panel-settings");
         return;
       }
-      const overlay = $("model-manager-modal-overlay");
-      if (overlay) {
-        overlay.classList.remove("hidden");
-        overlay.setAttribute("aria-hidden", "false");
-        if (typeof window.openModelManager === "function") window.openModelManager();
+      if (typeof window.tliOpenModelManagerModal === "function") {
+        window.tliOpenModelManagerModal();
+        return;
       }
+      showToast("The model library is unavailable. Reload TLI and try again.", "error");
     });
   }
   // Initial check + re-check whenever panel-main becomes active

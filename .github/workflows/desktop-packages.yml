@@ -47,10 +47,12 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: ./build_launcher.ps1
+      - name: Review platform package file list
+        run: python build_dist.py --platform ${{ matrix.platform }} --dry-run > build_work/package-dry-run.txt
       - name: Build platform ZIP
-        run: python build_dist.py --platform ${{ matrix.platform }} --out build_work/packages/TLI_1.4.2-beta_${{ matrix.label }}.zip
+        run: python build_dist.py --platform ${{ matrix.platform }} --out build_work/packages/TLI_1.4.3-beta_${{ matrix.label }}.zip
       - name: Verify extracted installation and native runtime
-        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.2-beta_${{ matrix.label }}.zip --platform ${{ matrix.platform }} --expected-version 1.4.2-beta --output-dir build_work/package-verification --check-setup
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.3-beta_${{ matrix.label }}.zip --platform ${{ matrix.platform }} --expected-version 1.4.3-beta --output-dir build_work/package-verification --check-setup
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.platform }}
@@ -62,6 +64,7 @@ jobs:
         with:
           name: verification-${{ matrix.platform }}
           path: |
+            build_work/package-dry-run.txt
             build_work/package-verification/*/report.json
             build_work/package-verification/*/application.json
             build_work/package-verification/*/application.log
@@ -92,7 +95,7 @@ jobs:
           name: desktop-macos
           path: build_work/packages
       - name: Verify extracted installation and Intel runtime
-        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.2-beta_macOS.zip --platform macos --expected-version 1.4.2-beta --output-dir build_work/package-verification --check-setup
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.3-beta_macOS.zip --platform macos --expected-version 1.4.3-beta --output-dir build_work/package-verification --check-setup
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
