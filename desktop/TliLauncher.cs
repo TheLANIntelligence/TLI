@@ -58,11 +58,15 @@ internal sealed class TliWindow : Form
     private readonly string root;
     private readonly Label heading, status, footer;
     private readonly ProgressBar progress;
-    private readonly Button primary, shortcuts, logs, repair;
+    private readonly Button primary, shortcuts, logs, repair, stop, restart, check, cancelReview;
     private readonly TextBox details;
     private bool busy, dismissed, keepRecoveryOpen, automaticOpened;
     private int operationGeneration;
     private string readyUrl;
+    private HostSnapshot snapshot;
+    private string reviewedAction, reviewedToken;
+    private readonly System.Windows.Forms.Timer statusTimer;
+    private readonly int workerTimeout;
     private readonly Action<string> browser;
     private readonly Func<ProcessStartInfo> setupCommand, shortcutCommand;
     private readonly Color ink, accent, muted, surface, onAccent, accentHover;
@@ -71,12 +75,13 @@ internal sealed class TliWindow : Form
     private const string SetupProgressPrefix = "TLI_SETUP_PROGRESS:";
 
     internal TliWindow(string installation, bool autoStart = true, Action<string> openBrowser = null, bool? darkAppearance = null,
-        Func<ProcessStartInfo> setupProcess = null, Func<ProcessStartInfo> shortcutProcess = null)
+        Func<ProcessStartInfo> setupProcess = null, Func<ProcessStartInfo> shortcutProcess = null, int workerTimeoutMilliseconds = 380000)
     {
         root = Path.GetFullPath(installation);
         browser = openBrowser ?? (url => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true }));
         setupCommand = setupProcess ?? (() => SetupCommand(root));
         shortcutCommand = shortcutProcess ?? (() => ShortcutCommand(root));
+        workerTimeout = workerTimeoutMilliseconds;
         // Native startup follows Windows. Browser palette preferences remain in
         // the browser; startup never reads application data to choose a color.
         bool dark = darkAppearance ?? AppUsesDarkAppearance();
@@ -100,7 +105,7 @@ internal sealed class TliWindow : Form
         MaximizeBox = false;
         try { Icon = Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location); } catch { }
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(32), ColumnCount = 1, RowCount = 9 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(32), ColumnCount = 1, RowCount = 10 };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -108,6 +113,7 @@ internal sealed class TliWindow : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 4));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -127,19 +133,44 @@ internal sealed class TliWindow : Form
         primary.FlatAppearance.BorderSize = 0;
         primary.FlatAppearance.MouseOverBackColor = accentHover;
         primary.FlatAppearance.MouseDownBackColor = accentHover;
-        primary.Click += delegate { if (!busy) { if (primary.Tag as string == "setup") RunSetup(); else if (readyUrl != null) OpenBrowser(); else BeginLaunch(); } };
+        primary.Click += delegate
+        {
+            if (busy) return;
+            string action = primary.Tag as string;
+            if (action == "setup") RunSetup();
+            else if (action == "close") Close();
+            else if (action == "review-restart") ReviewAction("restart");
+            else if (action == "confirm") ConfirmAction();
+            else if (action == "status") BeginStatus();
+            else if (readyUrl != null) OpenBrowser();
+            else BeginLaunch();
+        };
         layout.Controls.Add(primary, 0, 5);
+        var hostActions = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, WrapContents = true, Margin = Padding.Empty };
+        restart = LinkButton("Restart TLI"); restart.Visible = false;
+        stop = LinkButton("Stop TLI"); stop.Visible = false;
+        check = LinkButton("Check status"); check.Visible = false;
+        cancelReview = LinkButton("Cancel"); cancelReview.Visible = false;
+        restart.Click += delegate { if (snapshot != null && snapshot.State == "stopped") BeginLaunch(); else ReviewAction("restart"); };
+        stop.Click += delegate { ReviewAction("stop"); };
+        check.Click += delegate { BeginStatus(); };
+        cancelReview.Click += delegate { CancelReview(); };
+        hostActions.Controls.Add(restart); hostActions.Controls.Add(stop); hostActions.Controls.Add(check); hostActions.Controls.Add(cancelReview);
+        layout.Controls.Add(hostActions, 0, 6);
         repair = LinkButton("Microsoft Visual C++ setup guidance"); repair.Visible = false;
         repair.Click += delegate { OpenRuntimeHelp(); };
-        layout.Controls.Add(repair, 0, 6);
+        layout.Controls.Add(repair, 0, 7);
         var links = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, Margin = Padding.Empty };
         shortcuts = LinkButton("Add Desktop & Start Menu shortcuts");
         shortcuts.Click += delegate { AddShortcuts(); };
         logs = LinkButton("Open logs"); logs.Visible = false;
         logs.Click += delegate { OpenLogFolder(); };
-        links.Controls.Add(shortcuts); links.Controls.Add(logs); layout.Controls.Add(links, 0, 7);
-        footer = new Label { Text = "TLI runs in the background. Use its Device menu to Restart or Quit.", AutoSize = true, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9), ForeColor = muted, Padding = new Padding(0, 7, 0, 0), Margin = Padding.Empty };
-        layout.Controls.Add(footer, 0, 8);
+        links.Controls.Add(shortcuts); links.Controls.Add(logs); layout.Controls.Add(links, 0, 8);
+        footer = new Label { Text = "Closing a browser or this window leaves TLI running. Use Stop TLI here to close its background service.", AutoSize = true, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9), ForeColor = muted, Padding = new Padding(0, 7, 0, 0), Margin = Padding.Empty };
+        layout.Controls.Add(footer, 0, 9);
+        statusTimer = new System.Windows.Forms.Timer { Interval = 10000 };
+        statusTimer.Tick += delegate { if (!busy && !dismissed && reviewedAction == null && snapshot != null && snapshot.State == "running") BeginStatus(true); };
+        FormClosed += delegate { statusTimer.Dispose(); };
         FormClosing += delegate(object sender, FormClosingEventArgs e) { if (busy) { dismissed = true; Hide(); e.Cancel = true; } };
         if (autoStart) Shown += delegate { BeginLaunch(); };
     }
@@ -170,7 +201,7 @@ internal sealed class TliWindow : Form
             dismissed = false; Show(); WindowState = FormWindowState.Normal; Activate();
             // A new explicit launch must verify current ownership/readiness,
             // even when a previous advisory window is still open.
-            if (!busy && readyUrl != null) BeginLaunch();
+            if (!busy && reviewedAction == null) BeginLaunch();
         });
     }
 
@@ -188,18 +219,64 @@ internal sealed class TliWindow : Form
             (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) && String.IsNullOrEmpty(uri.UserInfo);
     }
 
-    internal static ProcessStartInfo WorkerCommand(string installation)
+    internal static ProcessStartInfo WorkerCommand(string installation, string action = null, string token = null)
     {
+        if (action != null && action != "status" && action != "stop" && action != "restart")
+            throw new ArgumentException("Unknown launcher action.");
+        if ((action == "stop" || action == "restart") && !ValidToken(token))
+            throw new ArgumentException("A fresh reviewed action token is required.");
+        if ((action == null || action == "status") && token != null)
+            throw new ArgumentException("This launcher action does not accept a token.");
         var start = new ProcessStartInfo(Path.Combine(installation, @"backend\.venv\Scripts\python.exe"),
-            "\"" + Path.Combine(installation, @"backend\desktop_launcher.py") + "\"");
+            "\"" + Path.Combine(installation, @"backend\desktop_launcher.py") + "\"" +
+            (action == null ? "" : " --" + action + (token == null ? "" : " " + token)));
         start.WorkingDirectory = installation;
         start.UseShellExecute = false; start.CreateNoWindow = true;
         start.RedirectStandardOutput = true; start.RedirectStandardError = true; start.RedirectStandardInput = true;
         start.StandardOutputEncoding = Encoding.UTF8; start.StandardErrorEncoding = Encoding.UTF8;
         start.EnvironmentVariables.Remove("PYTHONPATH"); start.EnvironmentVariables.Remove("PYTHONHOME");
         start.EnvironmentVariables.Remove("TLI_ROOT");
+        foreach (string key in new[] { "TLI_HOST", "TLI_PORT", "TLI_ENABLE_TLS", "TLI_LAN_MODE" })
+            start.EnvironmentVariables.Remove(key);
         start.EnvironmentVariables["PYTHONUTF8"] = "1";
         return start;
+    }
+
+    private static bool ValidToken(string token)
+    {
+        if (token == null || token.Length != 64) return false;
+        foreach (char value in token)
+            if (!((value >= '0' && value <= '9') || (value >= 'a' && value <= 'f'))) return false;
+        return true;
+    }
+
+    private sealed class HostSnapshot
+    {
+        internal string State, Message, Token, Url;
+        internal bool CanStop, CanRestart, RequiresRestart;
+        internal static HostSnapshot Parse(Dictionary<string, object> item)
+        {
+            object value;
+            string state = item.TryGetValue("state", out value) ? value as string : null;
+            if (state != "running" && state != "stopped" && state != "starting" && state != "unverified") return null;
+            var result = new HostSnapshot { State = state };
+            result.Message = item.TryGetValue("message", out value) ? value as string : null;
+            result.Token = item.TryGetValue("action_token", out value) ? value as string : null;
+            result.CanStop = state == "running" && ValidToken(result.Token) && item.TryGetValue("can_stop", out value) && Object.Equals(value, true);
+            result.CanRestart = state == "running" && ValidToken(result.Token) && item.TryGetValue("can_restart", out value) && Object.Equals(value, true);
+            result.RequiresRestart = item.TryGetValue("requires_restart", out value) && Object.Equals(value, true);
+            if (state == "running" && !result.RequiresRestart && item.TryGetValue("can_open", out value) && Object.Equals(value, true) &&
+                item.TryGetValue("url", out value) && LocalUrl(value as string)) result.Url = value as string;
+            return result;
+        }
+    }
+
+    private sealed class WorkerResult
+    {
+        internal int Exit = -1;
+        internal string Error, Warning, Url;
+        internal bool NeedsSetup;
+        internal HostSnapshot Snapshot;
     }
 
     private static ProcessStartInfo PowerShellCommand(string installation, string script, string arguments)
@@ -223,67 +300,220 @@ internal sealed class TliWindow : Form
         return PowerShellCommand(installation, "TLI_Setup.ps1", "-Action CreateShortcuts");
     }
 
-    internal async void BeginLaunch()
+    internal void BeginLaunch() { BeginOperation(null, null, false); }
+    internal void BeginStatus(bool background = false) { BeginOperation("status", null, background); }
+
+    private async void BeginOperation(string action, string token, bool background)
     {
-        if (busy || IsDisposed || dismissed) return;
+        if (busy || IsDisposed || dismissed || reviewedAction != null) return;
         int generation = ++operationGeneration;
-        automaticOpened = false; keepRecoveryOpen = false;
-        readyUrl = null; details.Visible = false; logs.Visible = false; repair.Visible = false; primary.Tag = null;
+        statusTimer.Stop();
+        automaticOpened = false;
+        bool opening = action == null || action == "restart";
+        if (!background) { keepRecoveryOpen = false; details.Visible = false; logs.Visible = false; repair.Visible = false; }
+        readyUrl = null; primary.Tag = null;
         if (!File.Exists(Path.Combine(root, @"backend\.venv\Scripts\python.exe"))) { SetupNeeded(); return; }
-        busy = true; primary.Enabled = false; progress.Visible = true;
-        heading.Text = "Opening TLI"; status.Text = "Checking whether TLI is already running…";
-        string workerError = null, runtimeWarning = null, url = null; bool needsSetup = false; int exit = -1;
+        busy = true; primary.Enabled = false; progress.Visible = !background;
+        SetActionAvailability(false);
+        if (!background)
+        {
+            heading.Text = action == "stop" ? "Stopping TLI…" : action == "restart" ? "Restarting TLI…" : "Checking TLI…";
+            status.Text = action == "stop" ? "Waiting for the verified background service to stop. This window will confirm when it has closed." :
+                action == "restart" ? "Stopping the verified background service, then starting this installation." : "Checking this installation's background service…";
+        }
+        WorkerResult result = null;
         try
         {
-            await Task.Run(delegate
+            var work = Task.Run(() => RunWorker(action, token, generation, background));
+            int deadline = action == "status" ? Math.Min(workerTimeout, 20000) : action == "stop" ? Math.Min(workerTimeout, 60000) : workerTimeout;
+            if (await Task.WhenAny(work, Task.Delay(deadline)).ConfigureAwait(false) != work)
             {
-                using (var process = new Process { StartInfo = WorkerCommand(root) })
+                // Never kill a host or make a shutdown claim because its worker
+                // timed out. Ignore all late events and require a fresh check.
+                OnUi(delegate
                 {
-                    process.Start(); process.StandardInput.Close();
-                    // Drain both pipes concurrently so diagnostics never block startup.
-                    var errors = Task.Run(() => process.StandardError.ReadToEnd());
-                    string line;
-                    var json = new JavaScriptSerializer { MaxJsonLength = 32768 };
-                    while ((line = process.StandardOutput.ReadLine()) != null)
-                    {
-                        if (line.Length > 32768) continue;
-                        Dictionary<string, object> item;
-                        try { item = json.Deserialize<Dictionary<string, object>>(line); }
-                        catch { continue; }
-                        object raw; string kind = item != null && item.TryGetValue("event", out raw) ? raw as string : null;
-                        string message = item != null && item.TryGetValue("message", out raw) ? raw as string : null;
-                        if (kind == "progress" && message != null) OnUi(delegate { if (busy && generation == operationGeneration) status.Text = message; });
-                        if (kind == "setup_required") needsSetup = true;
-                        if (kind == "error") workerError = message;
-                        if (kind == "warning" && item.TryGetValue("code", out raw) && raw as string == "local_ai_unavailable") runtimeWarning = message;
-                        if (kind == "ready" && item.TryGetValue("url", out raw) && LocalUrl(raw as string)) url = raw as string;
-                    }
-                    process.WaitForExit(); exit = process.ExitCode;
-                    string stderr = errors.Result;
-                    if (workerError == null && stderr.Length > 0) workerError = stderr.Length > 4000 ? stderr.Substring(stderr.Length - 4000) : stderr;
-                }
-            });
+                    if (generation != operationGeneration) return;
+                    ++operationGeneration; snapshot = null; busy = false; progress.Visible = false;
+                    if (dismissed) { Close(); return; }
+                    Failed("TLI did not confirm its state in time. The requested operation may still be finishing. Use Check status before starting an update. This window did not forcibly close any process.");
+                    heading.Text = "TLI status is unconfirmed"; primary.Text = "Check status"; primary.Tag = "status";
+                    SetActionAvailability(true);
+                });
+                return;
+            }
+            result = await work.ConfigureAwait(false);
         }
-        catch (Exception error) { workerError = error.Message; }
+        catch (Exception error) { result = new WorkerResult { Error = error.Message }; }
+        OnUi(delegate { FinishOperation(result, action, generation, background, opening); });
+    }
+
+    private void FinishOperation(WorkerResult result, string action, int generation, bool background, bool opening)
+    {
+        if (generation != operationGeneration) return;
         busy = false; progress.Visible = false;
         if (dismissed) { Close(); return; }
-        if (needsSetup) { SetupNeeded(); return; }
-        if (exit != 0 || url == null) { Failed(workerError ?? "TLI has not confirmed that it is ready. Open logs for details, then try again."); return; }
-        if (!String.IsNullOrWhiteSpace(runtimeWarning)) ReadyWithRuntimeWarning(url, runtimeWarning);
-        else
+        if (result.NeedsSetup) { SetupNeeded(); return; }
+        // A failed worker must never prove shutdown, even if it emitted a state
+        // before failing. A verified running snapshot can still offer recovery.
+        snapshot = result.Snapshot;
+        if (result.Exit != 0 && snapshot != null && snapshot.State == "stopped") snapshot = null;
+        if (result.Exit != 0 || (opening && (result.Url == null || (snapshot != null &&
+            (snapshot.State != "running" || snapshot.RequiresRestart || snapshot.Url == null)))))
         {
-            readyUrl = url; heading.Text = "TLI is ready"; status.Text = "Opening TLI in your browser…";
-            primary.Text = "Open TLI"; primary.Enabled = true;
+            Failed(result.Error ?? "TLI has not confirmed that it is ready. Check status or open logs for details.");
+            return;
         }
-        if (!automaticOpened && !dismissed)
+        if (snapshot == null && action != null)
         {
-            automaticOpened = true;
-            OpenBrowser();
+            Failed("TLI did not return a verified state. Use Check status before starting an update.");
+            heading.Text = "TLI status is unconfirmed"; primary.Text = "Check status"; primary.Tag = "status";
+            SetActionAvailability(true);
+            return;
         }
+        if (snapshot != null) ShowSnapshot(background);
+        if (opening)
+        {
+            if (!String.IsNullOrWhiteSpace(result.Warning)) ReadyWithRuntimeWarning(result.Url, result.Warning);
+            else
+            {
+                CompactView();
+                readyUrl = result.Url; heading.Text = "TLI is running"; status.Text = "Opening TLI in your browser…";
+                primary.Text = "Open TLI"; primary.Enabled = true;
+                SetActionAvailability(true);
+            }
+            if (!automaticOpened && !dismissed) { automaticOpened = true; OpenBrowser(); }
+        }
+        if (snapshot != null && snapshot.State == "running") statusTimer.Start();
+    }
+
+    private WorkerResult RunWorker(string action, string token, int generation, bool background)
+    {
+        var result = new WorkerResult();
+        using (var process = new Process { StartInfo = WorkerCommand(root, action, token) })
+        {
+            process.Start(); process.StandardInput.Close();
+            var errors = Task.Run(() => ReadErrorTail(process.StandardError));
+            var json = new JavaScriptSerializer { MaxJsonLength = 32768 };
+            foreach (string line in BoundedLines(process.StandardOutput))
+            {
+                Dictionary<string, object> item;
+                try { item = json.Deserialize<Dictionary<string, object>>(line); }
+                catch { continue; }
+                if (item == null) continue;
+                object raw;
+                string kind = item.TryGetValue("event", out raw) ? raw as string : null;
+                string message = item.TryGetValue("message", out raw) ? raw as string : null;
+                if (kind == "progress" && message != null && !background) OnUi(delegate
+                {
+                    if (busy && !dismissed && generation == operationGeneration)
+                    {
+                        status.Text = message;
+                        if (action == null) heading.Text = "Starting TLI…";
+                    }
+                });
+                if (kind == "state") result.Snapshot = HostSnapshot.Parse(item);
+                if (kind == "setup_required") result.NeedsSetup = true;
+                if (kind == "error") result.Error = message;
+                if (kind == "warning" && item.TryGetValue("code", out raw) && raw as string == "local_ai_unavailable") result.Warning = message;
+                if (kind == "ready" && item.TryGetValue("url", out raw) && LocalUrl(raw as string)) result.Url = raw as string;
+            }
+            process.WaitForExit(); result.Exit = process.ExitCode;
+            string stderr = errors.Result;
+            if (result.Error == null && stderr.Length > 0) result.Error = stderr;
+        }
+        return result;
+    }
+
+    private static IEnumerable<string> BoundedLines(StreamReader reader)
+    {
+        var line = new StringBuilder(); bool overflow = false; int next;
+        while ((next = reader.Read()) >= 0)
+        {
+            if (next == '\n')
+            {
+                if (!overflow) yield return line.ToString();
+                line.Clear(); overflow = false;
+            }
+            else if (line.Length < 32768) line.Append((char)next);
+            else overflow = true;
+        }
+        if (!overflow && line.Length > 0) yield return line.ToString();
+    }
+
+    private static string ReadErrorTail(StreamReader reader)
+    {
+        var tail = new StringBuilder(); var buffer = new char[2048]; int count;
+        while ((count = reader.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            tail.Append(buffer, 0, count);
+            if (tail.Length > 4000) tail.Remove(0, tail.Length - 4000);
+        }
+        return tail.ToString();
+    }
+
+    private void SetActionAvailability(bool available)
+    {
+        bool valid = available && !busy && reviewedAction == null;
+        stop.Visible = valid && snapshot != null && snapshot.CanStop;
+        restart.Visible = valid && snapshot != null && (snapshot.State == "stopped" || (snapshot.CanRestart && !snapshot.RequiresRestart));
+        restart.Text = snapshot != null && snapshot.State == "stopped" ? "Start TLI" : "Restart TLI";
+        check.Visible = available && reviewedAction == null && primary.Text != "Check status";
+        check.Enabled = !busy;
+        cancelReview.Visible = reviewedAction != null;
+    }
+
+    private void ShowSnapshot(bool preserveDetails = false)
+    {
+        if (snapshot == null) return;
+        readyUrl = snapshot.Url;
+        if (!preserveDetails) { CompactView(); repair.Visible = false; }
+        heading.Text = snapshot.State == "running" ? "TLI is running" : snapshot.State == "stopped" ? "TLI is stopped" :
+            snapshot.State == "starting" ? "TLI is starting" : "TLI status is unconfirmed";
+        status.Text = snapshot.State == "stopped" ? "The background service has stopped. Close this window before running the updater." :
+            snapshot.Message ?? "The background service was checked.";
+        primary.Text = snapshot.State == "stopped" ? "Close launcher" : snapshot.RequiresRestart && snapshot.CanRestart ? "Restart TLI" :
+            readyUrl != null ? "Open TLI" : "Check status";
+        primary.Tag = snapshot.State == "stopped" ? "close" : snapshot.RequiresRestart && snapshot.CanRestart ? "review-restart" : readyUrl != null ? null : "status";
+        primary.Enabled = true;
+        footer.Text = snapshot.State == "stopped" ? "Closing this window leaves TLI stopped. The updater will check again before changing files." :
+            snapshot.State == "running" ? "Closing a browser or this window leaves TLI running. Use Stop TLI here to close its background service." :
+            "Check status to verify this installation before running the updater.";
+        SetActionAvailability(true);
+    }
+
+    private void ReviewAction(string action)
+    {
+        if (busy || snapshot == null || (action == "stop" ? !snapshot.CanStop : !snapshot.CanRestart)) return;
+        statusTimer.Stop(); reviewedAction = action; reviewedToken = snapshot.Token; readyUrl = null;
+        heading.Text = action == "stop" ? "Stop TLI?" : "Restart TLI?";
+        status.Text = "Finish any active chat, Builder generation, or work from connected devices first.";
+        ShowDetails((action == "stop" ? "Stop the TLI background service for this installation. Wait for 'TLI is stopped', then close this launcher before running an update." :
+            "Stop the TLI background service, then start it again using this installation's current application files.") +
+            Environment.NewLine + Environment.NewLine + "Saved conversations, settings, and paired devices are kept. Active work may be interrupted." +
+            Environment.NewLine + Environment.NewLine + "Installation: " + root);
+        primary.Tag = "confirm"; primary.Text = action == "stop" ? "Stop TLI now" : "Restart TLI now";
+        repair.Visible = false; progress.Visible = false; SetActionAvailability(false); cancelReview.Visible = true;
+        footer.Text = "Only this installation's verified process can be stopped. TLI checks ownership again before acting.";
+        primary.Focus();
+    }
+
+    private void ConfirmAction()
+    {
+        if (reviewedAction == null || busy) return;
+        string action = reviewedAction, token = reviewedToken;
+        reviewedAction = null; reviewedToken = null; cancelReview.Visible = false;
+        BeginOperation(action, token, false);
+    }
+
+    private void CancelReview()
+    {
+        reviewedAction = null; reviewedToken = null; cancelReview.Visible = false;
+        BeginStatus();
     }
 
     internal void SetupNeeded()
     {
+        snapshot = null; statusTimer.Stop(); SetActionAvailability(false);
         readyUrl = null; keepRecoveryOpen = false; details.Visible = false; repair.Visible = false; logs.Visible = false;
         heading.Text = "Welcome to TLI";
         status.Text = "TLI will prepare Python and its required components, then open automatically. Windows may ask you to approve Microsoft's runtime installer.";
@@ -295,18 +525,21 @@ internal sealed class TliWindow : Form
     {
         readyUrl = null; keepRecoveryOpen = false; repair.Visible = false;
         heading.Text = "TLI could not open"; status.Text = "Read the details below, then try again. You can select and copy the message or open the logs.";
-        ShowDetails(message); logs.Visible = true;
         progress.Visible = false; primary.Tag = null; primary.Text = "Try again"; primary.Enabled = true;
+        if (snapshot != null) ShowSnapshot();
+        else { SetActionAvailability(true); footer.Text = "Check status to verify whether TLI is running before starting an update."; }
+        ShowDetails(message); logs.Visible = true;
     }
 
     internal void ReadyWithRuntimeWarning(string url, string message)
     {
         if (!LocalUrl(url)) { Failed("TLI did not confirm a local address that is ready to open."); return; }
-        readyUrl = url; keepRecoveryOpen = true; heading.Text = "TLI is ready";
+        readyUrl = url; keepRecoveryOpen = true; heading.Text = "TLI is running";
         status.Text = "Opening your TLI workspace. Local AI needs attention; the details below remain available while you finish setup.";
         repair.Visible = true; logs.Visible = true; ShowDetails(message);
         progress.Visible = false; primary.Tag = null; primary.Text = "Open TLI"; primary.Enabled = true;
-        footer.Text = "Repair guidance opens Microsoft's website. You can close this window while using TLI.";
+        footer.Text = "Closing a browser or this window leaves TLI running. Use Stop TLI here to close its background service.";
+        SetActionAvailability(true);
         primary.Focus();
     }
 
@@ -314,10 +547,17 @@ internal sealed class TliWindow : Form
     {
         // The old fixed-height dialog left only three lines for recovery steps.
         // Keep normal startup compact, and reserve readable space for a problem.
-        MinimumSize = SizeFromClientSize(new Size(560, 580));
-        ClientSize = new Size(Math.Max(ClientSize.Width, 620), Math.Max(ClientSize.Height, 620));
+        MinimumSize = SizeFromClientSize(new Size(560, 620));
+        ClientSize = new Size(Math.Max(ClientSize.Width, 620), Math.Max(ClientSize.Height, 650));
         details.Text = (message ?? "No further details were provided.").Replace("\r\n", "\n").Replace("\n", Environment.NewLine); details.Visible = true;
         details.SelectionStart = 0; details.SelectionLength = 0; details.ScrollToCaret();
+    }
+
+    private void CompactView()
+    {
+        details.Visible = false;
+        MinimumSize = SizeFromClientSize(new Size(560, 400));
+        ClientSize = new Size(Math.Max(560, Math.Min(ClientSize.Width, 620)), 448);
     }
 
     private void OpenRuntimeHelp()
@@ -339,7 +579,12 @@ internal sealed class TliWindow : Form
                 status.Text = "TLI is open in your browser. Local AI needs attention; you can review the details here while using your workspace.";
                 primary.Text = "Open TLI again";
             }
-            else Close();
+            else
+            {
+                heading.Text = "TLI is running";
+                status.Text = "Your workspace is open in the browser. Use Stop TLI below when you need to close its background service.";
+                primary.Text = "Open TLI again";
+            }
         }
         catch (Exception error)
         {
@@ -354,6 +599,7 @@ internal sealed class TliWindow : Form
         int generation = ++operationGeneration;
         readyUrl = null; keepRecoveryOpen = false; details.Visible = false; repair.Visible = false; logs.Visible = false;
         busy = true; primary.Enabled = false; progress.Visible = true;
+        statusTimer.Stop(); SetActionAvailability(false);
         heading.Text = "Setting up TLI"; status.Text = "Preparing your private AI workspace. TLI will open when it is ready.";
         try
         {

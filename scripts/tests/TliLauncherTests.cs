@@ -11,9 +11,9 @@ using System.Windows.Forms;
 internal static class LauncherTests
 {
     private static TliWindow Window(string root, Action<string> browser = null,
-        Func<ProcessStartInfo> setup = null, Func<ProcessStartInfo> shortcuts = null)
+        Func<ProcessStartInfo> setup = null, Func<ProcessStartInfo> shortcuts = null, int workerTimeout = 380000)
     {
-        return new TliWindow(root, false, browser, null, setup, shortcuts) { StartPosition = FormStartPosition.Manual, Location = new Point(-20000, -20000), ShowInTaskbar = false };
+        return new TliWindow(root, false, browser, null, setup, shortcuts, workerTimeout) { StartPosition = FormStartPosition.Manual, Location = new Point(-20000, -20000), ShowInTaskbar = false };
     }
     private static ProcessStartInfo FixtureCommand(string root, string script)
     {
@@ -22,6 +22,10 @@ internal static class LauncherTests
         return command;
     }
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }
+    private static Button Action(TliWindow form, string text)
+    {
+        return Descendants(form).OfType<Button>().Single(b => b.Visible && b.Text == text);
+    }
     private static IEnumerable<Control> Descendants(Control root)
     {
         foreach (Control child in root.Controls) { yield return child; foreach (Control nested in Descendants(child)) yield return nested; }
@@ -62,6 +66,31 @@ internal static class LauncherTests
             Check(!command.UseShellExecute && command.CreateNoWindow && command.RedirectStandardError && command.RedirectStandardOutput, "Worker must not create a console or block on pipes");
             Check(command.Arguments == "\"" + Path.Combine(root, @"backend\desktop_launcher.py") + "\"", "Worker quoting changed");
             Check(!command.EnvironmentVariables.ContainsKey("TLI_ROOT") && !command.EnvironmentVariables.ContainsKey("PYTHONPATH"), "Inherited Python/root overrides leaked");
+            string token = new string('a', 64);
+            Check(TliWindow.WorkerCommand(root, "status").Arguments.EndsWith(" --status"), "Status must use the fixed read-only worker action");
+            Check(TliWindow.WorkerCommand(root, "stop", token).Arguments.EndsWith(" --stop " + token), "Stop must carry the reviewed token");
+            foreach (string invalid in new[] { "restart;taskkill", "--stop", "launch" })
+            {
+                bool rejected = false;
+                try { TliWindow.WorkerCommand(root, invalid, token); } catch (ArgumentException) { rejected = true; }
+                Check(rejected, "Unknown worker action accepted");
+            }
+            foreach (string invalid in new[] { "", "a", new string('a', 63) + "&", null })
+            {
+                bool rejected = false;
+                try { TliWindow.WorkerCommand(root, "stop", invalid); } catch (ArgumentException) { rejected = true; }
+                Check(rejected, "Invalid worker token accepted");
+            }
+            foreach (string key in new[] { "TLI_HOST", "TLI_PORT", "TLI_ENABLE_TLS", "TLI_LAN_MODE" })
+            {
+                string previous = Environment.GetEnvironmentVariable(key);
+                try
+                {
+                    Environment.SetEnvironmentVariable(key, "synthetic inherited override");
+                    Check(!TliWindow.WorkerCommand(root).EnvironmentVariables.ContainsKey(key), "Inherited listener override leaked: " + key);
+                }
+                finally { Environment.SetEnvironmentVariable(key, previous); }
+            }
             var setupCommand = TliWindow.SetupCommand(root);
             Check(setupCommand.FileName == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"), "Setup must use the fixed Windows PowerShell executable");
             Check(setupCommand.Arguments == "-NoProfile -ExecutionPolicy Bypass -File \"" + Path.Combine(root, "TLI_Bootstrap.ps1") + "\" -SetupOnly", "Native setup must prepare without opening an unverified browser");
@@ -85,7 +114,11 @@ internal static class LauncherTests
             var opened = new List<string>();
             File.WriteAllText(worker, "import json,time\nprint(json.dumps({'event':'progress','message':'Preparing local AI…'}),flush=True)\ntime.sleep(.2)\nprint(json.dumps({'event':'ready','url':'https://localhost:8000'}),flush=True)\n");
             using (var form = Window(root, opened.Add))
-            { form.Show(); form.BeginLaunch(); form.BeginLaunch(); Pump(() => form.IsDisposed); }
+            {
+                form.Show(); form.BeginLaunch(); form.BeginLaunch();
+                Pump(() => opened.Count == 1 && Descendants(form).OfType<Button>().Any(b => b.Enabled && b.Text == "Open TLI again"));
+                Check(!form.IsDisposed, "Running controls must remain available after opening the browser"); form.Close();
+            }
             Check(opened.Count == 1 && opened[0] == "https://localhost:8000", "Verified worker should open one browser only");
             opened.Clear();
             File.WriteAllText(worker, "import json\nprint(json.dumps({'event':'warning','code':'local_ai_unavailable','message':'The packaged local AI engine could not start. Windows may need the Microsoft Visual C++ v14 Redistributable (x64).\\n\\nOpen the Microsoft setup guidance, install or repair the x64 package, then restart TLI. If it still fails, check the runtime details in the logs.\\n\\nYour TLI workspace is available; local AI readiness is checked separately.'}),flush=True)\nprint(json.dumps({'event':'ready','url':'https://localhost:8000'}),flush=True)\n");
@@ -134,6 +167,97 @@ internal static class LauncherTests
             { form.Show(); form.BeginLaunch(); form.Close(); Pump(() => form.IsDisposed); }
             Check(opened.Count == 0, "Closing a launch with an advisory must prevent a late browser open");
 
+            // A release mismatch stays actionable. Only an explicit second
+            // click submits the exact reviewed token; state checks never act.
+            string invocationLog = Path.Combine(root, "synthetic-actions.txt");
+            string stoppedMarker = Path.Combine(root, "synthetic-stopped.txt");
+            string state = "{'event':'state','state':'running','message':'This installation is running with older application files. Restart to open the current release.','can_stop':True,'can_restart':True,'can_open':False,'requires_restart':True,'action_token':'" + token + "'}";
+            string lifecycleFixture = "import json,pathlib,sys,time\n" +
+                "s=" + state + "\n" +
+                "with pathlib.Path('synthetic-actions.txt').open('a') as f: f.write(' '.join(sys.argv[1:])+'\\n')\n" +
+                "if sys.argv[1:]==['--stop','" + token + "']:\n print(json.dumps({'event':'progress','message':'Waiting for the verified process to stop…'}),flush=True)\n time.sleep(.2)\n pathlib.Path('synthetic-stopped.txt').write_text('stopped')\n print(json.dumps({'event':'state','state':'stopped','can_stop':False,'can_restart':False,'can_open':False}),flush=True)\n" +
+                "elif sys.argv[1:]==['--restart','" + token + "']:\n s.update(requires_restart=False,can_open=True,url='https://localhost:8000')\n print(json.dumps(s),flush=True)\n print(json.dumps({'event':'ready','url':'https://localhost:8000'}),flush=True)\n" +
+                "elif sys.argv[1:]==['--status']:\n print(json.dumps(s),flush=True)\n" +
+                "else:\n print(json.dumps(s),flush=True)\n print(json.dumps({'event':'error','message':'The running process has older application files. Restart this installation to continue.'}),flush=True)\n sys.exit(1)\n";
+            if (File.Exists(invocationLog)) File.Delete(invocationLog);
+            if (File.Exists(stoppedMarker)) File.Delete(stoppedMarker);
+            File.WriteAllText(worker, lifecycleFixture);
+            using (var form = Window(root, opened.Add))
+            {
+                form.Show(); form.BeginLaunch();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Check(opened.Count == 0 && Descendants(form).OfType<Label>().Any(l => l.Text == "TLI is running"), "Mismatch must show running and allow verified lifecycle recovery");
+                Check(Action(form, "Restart TLI").Enabled, "Mismatch needs a direct restart action");
+                Capture(form, "running-needs-restart", output); ReadableRecovery(form);
+                Action(form, "Stop TLI").PerformClick();
+                Check(!File.Exists(stoppedMarker) && !File.ReadAllText(invocationLog).Contains("--stop"), "Opening review must not stop a process");
+                Check(Descendants(form).OfType<TextBox>().Single(t => t.Visible).Text.Contains(root), "Review must identify the exact installation");
+                Capture(form, "review-stop", output); form.Size = form.MinimumSize; ReadableRecovery(form);
+                Action(form, "Cancel").PerformClick();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Check(File.ReadAllText(invocationLog).Contains("--status") && !File.Exists(stoppedMarker), "Cancel must only refresh status");
+                Action(form, "Stop TLI").PerformClick(); Action(form, "Stop TLI now").PerformClick();
+                Check(Descendants(form).OfType<Label>().Any(l => l.Text == "Stopping TLI…") && !Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"), "Stopping must show bounded progress with actions disabled");
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Close launcher"));
+                Check(File.Exists(stoppedMarker) && File.ReadAllText(invocationLog).Contains("--stop " + token), "Confirmed stop must submit only its reviewed token");
+                Check(opened.Count == 0 && Descendants(form).OfType<Label>().Any(l => l.Text == "TLI is stopped"), "Only completed stop may show stopped");
+                Check(Descendants(form).OfType<Label>().Any(l => l.Text.Contains("Close this window before running the updater")), "Stopped must explain the launcher also needs closing for the updater");
+                Check(Action(form, "Start TLI").Enabled, "Stopped launcher must offer explicit start");
+                Capture(form, "stopped", output); Action(form, "Close launcher").PerformClick();
+                Check(form.IsDisposed, "Close launcher must close without starting TLI");
+            }
+            using (var form = Window(root, opened.Add))
+            {
+                form.Show(); form.BeginLaunch();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Action(form, "Restart TLI").PerformClick();
+                Check(!File.ReadAllText(invocationLog).Contains("--restart"), "Restart requires review before execution");
+                Action(form, "Restart TLI now").PerformClick();
+                Pump(() => opened.Count == 1 && Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Check(File.ReadAllText(invocationLog).Contains("--restart " + token), "Restart must submit its reviewed token");
+                Capture(form, "running-controls", output);
+                form.BeginStatus();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Check(opened.Count == 1, "A status refresh must never open a browser or relaunch");
+                form.Close();
+            }
+            opened.Clear();
+            using (var form = Window(root, opened.Add))
+            {
+                File.WriteAllText(worker, lifecycleFixture); form.Show(); form.BeginLaunch();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Stop TLI"));
+                Action(form, "Stop TLI").PerformClick();
+                File.WriteAllText(worker, "import json,sys\nprint(json.dumps({'event':'state','state':'unverified','message':'The reviewed process changed. Check status and review again.','can_stop':False,'can_restart':False}),flush=True)\nprint(json.dumps({'event':'error','message':'Stale review was rejected.'}),flush=True)\nsys.exit(1)\n");
+                Action(form, "Stop TLI now").PerformClick();
+                Pump(() => Descendants(form).OfType<Label>().Any(l => l.Text == "TLI status is unconfirmed"));
+                Check(!Descendants(form).OfType<Button>().Any(b => b.Visible && b.Text == "Stop TLI") && opened.Count == 0, "Changed ownership must remove authority and never claim stopped"); form.Close();
+            }
+            File.WriteAllText(worker, "import json,sys\nprint(json.dumps({'event':'state','state':'stopped'}),flush=True)\nsys.exit(1)\n");
+            using (var form = Window(root, opened.Add))
+            {
+                form.Show(); form.BeginStatus();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Try again"));
+                Check(!Descendants(form).OfType<Label>().Any(l => l.Text == "TLI is stopped"), "An unsuccessful worker cannot confirm stopped"); form.Close();
+            }
+            File.WriteAllText(worker, "import json\ns=" + state.Replace(token, "untrusted&token") + "\nprint(json.dumps(s),flush=True)\n");
+            using (var form = Window(root, opened.Add))
+            {
+                form.Show(); form.BeginStatus();
+                Pump(() => Descendants(form).OfType<Button>().Any(b => b.Visible && b.Enabled && b.Text == "Check status"));
+                Check(!Descendants(form).OfType<Button>().Any(b => b.Visible && (b.Text == "Stop TLI" || b.Text == "Restart TLI")), "Malformed tokens cannot grant lifecycle actions"); form.Close();
+            }
+            string lateMarker = Path.Combine(root, "synthetic-late-result.txt");
+            if (File.Exists(lateMarker)) File.Delete(lateMarker);
+            File.WriteAllText(worker, "import json,time,pathlib\ntime.sleep(.6)\nprint(json.dumps({'event':'state','state':'stopped'}),flush=True)\nprint(json.dumps({'event':'ready','url':'https://localhost:8000'}),flush=True)\npathlib.Path('synthetic-late-result.txt').write_text('finished')\n");
+            using (var form = Window(root, opened.Add, workerTimeout: 100))
+            {
+                form.Show(); form.BeginStatus();
+                Pump(() => Descendants(form).OfType<Label>().Any(l => l.Text == "TLI status is unconfirmed"));
+                Pump(() => File.Exists(lateMarker)); Application.DoEvents();
+                Check(opened.Count == 0 && !Descendants(form).OfType<Label>().Any(l => l.Text == "TLI is stopped"), "Timed-out workers must not publish stale stopped or browser readiness");
+                Check(Action(form, "Check status").Enabled, "Timeout needs an explicit fresh status check"); form.Close();
+            }
+
             // Both injected commands are disposable Python scripts. These tests
             // never run the real bootstrap, installers, or shortcut creation.
             string setup = Path.Combine(root, "synthetic_setup.py"), shortcuts = Path.Combine(root, "synthetic_shortcuts.py");
@@ -152,7 +276,8 @@ internal static class LauncherTests
                 Pump(() => Descendants(form).OfType<Label>().Any(l => l.Text == "Preparing synthetic components"));
                 Check(!File.Exists(phaseCompleted), "Short progress phases must appear while setup is waiting, before completion");
                 Check(!Descendants(form).OfType<Label>().Any(l => l.Text.Contains("PRIVATE PACKAGE DIAGNOSTIC")), "Package output must remain in setup.log");
-                Pump(() => form.IsDisposed);
+                Pump(() => opened.Count == 1 && Descendants(form).OfType<Button>().Any(b => b.Enabled && b.Text == "Open TLI again"));
+                form.Close();
             }
             Check(opened.SequenceEqual(new[] { "https://localhost:8000" }), "Successful setup must verify and open once despite duplicate ready events");
             Check(new FileInfo(setupLog).Length <= TliWindow.SetupLogLimit, "Setup output must remain bounded");
@@ -183,7 +308,8 @@ internal static class LauncherTests
             {
                 form.Show(); form.SetupNeeded();
                 Descendants(form).OfType<Button>().Single(b => b.Text == "Set up TLI").PerformClick();
-                Pump(() => form.IsDisposed);
+                Pump(() => opened.Count == 1 && Descendants(form).OfType<Button>().Any(b => b.Enabled && b.Text == "Open TLI again"));
+                form.Close();
             }
             Check(opened.Count == 1 && File.ReadAllText(setupLog).Contains("Shortcut creation did not finish (exit 3)"), "Optional shortcut failure must be logged without blocking verified startup");
             opened.Clear();
@@ -211,7 +337,7 @@ internal static class LauncherTests
                 }
             }
             finally { Directory.Delete(linkedData); }
-            Console.WriteLine("PASS: readable native recovery at default/minimum size; automatic workspace entry with optional warning; fixed Microsoft help; URL boundary; hidden exact worker/setup; one browser after ready and setup; bounded setup log; concurrent pipe drain; setup failure; nonfatal shortcuts; close during startup/setup.");
+            Console.WriteLine("PASS: retained running controls; mismatch restart/stop recovery; explicit action review and exact tokens; cancel only checks status; confirmed stop and close-launcher handoff; restart opens once; refresh never relaunches; stale ownership, malformed tokens, failed stopped claims and late timeout results rejected; readable native recovery at default/minimum size; optional runtime warning; URL boundary; hidden worker/setup; bounded output; setup/shortcut failures; close during startup/setup.");
             return 0;
         }
         catch (Exception error) { Console.Error.WriteLine(error); return 1; }

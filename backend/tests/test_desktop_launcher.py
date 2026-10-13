@@ -16,6 +16,7 @@ def events(capsys):
 
 @pytest.fixture
 def worker(monkeypatch):
+    monkeypatch.setattr(D.L, 'desktop_status', lambda _root: None)
     monkeypatch.setattr(D.L, "dependencies_ready", lambda root: True)
     monkeypatch.setattr(D.L.webbrowser, "open", lambda *args: pytest.fail("The worker must not open a browser."))
     monkeypatch.setattr(D.L, "launch", lambda *args, **kwargs: pytest.fail("Unexpected backend launch."))
@@ -159,6 +160,7 @@ def test_existing_backend_keeps_verified_settings_snapshot_and_opens_no_browser(
     root.mkdir()
     monkeypatch.setattr(D, "__file__", str(root / "backend" / "desktop_launcher.py"))
     monkeypatch.setattr(D.L, "dependencies_ready", lambda root: True)
+    monkeypatch.setattr(D.L, 'desktop_status', lambda _root: None)
     saved = {"host": "0.0.0.0", "port": 8443, "https": True}
     reads = []
 
@@ -185,3 +187,48 @@ def test_existing_backend_keeps_verified_settings_snapshot_and_opens_no_browser(
     assert len(reads) == 1
     assert emitted[-1] == {"event": "ready", "url": "https://localhost:8443"}
     assert all(event["event"] == "progress" for event in emitted[:-1])
+
+
+def test_status_checks_without_launching_or_installing(worker, monkeypatch, capsys):
+    snapshot = {'state': 'stopped', 'can_stop': False, 'can_restart': False, 'can_open': False}
+    monkeypatch.setattr(D.L, 'desktop_status', lambda _root: snapshot)
+    monkeypatch.setattr(D.L, 'dependencies_ready', lambda _root: pytest.fail('Status must not run setup'))
+    assert D.main(['--status']) == 0
+    assert events(capsys)[0] == [{'event': 'state', **snapshot}]
+
+
+def test_updated_dependencies_keep_running_host_stop_controls(worker, monkeypatch, capsys):
+    snapshot = {'state': 'running', 'can_stop': True, 'can_restart': True, 'action_token': 'c' * 64}
+    monkeypatch.setattr(D.L, 'desktop_status', lambda _root: snapshot)
+    monkeypatch.setattr(D.L, 'dependencies_ready', lambda _root: False)
+    assert D.main([]) == 1
+    emitted, _ = events(capsys)
+    assert emitted[0] == {'event': 'state', **snapshot}
+    assert emitted[1]['event'] == 'error' and 'Stop TLI' in emitted[1]['message']
+    assert all(row['event'] != 'setup_required' for row in emitted)
+
+
+def test_release_mismatch_retains_verified_recovery_actions(worker, monkeypatch, capsys):
+    snapshot = {'state': 'running', 'requires_restart': True, 'can_stop': True,
+                'can_restart': True, 'can_open': False, 'action_token': 'a' * 64}
+    monkeypatch.setattr(D.L, 'desktop_status', lambda _root: snapshot)
+    monkeypatch.setattr(D.L, 'launch', lambda *_args, **_kwargs: H._fail('Earlier code is still running'))
+    assert D.main([]) == 1
+    emitted, _ = events(capsys)
+    assert emitted[0] == {'event': 'state', **snapshot}
+    assert emitted[1]['event'] == 'error'
+
+
+@pytest.mark.parametrize('action', ['stop', 'restart'])
+def test_fixed_native_action_uses_review_and_only_restart_opens(worker, monkeypatch, capsys, action):
+    token = 'b' * 64
+    def perform(root, selected, reviewed, *, progress):
+        assert root == Path(D.__file__).resolve().parent.parent
+        assert (selected, reviewed) == (action, token)
+        progress('Stopping TLI')
+        return {'backend_state': 'running', 'url': 'https://localhost:8443'} if action == 'restart' else None
+    monkeypatch.setattr(D.L, 'desktop_action', perform)
+    assert D.main(['--' + action, token]) == 0
+    emitted, _ = events(capsys)
+    assert emitted == [{'event': 'progress', 'message': 'Stopping TLI'}] + (
+        [{'event': 'ready', 'url': 'https://localhost:8443'}] if action == 'restart' else [])

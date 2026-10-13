@@ -83,7 +83,8 @@ def main():
             with H.FileLock(H.path_for(root, "setup.lock")):
                 result = {"installation_id": H.installation(root, create=True)["installation_id"]}
         else:
-            result = {"helper_running": helper_running(root)}
+            result = {"backend": L.desktop_status(root, issue_token=False),
+                      "helper_running": helper_running(root)}
             try:
                 cfg = H.config(root)
                 result.update(enabled=True, port=cfg["port"], mode="same_user_sign_in", wake_host=False)
