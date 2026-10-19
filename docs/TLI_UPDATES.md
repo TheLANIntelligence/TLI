@@ -16,8 +16,8 @@ It does not update an installed native phone Companion or an old frozen backend.
    a newer release can still appear, and Settings keeps the update available.
 2. Choose **Download update**. TLI downloads and verifies the archive. Your
    running application is unchanged at this point.
-3. Choose **Install and restart**, review the version and original installation
-   folder, finish active work, and confirm. TLI stops its own managed host,
+3. Choose **Install and restart**, review the version and original host address,
+   finish active work, and confirm. TLI stops its own managed host,
    installs the verified application files, prepares any missing Python
    dependencies, and starts the same installation again. Internet may be needed
    for changed dependencies. The browser checks the installation identity,
@@ -92,7 +92,8 @@ or package changes made to the Python environment.
 - **HTTPS certificate verification failed:** check the computer's date and time.
   If downloading inside an older TLI still fails, open the
   [official TLI releases](https://github.com/TheLANIntelligence/TLI/releases)
-  in your browser, download the matching platform ZIP and follow steps 2–5 above.
+  in your browser, download the matching platform ZIP and follow the manual
+  completion and recovery fallback steps above.
   This uses the updater from the downloaded package and keeps your original
   installation and saved data. Do not ignore browser certificate warnings.
   Current source uses the system's trusted certificates plus certifi's Mozilla

@@ -260,7 +260,8 @@ exit 9
             shell_bin = "/" + shell_bin[0].lower() + shell_bin[2:]
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""), "TEST_BIN": shell_bin,
                     "TEST_LOG": (self.root / "calls.txt").as_posix(), "TEST_READY": (self.root / "ready").as_posix(),
-                    "TEST_STARTED": (self.root / "started").as_posix(), "TLI_ROOT": "unrelated-installation"}
+                    "TEST_STARTED": (self.root / "started").as_posix(), "TLI_ROOT": "unrelated-installation",
+                    "TLI_OPEN_BROWSER": "1"}
 
     def launch(self, *arguments, wrapper=False):
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}

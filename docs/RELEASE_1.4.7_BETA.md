@@ -3,7 +3,7 @@
 This release adds **Download update → Install and restart** to Software Updates
 and publishes the latest desktop improvements.
 
-- Review the verified version and original installation before confirming an
+- Review the verified version and original host address before confirming an
   update. TLI stops its own managed host, installs application files, prepares
   missing dependencies and reopens the same installation. The browser verifies
   the new process and version before offering Reload. Failed or interrupted work

@@ -58,7 +58,7 @@ def update(desktop, monkeypatch):
     monkeypatch.setattr(S, '_session_revocation_epoch', object())
     monkeypatch.setattr(U, '_state', U.UpdateState.READY); monkeypatch.setattr(U, '_info', {'version': '2.0.0', 'can_prepare': True})
     monkeypatch.setattr(U, '_ready_path', str(source)); monkeypatch.setattr(U, '_SETTINGS_FILE', root / 'data/update_settings.json')
-    monkeypatch.setattr(W.sys, 'platform', 'win32')
+    monkeypatch.setattr(W, 'sys', SimpleNamespace(platform=sys.platform if sys.platform in {'win32', 'darwin'} else 'win32'))
     monkeypatch.setattr(W, 'check_helper_blockers', lambda root, *, check: check())
     from ai.model_downloads import downloads
     monkeypatch.setattr(downloads, 'status', lambda: {'in_progress': False})
@@ -260,11 +260,18 @@ def test_install_rechecks_reviewed_manifest_under_install_lock(update, monkeypat
     assert (update.root / 'backend/main.py').read_bytes() == b'# old main'
 
 
-def test_setup_uses_fixed_hidden_command_scrubs_pip_credentials_and_does_not_kill(tmp_path, monkeypatch):
+@pytest.mark.parametrize('platform', ['win32', 'darwin'])
+def test_setup_uses_fixed_hidden_command_scrubs_pip_credentials_and_does_not_kill(tmp_path, monkeypatch, platform):
     root = tmp_path / 'desktop'; root.mkdir()
     identity = H.installation(root, create=True)
     calls = []
-    monkeypatch.setattr(W.sys, 'platform', 'win32')
+    import process_utils
+    monkeypatch.setattr(W, 'sys', SimpleNamespace(platform=platform))
+    monkeypatch.setattr(process_utils, 'sys', SimpleNamespace(platform=platform))
+    if platform == 'win32':
+        # Popen is mocked below: test the Windows flag without pretending that
+        # the real macOS subprocess module supports Windows process creation.
+        monkeypatch.setattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000, raising=False)
     monkeypatch.setenv('PIP_INDEX_URL', 'https://secret:password@example.invalid/simple')
     monkeypatch.setenv('HTTPS_PROXY', 'https://secret:password@example.invalid')
     class Process:
@@ -278,16 +285,23 @@ def test_setup_uses_fixed_hidden_command_scrubs_pip_credentials_and_does_not_kil
     with pytest.raises(W.SetupUncertain):
         W.prepare_dependencies(root, {'host': '127.0.0.1', 'port': 8000, 'https': False}, timeout=1)
     command, options = calls[0]
-    assert command[-2:] == [str(root / 'TLI_Bootstrap.ps1'), '-SetupOnly']
+    if platform == 'win32':
+        assert command[-2:] == [str(root / 'TLI_Bootstrap.ps1'), '-SetupOnly']
+        assert options['creationflags'] & subprocess.CREATE_NO_WINDOW
+    else:
+        assert command == ['/bin/bash', str(root / 'TLI_Start.sh'), '--setup-only']
+        assert 'creationflags' not in options
     assert options['shell'] is False
-    if os.name == 'nt': assert options['creationflags'] & subprocess.CREATE_NO_WINDOW
     assert 'PIP_INDEX_URL' not in options['env'] and 'HTTPS_PROXY' not in options['env']
     assert options['env']['PIP_NO_INPUT'] == '1' and identity['installation_id'] == options['env']['TLI_MANAGED_CHILD']
 
 
 def test_real_setup_child_timeout_retains_drain_until_exit_and_never_restarts(tmp_path, monkeypatch):
     root = tmp_path / 'desktop'; root.mkdir(); H.installation(root, create=True)
-    monkeypatch.setattr(W.sys, 'platform', 'win32')
+    if sys.platform not in {'win32', 'darwin'}:
+        # Linux can exercise the fixed bash command without altering the native
+        # subprocess implementation; desktop install itself stays unsupported.
+        monkeypatch.setattr(W, 'sys', SimpleNamespace(platform='darwin'))
     original = subprocess.Popen
     child = []
     def spawn(command, **options):
