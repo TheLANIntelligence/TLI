@@ -13,7 +13,8 @@ const ready = { ...available, state: 'ready', can_prepare: false, can_open: true
 
 function fixture(initial = available, options = {}) {
   const nodes = {}, calls = [], timers = new Map(), documentEvents = {}, windowEvents = {}, lifecycle = [], toasts = [], navigations = [];
-  let serial = 0, handler = null, current = initial;
+  let serial = 0, handler = null, current = initial, now = Date.now();
+  class ClockDate extends Date { static now() { return now; } }
   class Element {
     constructor(id, markup = '') { this.id = id; this.handlers = {}; this.textContent = ''; this.value = ''; this.attrs = {}; this.style = { setProperty(name, value) { this[name] = value; } }; this.hidden = /\shidden(?:\s|>)/.test(markup); this.disabled = /\sdisabled(?:\s|>)/.test(markup); this.checked = false; }
     setAttribute(name, value) { this.attrs[name] = value; }
@@ -29,7 +30,7 @@ function fixture(initial = available, options = {}) {
     addEventListener(name, fn) { (documentEvents[name] ||= []).push(fn); } };
   const window = { crypto:{randomUUID:()=> 'a'.repeat(32)}, location: { href: options.url || 'http://127.0.0.1:8000/', assign: url => navigations.push(url), reload() { assert.fail('Preparing an update must never reload'); } },
     TLIHostLifecycle: { open: (...args) => lifecycle.push(args) }, addEventListener(name, fn) { (windowEvents[name] ||= []).push(fn); } };
-  const context = vm.createContext({ document, window, navigator: { userAgent: options.mobile ? 'iPhone Mobile' : 'Desktop', userAgentData: { mobile: !!options.mobile } }, URL, Date, AbortController,
+  const context = vm.createContext({ document, window, navigator: { userAgent: options.mobile ? 'iPhone Mobile' : 'Desktop', userAgentData: { mobile: !!options.mobile } }, URL, Date:ClockDate, AbortController,
     setTimeout(fn, ms) { timers.set(++serial, { fn, ms }); return serial; }, clearTimeout(id) { timers.delete(id); },
     showToast: (...args) => toasts.push(args), fetch: async (url, request = {}) => {
       calls.push({ url, ...request });
@@ -39,6 +40,7 @@ function fixture(initial = available, options = {}) {
     } });
   vm.runInContext(source, context);
   return { nodes, calls, timers, lifecycle, toasts, document, navigations, setStatus(value) { current = value; }, handler(fn) { handler = fn; },
+    advance(ms) { now += ms; },
     async start() { for (const fn of documentEvents.DOMContentLoaded || []) await fn(); await flush(); },
     async poll(ms) { const timer = [...timers].find(([, value]) => !ms || value.ms === ms); assert.ok(timer, 'Expected a scheduled poll'); timers.delete(timer[0]); await timer[1].fn(); await flush(); },
     async visibility(hidden) { document.hidden = hidden; for (const fn of documentEvents.visibilitychange || []) await fn(); await flush(); },
@@ -346,6 +348,64 @@ test('restart confirmation requires same installation, a new process and exact r
   assert.equal(f.nodes['tli-update-install-reload'].hidden, false); assert.equal(f.navigations.length, 0);
   assert.equal(f.calls.filter(call => call.url.includes('/receipt/')).length, 0, 'A restarted process has lost the old PIN session; public identity is sufficient');
   await f.nodes['tli-update-install-reload'].click(); assert.deepEqual(f.navigations, ['http://127.0.0.1:8000/']);
+});
+
+function longInstallation() {
+  const f = installFixture();
+  f.handler(url => url.endsWith('/preview') ? preview() : url.endsWith('/confirm') ? receipt() : url.includes('/receipt/') ? receipt({status:'preparing'}) : url.endsWith('/lifecycle/ready') ? {schema_version:1, instance_id:'old_process', installation_id:'original_install', current_version:'1.3.4'} : undefined);
+  return f;
+}
+
+test('installation reconnect backs off to five seconds, covers dependency preparation and stops exactly at thirty minutes', async () => {
+  const f = longInstallation(); await f.start(); await f.nodes['settings-update-action-btn'].click(); await f.nodes['tli-update-install-confirm'].click();
+  await f.poll(1000);
+  for (let i=0; i<4; i++) await f.poll(2000);
+  assert.deepEqual([...f.timers.values()].map(t=>t.ms), [5000]);
+  f.advance(15 * 60 * 1000); await f.poll(5000);
+  assert.match(f.nodes['tli-update-install-status'].textContent, /Preparing updated Python/);
+  assert.deepEqual([...f.timers.values()].map(t=>t.ms), [5000]);
+  f.advance(15 * 60 * 1000 - 1); await f.poll(5000);
+  assert.deepEqual([...f.timers.values()].map(t=>t.ms), [1]);
+  const before = f.calls.length; f.advance(1); await f.poll(1);
+  assert.equal(f.calls.length, before, 'The deadline timer cannot start another request');
+  assert.equal(f.timers.size, 0);
+  assert.match(f.nodes['tli-update-install-status'].textContent, /may still be installing.*Check connection.*Do not start another TLI copy or run another update/);
+  assert.equal(f.nodes['tli-update-install-check'].disabled, false);
+  assert.equal(f.nodes['tli-update-install-confirm'].hidden, true);
+  assert.equal(f.nodes['settings-update-open-btn'].disabled, true);
+  assert.equal(f.nodes['settings-update-quit-btn'].disabled, true);
+  await f.nodes['tli-update-install-confirm'].emit('click');
+  assert.equal(f.calls.filter(call=>call.url.endsWith('/confirm')).length, 1);
+  f.handler(url=>url.endsWith('/lifecycle/ready')?{schema_version:1,instance_id:'new_process',installation_id:'original_install',current_version:'1.3.5'}:undefined);
+  await f.nodes['tli-update-install-check'].click();
+  assert.equal(f.nodes['tli-update-install-title'].textContent, 'Update confirmed');
+  assert.equal(f.calls.length, before+1); assert.equal(f.calls.at(-1).method, undefined);
+  assert.equal(f.timers.size, 0);
+});
+
+test('reopening and verified PIN recovery preserve the original expired window without automatic reads or another install', async () => {
+  const f = longInstallation(); await f.start(); await f.nodes['settings-update-action-btn'].click(); await f.nodes['tli-update-install-confirm'].click();
+  await f.nodes['tli-update-install-cancel'].click(); f.advance(30 * 60 * 1000);
+  const before = f.calls.length;
+  await f.nodes['settings-update-action-btn'].click();
+  assert.match(f.nodes['tli-update-install-status'].textContent, /may still be installing/);
+  assert.equal(f.timers.size, 0); assert.equal(f.calls.length, before);
+  await f.event('tli-session-locked'); await f.event('tli-session-unlocked'); await f.event('tli-private-observation-ready');
+  await f.nodes['settings-update-action-btn'].click();
+  assert.match(f.nodes['tli-update-install-status'].textContent, /may still be installing.*Do not start another TLI copy/);
+  assert.equal(f.timers.size, 0); assert.equal(f.calls.length, before);
+  await f.nodes['tli-update-install-check'].click();
+  assert.equal(f.calls.length, before+2); assert.ok(f.calls.slice(before).every(call=>!call.method));
+  assert.equal(f.timers.size, 0); assert.equal(f.calls.filter(call=>call.url.endsWith('/confirm')).length, 1);
+});
+
+test('a stalled clock cannot turn bounded installation observation into endless polling', async () => {
+  const f = longInstallation(); await f.start(); await f.nodes['settings-update-action-btn'].click(); await f.nodes['tli-update-install-confirm'].click();
+  for (let i=0; i<400; i++) await f.poll(i===0?1000:i<5?2000:5000);
+  assert.equal(f.timers.size, 0);
+  assert.equal(f.calls.filter(call=>call.url.endsWith('/lifecycle/ready')).length, 400);
+  assert.match(f.nodes['tli-update-install-status'].textContent, /checks have paused.*may still be installing/);
+  assert.equal(f.calls.filter(call=>call.url.endsWith('/confirm')).length, 1);
 });
 
 test('same process, wrong installation and wrong version never report update confirmation', async () => {
