@@ -9,14 +9,14 @@ export const PUBLIC_RELEASE = Object.freeze({
   "windows": {
     "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_Windows.zip",
     "filename": "TLI_1.4.7-beta_Windows.zip",
-    "sha256": "0e07e30575db5b11921d1c7c58eba37d1f8d250985d045a2fa4faa89dbf69b1c",
+    "sha256": "14805dc33a66b491fb2dc8a285aebadc98a69abc54a6d6361253a967f316884c",
     "updater": "guided-v1",
-    "size_bytes": 21910787
+    "size_bytes": 21910776
   },
   "macos": {
     "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_macOS.zip",
     "filename": "TLI_1.4.7-beta_macOS.zip",
-    "sha256": "580bd9d056c9f76015c7b926149bde09b7495e8ef94c1f14a87b29a6f50bf6f3",
+    "sha256": "2ee050b96e99327bd1d307151af4d708248c350992ec1999e093b94988b74526",
     "updater": "guided-v1",
     "size_bytes": 29261213,
     "command": "curl -fsSL https://thelanintelligence.com/install_mac.sh | bash",

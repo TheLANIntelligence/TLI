@@ -9,14 +9,14 @@
     "windows": {
       "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_Windows.zip",
       "filename": "TLI_1.4.7-beta_Windows.zip",
-      "sha256": "0e07e30575db5b11921d1c7c58eba37d1f8d250985d045a2fa4faa89dbf69b1c",
+      "sha256": "14805dc33a66b491fb2dc8a285aebadc98a69abc54a6d6361253a967f316884c",
       "updater": "guided-v1",
-      "size_bytes": 21910787
+      "size_bytes": 21910776
     },
     "macos": {
       "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_macOS.zip",
       "filename": "TLI_1.4.7-beta_macOS.zip",
-      "sha256": "580bd9d056c9f76015c7b926149bde09b7495e8ef94c1f14a87b29a6f50bf6f3",
+      "sha256": "2ee050b96e99327bd1d307151af4d708248c350992ec1999e093b94988b74526",
       "updater": "guided-v1",
       "size_bytes": 29261213
     }
@@ -32,16 +32,16 @@
       "windows": {
         "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.6-beta/TLI_1.4.6-beta_Windows.zip",
         "filename": "TLI_1.4.6-beta_Windows.zip",
-        "sha256": "f9e3061ad996028a150b10128d9fe3d5040cef10b0b403e2ab98fe65e4d30f4c",
+        "sha256": "cf06418139a0168f0ea07bc87745be0932f5fdd4b01b0be61d26dca8fc700574",
         "updater": "guided-v1",
-        "size_bytes": 21508765
+        "size_bytes": 21508890
       },
       "macos": {
         "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.6-beta/TLI_1.4.6-beta_macOS.zip",
         "filename": "TLI_1.4.6-beta_macOS.zip",
-        "sha256": "d2a00fcd5bebdf92c3fa157bd86f85d41b3d4e6d08a74bf77d9636aa90b09af6",
+        "sha256": "5a952b4ea1f29cfaf81d4819f89f322a3ecdeaeec63801e31e682119c64108ff",
         "updater": "guided-v1",
-        "size_bytes": 28865338
+        "size_bytes": 28865473
       }
     }
   }
