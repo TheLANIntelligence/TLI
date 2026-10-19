@@ -244,9 +244,13 @@ if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then
     touch "$TEST_READY"; exit 0
 fi
 case "$1" in
-    */host_launcher.py) [ -f "$TEST_READY" ]; exit $? ;;
-    */launch_checks.py) exit "${TEST_PORT_FAIL:-0}" ;;
-    */main.py) printf '%s\\n' "$TLI_OPEN_BROWSER" > "$TEST_STARTED"; exit 0 ;;
+    */host_launcher.py)
+        [ -f "$TEST_READY" ] || exit 1
+        if [ "${2:-}" = --check-dependencies ]; then exit 0; fi
+        [ "${TEST_PORT_FAIL:-0}" = 0 ] || exit 1
+        if [ "${2:-}" = --no-browser ]; then echo 0; else echo 1; fi > "$TEST_STARTED"
+        exit 0 ;;
+    */main.py|*/launch_checks.py) exit 49 ;;
 esac
 exit 9
 ''', encoding="utf-8", newline="\n")
@@ -276,6 +280,18 @@ exit 9
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / "started").read_text().strip(), "0")
         self.assertEqual((self.root / "calls.txt").read_text().count("-m pip "), 1)
+        self.assertNotIn("/main.py", (self.root / "calls.txt").read_text())
+        self.assertIn("Quit TLI", result.stdout)
+
+    def test_default_launch_and_environment_no_browser_use_managed_host(self):
+        self.assertEqual(self.launch("--setup-only").returncode, 0)
+        result = self.launch(wrapper=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "started").read_text().strip(), "1")
+        self.env["TLI_OPEN_BROWSER"] = "0"
+        result = self.launch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "started").read_text().strip(), "0")
 
     def test_dependency_failure_and_busy_port_never_start_backend(self):
         self.env["TEST_PIP_FAIL"] = "1"

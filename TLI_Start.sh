@@ -75,11 +75,13 @@ if [ "$SETUP_ONLY" -eq 1 ]; then
     exit 0
 fi
 
-# Check the saved address without terminating or replacing an existing process.
-"$VENV_PYTHON" "$BACKEND_DIR/launch_checks.py" || exit 1
 printf '\nStarting TLI. The browser will use the address printed by the host.\n'
-printf 'Keep this Terminal window open. Press Ctrl+C here to stop TLI.\n'
+printf 'Use Quit TLI inside the app to stop the background host. You may close Terminal after startup completes.\n'
 printf 'AI model weights are separate: configure a model in TLI or a local provider such as LM Studio.\n\n'
 cd "$BACKEND_DIR"
-export TLI_OPEN_BROWSER="$OPEN_BROWSER"
-exec "$VENV_PYTHON" "$BACKEND_DIR/main.py"
+# The managed launcher verifies the exact installation/process before reusing
+# a host, and records its child so reviewed quit/restart/update can stop it.
+if [ "$OPEN_BROWSER" = "0" ]; then
+    exec "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --no-browser
+fi
+exec "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py"

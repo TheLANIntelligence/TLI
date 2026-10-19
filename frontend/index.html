@@ -81,6 +81,7 @@
 <link rel="stylesheet" href="connected-workspaces.css?v=1ef15498e2d6">
 <link rel="stylesheet" href="header-status.css?v=f75f2cab3d29">
 <link rel="stylesheet" href="onboarding.css?v=934afebc6cca">
+<link rel="stylesheet" href="update-workspace.css?v=ffd44f0e72ad" />
 </head>
 
 <body>
@@ -2907,7 +2908,7 @@
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">Software Updates</div>
-                    <div class="settings-section-subtitle">Download a verified update, then finish installation when you are ready.</div>
+                    <div class="settings-section-subtitle">Download a verified update, then review installation and restart when you are ready.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2936,8 +2937,10 @@
                     <a class="btn-outline" id="settings-update-manual-link" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Download from releases</a>
                     <button class="btn-outline" id="settings-update-notes-btn" type="button" hidden>What's new</button>
                   </div>
-                  <div id="settings-update-ready" hidden>
+                  <details id="settings-update-ready" class="tli-update-manual" hidden>
+                    <summary>Manual installation options</summary>
                     <p>The verified package is ready. Installation has not started.</p>
+                    <button class="btn-outline" id="settings-update-open-btn" type="button">Open update folder</button>
                     <ol>
                       <li>Open the update folder and keep it open.</li>
                       <li id="settings-update-stop">Finish active work, then choose Quit TLI below and review the confirmation. Stop any optional Host Start helper too. Closing this browser alone does not stop TLI.</li>
@@ -2946,7 +2949,7 @@
                     </ol>
                     <p id="settings-update-path" class="small-meta" style="overflow-wrap:anywhere"></p>
                     <button class="btn-outline" id="settings-update-quit-btn" type="button" aria-haspopup="dialog" aria-controls="tli-host-lifecycle-dialog" hidden>Quit TLI…</button>
-                  </div>
+                  </details>
                   <details class="tli-release-settings">
                     <summary>Running host &amp; application files</summary>
                     <p id="settings-release-state" role="status">Running application identity has not been checked.</p>
@@ -3249,7 +3252,7 @@
         <button class="btn-icon" data-close-modal aria-label="Close About TLI">&times;</button>
       </div>
       <div class="modal-body">
-        <p><strong>Version:</strong> <span id="about-version">v1.4.5-beta</span></p>
+        <p><strong>Version:</strong> <span id="about-version">v1.4.6-beta</span></p>
         <p><strong>Purpose:</strong> Your private home console for computers, devices, files and local AI.</p>
         <p><strong>AI:</strong> Bundled local inference, optional LM Studio and connected TLI computers. Check AI &amp; chat settings for current model availability.</p>
         <p><strong>Saved work:</strong> Notes &amp; fixes holds setup details, preferences and past fixes. Vault notes use a separate passphrase.</p>
@@ -3271,6 +3274,23 @@
     <p id="tli-host-lifecycle-warning">Active chats, scans and other work will be interrupted. Connected phones and other browsers will disconnect. Finish any work you want to keep before continuing.</p>
     <p id="tli-host-lifecycle-status" role="status" aria-live="polite"></p>
     <div class="tli-host-lifecycle-actions"><button id="tli-host-lifecycle-cancel" class="btn-outline" type="button" autofocus>Keep TLI running</button><button id="tli-host-lifecycle-check" class="btn-outline" type="button" hidden>Check connection</button><button id="tli-host-lifecycle-confirm" class="btn-primary" type="button" disabled>Confirm</button><button id="tli-host-lifecycle-reload" class="btn-primary" type="button" hidden>Reload TLI</button></div>
+  </dialog>
+
+  <dialog id="tli-update-install-dialog" class="tli-host-lifecycle-dialog tli-update-install-dialog" aria-labelledby="tli-update-install-title" aria-describedby="tli-update-install-warning">
+    <h2 id="tli-update-install-title">Install update and restart?</h2>
+    <p id="tli-update-install-version"></p>
+    <p id="tli-update-install-destination" class="small-meta"></p>
+    <p id="tli-update-install-warning">Finish active chats, tasks, scans and downloads before continuing. TLI will stop, install the verified application files, and restart. Connected phones and other browsers will disconnect.</p>
+    <p id="tli-update-install-preserves">Your original installation keeps its saved data, settings and models. Keep using its existing folder and shortcuts.</p>
+    <p id="tli-update-install-details"></p>
+    <p id="tli-update-install-status" role="status" aria-live="polite"></p>
+    <div class="tli-host-lifecycle-actions">
+      <button id="tli-update-install-cancel" class="btn-outline" type="button" autofocus>Not now</button>
+      <button id="tli-update-install-check" class="btn-outline" type="button" hidden>Check connection</button>
+      <button id="tli-update-install-confirm" class="btn-primary" type="button" disabled>Install and restart</button>
+      <button id="tli-update-install-reload" class="btn-primary" type="button" hidden>Reload updated TLI</button>
+    </div>
+    <a id="tli-update-install-manual" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Manual update and recovery instructions</a>
   </dialog>
 
   <!-- Main JS bundle -->
@@ -3307,7 +3327,7 @@
   <script src="/js/federation.js?v=56198040a905"></script>
   <script src="/js/hub.js?v=b0ad918029b2"></script>
   <script src="/js/tli-apps.js?v=3b2b0820b8bc"></script>
-  <script src="/js/tli-update.js?v=a84095bffb80"></script>
+  <script src="/js/tli-update.js?v=7927cbe8b846"></script>
   <!-- app.js second-pass split (2026-04-11) -->
   <script src="/js/peer-transfers.js?v=a486068529b8"></script>
   <script src="/js/tli-chat.js?v=140a99440ba1"></script>

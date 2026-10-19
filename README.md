@@ -1,5 +1,8 @@
 # TLI — TheLANIntelligence
 
+> **Updater compatibility release 1.4.6-beta.** This release preserves the 1.4.5 application and adds reviewed installation and restart inside TLI. Existing 1.4.5 users can download this bridge in Settings, then close TLI and finish the one-time update from the prepared folder. Reopen the original installation to download and install the latest full release inside TLI. Saved data, models and the existing environment stay in their original folder.
+
+
 TLI is a private, general-purpose AI for conversation, questions, learning,
 writing, planning and coding. Start in **Ask TLI** without selecting a device or
 computer problem. Connected tools extend that experience with computer help,
@@ -11,7 +14,7 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Desktop release: 1.4.5-beta.** Download the prepared
+**Desktop release: 1.4.6-beta.** Download the prepared
 [Windows and macOS packages](https://thelanintelligence.com/download/), then follow
 [START_HERE.md](START_HERE.md). Each includes the current desktop experience and
 its platform's inference runtime; Python dependencies and model weights are

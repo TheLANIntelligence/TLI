@@ -14,22 +14,49 @@ It does not update an installed native phone Companion or an old frozen backend.
    install an update by themselves. Changing the saved preference takes effect
    immediately. Dismissing the banner hides that release for this page session;
    a newer release can still appear, and Settings keeps the update available.
-2. Prepare the offered desktop update. TLI downloads and verifies the archive,
-   then shows the extracted package. Your running application is unchanged at
-   this point. An older app can instead download the matching Windows or Mac ZIP
+2. Choose **Download update**. TLI downloads and verifies the archive. Your
+   running application is unchanged at this point.
+3. Choose **Install and restart**, review the version and original installation
+   folder, finish active work, and confirm. TLI stops its own managed host,
+   installs the verified application files, prepares any missing Python
+   dependencies, and starts the same installation again. Internet may be needed
+   for changed dependencies. The browser checks the installation identity,
+   running version and new process before offering **Reload TLI**. Enter your
+   PIN again if requested. Closing the review does not install anything.
+
+The application must have been opened through its normal desktop launcher. A
+diagnostic `python main.py` process cannot be adopted by the updater. Close the
+separate desktop launcher window and stop an optional host-start helper if the
+review reports that either is still running. TLI does not forcibly kill processes.
+Downloads and installation are deliberate actions; automatic checks never install
+an update, and reconnecting or unlocking never repeats an installation.
+
+### One-time migration from earlier releases
+
+An installed 1.4.5-beta first receives the **1.4.6-beta updater migration** from
+the same Settings page. Its old interface can download and verify this package,
+but requires the manual completion below once. Reopen the original installation,
+check again, and install **1.4.7-beta** using **Install and restart**. The migration
+keeps the previous product features until the full update is installed.
+
+Versions older than 1.4.5-beta can instead download the matching current ZIP
    from the [official TLI releases](https://github.com/TheLANIntelligence/TLI/releases)
    without registering again, and extract the entire ZIP into a separate
    folder. Compare the published SHA-256 checksum before using a manual download.
-3. Back up important saved data. Finish chats, downloads and other work, then
-   stop the **original TLI host** through its local controls. On Mac, press
-   **Control+C** in its Terminal window. On Windows, use **Stop TLI** in Local
-   Setup. Closing a browser tab alone leaves the Windows host running. Stop the
+
+### Manual completion and recovery fallback
+
+1. Back up important saved data. Finish chats, downloads and other work, then
+   stop the **original TLI host** through its local controls. On a current Mac,
+   choose **Quit TLI** in the app; an older foreground Mac launch stops with
+   **Control+C** in its Terminal window. On Windows, use **Quit TLI** in the app
+   or **Stop TLI** in Local Setup. Closing a browser tab alone leaves the host running. Stop the
    optional host-start helper too if it is enabled.
-4. Open **TLI_Update.bat** on Windows or **TLI_Update.command** on Mac in the
+2. Open **TLI_Update.bat** on Windows or **TLI_Update.command** on Mac in the
    **newly extracted package**. Choose your original TLI folder. If a destination
    is suggested, read it carefully; you can type a different path. Review the
    final destination and version and type **UPDATE** to proceed.
-5. Open TLI from your **original folder or existing shortcut**. First start may
+3. Open TLI from your **original folder or existing shortcut**. First start may
    prepare new Python dependencies and need internet access. The update is
    installed on disk before startup has been checked; reopen the app and confirm
    its version in Settings.

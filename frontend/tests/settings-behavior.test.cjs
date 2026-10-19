@@ -34,7 +34,7 @@ function fixture(source = settingsSource, saved = {}) {
     document: { readyState: 'loading', documentElement: element(), getElementById: id => nodes[id] || null, createElement: () => element(), body: element(),
       querySelectorAll: () => [], addEventListener: (name, fn) => (docEvents[name] ||= []).push(fn) },
     MutationObserver: class { constructor(callback) { this.callback = callback; observers.push(this); } observe(target, options) { this.target = target; this.options = options; } disconnect() {} },
-    window: {}, navigator: { clipboard: { writeText: async () => {} } },
+    AbortController, window: {}, navigator: { clipboard: { writeText: async () => {} } },
     URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
     FileReader: class { readAsText(file) { this.result = file.text; this.onload(); } },
     localStorage: { getItem: key => storage.get(key) || null, setItem(key, value) { if (writeFailure) throw new Error('Storage unavailable'); storage.set(key, value); }, removeItem: key => storage.delete(key) },

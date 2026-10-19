@@ -91,7 +91,7 @@ AGENT_TASKS_PATH    = MESH_DATA_DIR / "agent_tasks.json"
 #  Version
 # ============================================
 
-TLI_VERSION = "1.4.5-beta"
+TLI_VERSION = '1.4.6-beta'
 
 # ============================================
 #  LM Studio / HTTP config
@@ -1121,6 +1121,12 @@ SESSION_TTL_SECONDS: int = 86_400  # 24 hours
 
 # token → {"expiry": float, "user_id": str}
 _active_sessions: Dict[str, Dict[str, Any]] = {}
+_session_revocation_epoch = object()
+
+
+def session_revocation_epoch() -> object:
+    """Process-local invalidation marker, never an access credential."""
+    return _session_revocation_epoch
 
 
 def create_session_token(user_id: str = "local") -> str:
@@ -1148,6 +1154,8 @@ def get_session_user_id(token: str) -> str:
 
 
 def revoke_all_sessions() -> None:
+    global _session_revocation_epoch
+    _session_revocation_epoch = object()
     _active_sessions.clear()
     _discard_optional_session_state("intelligence.note_search", "clear_browser")
     _discard_optional_session_state("mcp_bridge", "revoke_all_grants")

@@ -1,0 +1,22 @@
+/* Reviewed installation stays separate from passive update notifications. */
+.tli-update-install-dialog{box-sizing:border-box;width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;border:1px solid var(--border-strong);border-radius:var(--theme-card-radius,16px);background:var(--bg-panel);color:var(--text-main);padding:26px;box-shadow:0 22px 80px rgb(0 0 0 / .3);font-family:var(--theme-font-ui,inherit)}
+.tli-update-install-dialog::backdrop{background:rgb(0 0 0 / .55)}
+.tli-update-install-dialog h2{margin:0 0 14px;font-size:21px}
+.tli-update-install-dialog p{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
+.tli-update-install-dialog .tli-host-lifecycle-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:9px;margin-top:20px}
+.tli-update-install-dialog button{min-height:40px;max-width:100%;font:inherit;font-size:13px;white-space:normal}
+.tli-update-install-dialog button:disabled{opacity:.55;cursor:not-allowed}
+.tli-update-install-dialog :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.tli-update-install-dialog [hidden]{display:none!important}
+.tli-update-install-dialog #tli-update-install-warning{padding:12px 14px;border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:6px}
+.tli-update-install-dialog #tli-update-install-preserves{color:var(--text-muted)}
+.tli-update-install-dialog #tli-update-install-status{padding-top:12px;border-top:1px solid var(--border-subtle)}
+.tli-update-install-dialog #tli-update-install-status:empty{display:none}
+.tli-update-install-dialog #tli-update-install-manual{display:inline-block;margin-top:16px;font-size:12px;color:var(--accent);overflow-wrap:anywhere}
+.tli-update-manual{margin-top:14px;padding:12px 14px;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius,8px)}
+.tli-update-manual summary{cursor:pointer;font-size:13px;font-weight:500}
+.tli-update-manual p,.tli-update-manual li{font-size:12px;line-height:1.6}
+.tli-update-banner-left,.tli-update-banner-right{min-width:0;flex-wrap:wrap}
+.tli-update-banner-title,.tli-update-banner-version{overflow-wrap:anywhere}
+@media(max-width:600px){.tli-update-banner{padding:10px 12px}.tli-update-banner-right{width:100%;gap:8px}.tli-update-banner-right .tli-update-btn{min-height:40px;white-space:normal}.tli-update-progress-wrap{min-width:0;flex-wrap:wrap}.tli-update-progress-label{white-space:normal}}
+@media(max-width:550px){.tli-update-install-dialog{padding:20px}.tli-update-install-dialog .tli-host-lifecycle-actions{flex-direction:column-reverse;align-items:stretch}.tli-update-install-dialog button{min-height:44px}}

@@ -89,6 +89,23 @@ def test_archive_roundtrip_and_expected_release(tmp_path):
         U.extract_archive(archive, source)
 
 
+def test_bluetooth_setup_update_and_rollback_preserve_private_devices(tmp_path, stopped):
+    additions = {
+        "backend/requirements-bluetooth.txt": b"bleak==3.0.2; sys_platform == 'win32'\n",
+        "docs/TLI_BLUETOOTH.md": b"Bluetooth setup\n",
+        "frontend/bluetooth-help.html": b"<h1>Bluetooth setup</h1>\n",
+    }
+    source, target = tmp_path / "source", _target(tmp_path)
+    U.extract_archive(_archive(tmp_path, files={**_files(), **additions}), source)
+    saved = _write(target, "data/home_power/devices.json", b"synthetic private Bluetooth device")
+    U.install(source, target)
+    for name, raw in additions.items():
+        assert (target / name).read_bytes() == raw
+    U.rollback(target)
+    assert saved.read_bytes() == b"synthetic private Bluetooth device"
+    assert not any((target / name).exists() for name in additions)
+
+
 def test_update_installs_removal_entries_and_rollback_preserves_saved_data(tmp_path, stopped):
     additions = {
         "Uninstall_TLI.bat": b"@echo off\n",
