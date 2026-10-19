@@ -32,7 +32,7 @@ function fixture() {
     getElementById: id => ids[id], addEventListener: listen },
     window: { addEventListener: listen, dispatchEvent(event) { emit(event.type); } },
     CustomEvent: class { constructor(type) { this.type = type; } },
-    fetch: async (url, options) => { calls.push({ url, options, body: options.body && JSON.parse(options.body) }); const value = await handler(url, options); return { ok: !value.http_status || value.http_status < 400, status: value.http_status || 200, json: async () => value }; },
+    fetch: async (url, options) => { calls.push({ url, options, body: options.body && JSON.parse(options.body) }); const value = await handler(url, options); return { ok: !value.http_status || value.http_status < 400, status: value.http_status || 200, json: value.json || (async () => value) }; },
   });
   vm.runInContext(source, context);
   return { ids, calls, created, context, api: context.window.TLILanInference, emit, handler: value => { handler = value; },
@@ -175,6 +175,58 @@ test('obsolete capability read cannot invalidate a newer conversation model sele
   const old=f.api.prepareConversation('old');await tick();
   const commit=await f.api.prepareConversation('new');assert.equal(commit(),true);release(true);assert.equal((await old)(),false);
   assert.deepEqual(plain(f.api.capture().selection),fields());assert.equal(f.calls.length,1);assert.match(f.calls[0].url,/conversations\/new\/settings$/);
+});
+
+for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed','pagehide'])test('saved AI selection clears on '+event+' and only a fresh explicit read may restore it',async()=>{
+  const f=fixture();await f.select();f.context.window.TLIWorkspace={supported:async()=>true};let release;
+  f.handler(()=>new Promise(resolve=>{release=resolve;}));const old=f.api.prepareConversation('old');await tick();
+  const oldRequest=f.calls.at(-1);f.emit(event);assert.equal(oldRequest.options.signal.aborted,true);assert.equal(f.api.capture().selection,null);
+  f.emit('tli-private-observation-ready');assert.equal((await f.api.prepareConversation('blocked'))(),false);
+  f.emit('tli-session-unlocked');assert.equal((await f.api.prepareConversation('blocked'))(),false);
+  assert.equal(f.api.request(f.api.capture()),null,'Ordinary local AI remains selectable after unlock');assert.equal(f.calls.length,3);
+  f.emit('tli-private-observation-ready');assert.equal(f.calls.length,3,'Verified recovery does not replay the old read');
+  f.handler(async()=>({compute_selection:fields(),settings_revision:1}));const commit=await f.api.prepareConversation('new');assert.equal(commit(),true);
+  release({http_status:403,json:()=>assert.fail('Stale denial body must not be read')});assert.equal((await old)(),false);
+  assert.deepEqual(plain(f.api.capture().selection),fields());assert.equal(f.api.isCurrent(f.api.capture()),true);
+  assert.equal(f.calls.length,4);assert.match(f.calls.at(-1).url,/conversations\/new\/settings$/);
+  assert.equal(f.calls.filter(call=>call.options.method==='PATCH').length,0);
+});
+
+for(const status of [401,403])test('current saved-selection denial '+status+' clears authority without requiring a readable error body',async()=>{
+  const f=fixture();await f.select();f.context.window.TLIWorkspace={supported:async()=>true};
+  f.handler(async()=>({http_status:status,json:()=>assert.fail('No denial body is needed')}));
+  assert.equal((await f.api.prepareConversation('denied'))(),false);assert.equal(f.api.capture().selection,null);assert.equal(f.api.isCurrent(f.api.capture()),false);
+  f.emit('tli-session-unlocked');assert.equal((await f.api.prepareConversation('denied'))(),false);assert.equal(f.calls.length,3);
+  f.emit('tli-private-observation-ready');assert.equal(f.calls.length,3);
+  f.handler(async()=>({compute_selection:null,settings_revision:0}));assert.equal((await f.api.prepareConversation('fresh'))(),true);
+  assert.equal(f.calls.length,4);assert.equal(f.calls.filter(call=>call.options.method==='PATCH').length,0);
+});
+
+test('saved-selection body finishing after verified recovery cannot replace the current choice',async()=>{
+  const f=fixture();f.context.window.TLIWorkspace={supported:async()=>true};let release;
+  f.handler(async()=>({json:()=>new Promise(resolve=>{release=resolve;})}));const old=f.api.prepareConversation('old');await tick();
+  for(const type of ['tli-session-locked','tli-session-unlocked','tli-private-observation-ready'])f.emit(type);
+  f.handler(async()=>({compute_selection:fields(),settings_revision:1}));const fresh=await f.api.prepareConversation('fresh');assert.equal(fresh(),true);
+  release({compute_selection:null,settings_revision:0});assert.equal((await old)(),false);
+  assert.deepEqual(plain(f.api.capture().selection),fields());assert.equal(f.calls.length,2);
+});
+
+for(const failure of [{http_status:503,detail:'Settings unavailable'},{settings_revision:0},{settings_revision:0,compute_selection:{peer_id:'unknown'}},{json:async()=>{throw SyntaxError('Unreadable settings');}}])test('failed saved-selection read preserves the current model without fallback: '+JSON.stringify(failure),async()=>{
+  const f=fixture();await f.select();f.context.window.TLIWorkspace={supported:async()=>true};f.handler(async()=>failure);
+  await assert.rejects(f.api.prepareConversation('failed'));
+  assert.deepEqual(plain(f.api.capture().selection),fields());assert.equal(f.api.isCurrent(f.api.capture()),true);assert.equal(f.calls.length,3);
+  assert.equal(f.calls.filter(call=>call.options.method==='PATCH').length,0);
+});
+
+test('saved-selection preflight cannot read or PATCH on bare unlock and recovery never replays the choice',async()=>{
+  const f=fixture();f.context.window.currentConversationId='saved';f.context.window.TLIConversationLoad={generation:0};f.context.window.TLIWorkspace={supported:async()=>true};
+  f.emit('tli-session-locked');f.emit('tli-session-unlocked');await f.check();
+  f.ids['lan-inference-resource'].value='c'.repeat(64);await f.ids['lan-inference-resource'].fire('change');await f.ids['lan-inference-use'].click();
+  assert.equal(f.calls.length,2);assert.equal(f.api.capture().selection,null);assert.match(f.ids['lan-inference-status'].textContent,/verify access/);
+  f.emit('tli-private-observation-ready');assert.equal(f.calls.length,2);
+  f.handler(async()=>({settings_revision:2,compute_selection:null}));await f.ids['lan-inference-use'].click();
+  assert.equal(f.calls.length,4);assert.equal(f.calls.at(-1).options.method,'PATCH');assert.equal(f.calls.at(-1).body.expected_settings_revision,2);
+  assert.deepEqual(plain(f.api.capture().selection),fields());
 });
 
 for(const change of ['session','conversation'])test('model setting save cannot PATCH after a '+change+' change during its preflight',async()=>{

@@ -1,0 +1,63 @@
+/* Optional task tools stay in the composer's normal flow. */
+#panel-main .task-agent{box-sizing:border-box;flex-shrink:0;min-width:0;max-width:100%;margin:4px 0 10px;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius,10px);background:var(--bg-elevated);color:var(--text-main)}
+#panel-main .task-agent [hidden]{display:none!important}
+#panel-main .task-agent .task-agent-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;width:100%;min-width:0;padding:11px 12px;border:0;border-radius:inherit;background:transparent;color:inherit;box-shadow:none;text-align:left;white-space:normal}
+#panel-main .task-agent-toggle:hover{background:var(--accent-soft)}
+#panel-main .task-agent-heading{display:grid;gap:4px;min-width:0}
+#panel-main .task-agent-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;line-height:1.4}
+#panel-main .task-agent-title strong{font-weight:600}
+#panel-main .task-agent-state{font-size:10px;font-weight:500;padding:2px 6px;border:1px solid var(--border-subtle);border-radius:5px;color:var(--text-muted)}
+#panel-main .task-agent-toggle[aria-expanded=true] .task-agent-state{color:var(--accent);border-color:var(--accent);background:var(--accent-soft)}
+#panel-main .task-agent-hint{font-size:11px;line-height:1.45;color:var(--text-muted);overflow-wrap:anywhere}
+#panel-main .task-agent-chevron{font-size:18px;color:var(--text-muted);flex-shrink:0;line-height:1}
+#panel-main .task-agent-toggle[aria-expanded=true] .task-agent-chevron{transform:rotate(180deg)}
+#panel-main .task-agent-body{display:grid;gap:14px;min-width:0;padding:14px;border-top:1px solid var(--border-subtle)}
+#panel-main .task-agent-body p{margin:0;font-size:12px;line-height:1.6;color:var(--text-muted);overflow-wrap:anywhere}
+#panel-main .task-agent-examples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;min-width:0}
+#panel-main .task-agent .task-agent-example{display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:11px;min-width:0;max-width:100%;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius,8px);background:var(--bg-panel);color:var(--text-main);text-align:left;white-space:normal;box-shadow:none}
+#panel-main .task-agent-example strong{font-size:12px;font-weight:550;line-height:1.4}
+#panel-main .task-agent-example span{font-size:11px;line-height:1.45;color:var(--text-muted)}
+#panel-main .task-agent-example:hover{border-color:var(--accent);background:var(--accent-soft)}
+#panel-main .task-agent-access{display:grid;gap:10px;min-width:0}
+#panel-main .task-agent-field{display:grid;gap:7px;min-width:0;font-size:12px;line-height:1.5}
+#panel-main .task-agent-field>span{color:var(--text-main);font-weight:500}
+#panel-main .task-agent-body input:not([type=checkbox]),#panel-main .task-agent-body select,#panel-main .task-agent-body textarea{box-sizing:border-box;width:100%;max-width:100%;min-width:0;border:1px solid var(--border-strong);border-radius:var(--theme-control-radius,7px);padding:9px 10px;background:var(--bg-panel);color:var(--text-main);font:inherit;font-size:12px;line-height:1.5}
+#panel-main .task-agent-body textarea{min-height:72px;resize:vertical}
+#panel-main .task-agent-check{display:flex;align-items:flex-start;gap:9px;font-size:12px;line-height:1.5;cursor:pointer;min-width:0}
+#panel-main .task-agent-check input{width:16px;height:16px;margin:2px 0 0;flex:0 0 16px;accent-color:var(--accent)}
+#panel-main .task-agent-check span{min-width:0;overflow-wrap:anywhere}
+#panel-main .task-agent-settings{padding:0;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius,8px);min-width:0;background:var(--bg-panel)}
+#panel-main .task-agent-settings>summary{padding:10px 12px;cursor:pointer;font-size:12px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
+#panel-main .task-agent-settings[open]{padding-bottom:12px}
+#panel-main .task-agent-settings>:not(summary){margin:10px 12px 0}
+#panel-main .task-agent-setup{font-size:11px;color:var(--text-muted)}
+#panel-main .task-agent-setup>summary{cursor:pointer;line-height:1.6}
+#panel-main .task-agent-body .task-agent-setup p{font-size:11px;margin-top:6px}
+#panel-main .task-agent-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+#panel-main .task-agent-body button{min-height:36px;max-width:100%;padding:8px 11px;font-size:12px;line-height:1.4;white-space:normal;overflow-wrap:anywhere;border:1px solid var(--border-subtle);border-radius:var(--theme-control-radius,7px);background:var(--bg-panel);color:var(--text-main);box-shadow:none}
+#panel-main .task-agent button:disabled{cursor:default;opacity:.5}
+#panel-main .task-agent :is(button,input,select,textarea,summary):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+#panel-main .task-agent .task-agent-notice{padding:10px 12px;border-left:2px solid var(--accent);background:var(--accent-soft);color:var(--text-main);white-space:pre-wrap}
+#panel-main .task-agent-activity{display:grid;gap:12px;min-width:0;padding-top:12px;border-top:1px solid var(--border-subtle)}
+#panel-main .task-agent-body h4{margin:0;font-size:12px;font-weight:600;line-height:1.5}
+#panel-main .task-agent-activity details{padding:10px;border:1px solid var(--border-subtle);border-radius:8px;min-width:0;margin-top:8px}
+#panel-main .task-agent-activity summary{cursor:pointer;font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+#panel-main .task-agent-body pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:270px;max-width:100%;overflow:auto;font-size:11px;line-height:1.6}
+#panel-main .task-agent-review,#panel-main .task-agent-saved{display:grid;gap:10px;min-width:0}
+@media(max-width:600px){
+  #panel-main .task-agent-body{padding:10px;gap:12px}
+  #panel-main .task-agent-examples{grid-template-columns:1fr}
+  #panel-main .task-agent .task-agent-example{gap:3px;padding:10px 12px}
+  #panel-main .task-agent-body button,#panel-main .task-agent-settings>summary{min-height:44px}
+  #panel-main .task-agent-actions>button{flex:1 1 auto}
+  #panel-main .task-agent-body input:not([type=checkbox]),#panel-main .task-agent-body select,#panel-main .task-agent-body textarea{font-size:16px}
+}
+@media(max-width:380px){
+  #panel-main #chat-composer-shell:has(#task-agent-mode[aria-expanded=true]) #chat-send-btn{grid-row:3;grid-column:1 / -1;width:100%}
+}
+/* Expanded task setup can grow the page instead of squeezing the composer. */
+@media(max-width:768px){
+  body[data-tli-ui] #panel-main .chat-workspace:has(#task-agent-mode[aria-expanded=true]),
+  body[data-tli-ui] #panel-main .chat-workspace:has(#task-agent-mode[aria-expanded=true]) .chat-workspace-card{height:auto;min-height:0}
+  body[data-tli-ui] #panel-main .chat-workspace:has(#task-agent-mode[aria-expanded=true]) .chat-output{height:30dvh;flex:none}
+}

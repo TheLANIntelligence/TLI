@@ -2,12 +2,15 @@
 (function () {
   'use strict';
   const protocol = 'tli-peer-inference-v1';
-  let generation = 0, epoch = 0, locked = false, busy = false;
+  let generation = 0, epoch = 0, locked = document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false', busy = false;
+  let historyReady = !locked;
   let selection = null, checked = null, peers = [], ui = null, pending = null;
   const node = (tag, text) => { const el = document.createElement(tag); if (text != null) el.textContent = text; return el; };
   const text = value => typeof value === 'string' && value.length > 0 && value.length <= 512;
   const revision = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
   const current = ticket => !locked && ticket === epoch;
+  const historyAvailable = () => !locked && historyReady && window.TLIConversationLoad?.canRead?.() !== false;
+  function denyHistory() { historyReady = false; reset(true); window.dispatchEvent(new CustomEvent('tli-session-locked')); }
   const selectionFields = value => ({ peer_id: value.peer_id, trust_revision: value.trust_revision,
     resource_id: value.resource_id, resource_revision: value.resource_revision });
 
@@ -93,11 +96,14 @@
     const assertCurrent = () => { if (!allowed()) throw Error('The conversation or session changed. Reopen it to review its AI selection.'); };
     assertCurrent();
     if (!id || !window.TLIWorkspace) return;
+    if (!historyAvailable()) throw Error('Unlock TLI and verify access before reading conversation settings.');
     const supported = await window.TLIWorkspace.supported();
     assertCurrent();
     if (!supported) return;
     const path = '/api/ai/conversations/' + encodeURIComponent(id) + '/settings';
     const existing = await fetch(path, {cache:'no-store'});
+    assertCurrent();
+    if (existing.status === 401 || existing.status === 403) { denyHistory(); throw Error('Unlock TLI and verify access before reading conversation settings.'); }
     const settings = await existing.json();
     assertCurrent();
     if (!existing.ok) throw Error(settings.detail || 'Could not check conversation settings.');
@@ -108,8 +114,9 @@
     if (!response.ok) throw Error(saved.detail || 'The conversation AI choice could not be saved.');
   }
   async function prepareConversation(id, options = {}) {
+    if (!historyAvailable()) return () => false;
     invalidate(); const ticket = epoch;
-    const allowed = () => current(ticket) && options.current?.() !== false;
+    const allowed = () => current(ticket) && historyAvailable() && options.current?.() !== false;
     if (!allowed()) return () => false;
     busy = true; render();
     try {
@@ -117,7 +124,10 @@
       const supported = await window.TLIWorkspace.supported();
       if (!allowed()) return () => false;
       if (!supported) return () => allowed();
-      const response = await fetch('/api/ai/conversations/' + encodeURIComponent(id) + '/settings', {cache:'no-store'});
+      const controller = new AbortController(); pending = controller;
+      const response = await fetch('/api/ai/conversations/' + encodeURIComponent(id) + '/settings', {cache:'no-store',signal:controller.signal});
+      if (!allowed()) return () => false;
+      if (response.status === 401 || response.status === 403) { denyHistory(); return () => false; }
       const value = await response.json();
       if (!allowed()) return () => false;
       if (!response.ok) throw Error(value.detail || 'Could not load the conversation AI choice.');
@@ -130,7 +140,10 @@
         notice(selection ? 'This conversation uses its saved LAN model. Trust and resource versions are checked when sending.' : 'This conversation uses the current local AI setup.');
         return true;
       };
-    } finally { if (current(ticket)) { busy = false; render(); } }
+    } catch (error) {
+      if (allowed() && (error.status === 401 || error.status === 403)) { denyHistory(); return () => false; }
+      throw error;
+    } finally { if (current(ticket)) { pending = null; busy = false; render(); } }
   }
   async function choose() {
     if (locked || busy || !checked || checked.peer.id !== ui.peer.value) return;
@@ -194,8 +207,9 @@
   }
   window.TLILanInference = { capture, isCurrent, request, annotateReply, prepareConversation,
     display: () => !locked && selection ? { peer_name: selection.peer_name, label: selection.label } : null };
-  window.addEventListener('tli-session-locked', () => reset(true));
+  window.addEventListener('tli-session-locked', () => { historyReady = false; reset(true); });
   window.addEventListener('tli-session-unlocked', () => reset(false));
-  for (const event of ['tli-user-changed', 'tli-account-changed', 'pagehide']) window.addEventListener(event, () => reset(event === 'pagehide' || locked));
+  for (const event of ['tli-user-changed', 'tli-account-changed', 'pagehide']) window.addEventListener(event, () => { historyReady = false; reset(true); });
+  window.addEventListener('tli-private-observation-ready', () => { if (!locked) historyReady = true; });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install); else install();
 })();

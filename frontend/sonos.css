@@ -1,0 +1,103 @@
+.sonos-box {
+  --sonos-border: var(--border-color, var(--border, #cbded8));
+  margin-top: 18px; display: grid; gap: 18px;
+}
+.sonos-box [hidden] { display: none !important; }
+.sonos-box h3,.sonos-box h4,.sonos-box p { margin: 0; overflow-wrap: anywhere; }
+.sonos-box h3 { font-size: 23px; letter-spacing: -.4px; }
+.sonos-box h4 { font-size: 16px; }
+.sonos-box button { min-height: 40px; white-space: normal; }
+.sonos-box button:focus-visible,.sonos-box input:focus-visible,.sonos-box select:focus-visible {
+  outline: 2px solid var(--accent, #007b70); outline-offset: 3px;
+}
+.sonos-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sonos-header > div { min-width: 0; }
+.sonos-header p { margin-top: 4px; }
+.sonos-muted,#sonos-message,.sonos-checked { color: var(--text-muted); font-size: 13px; line-height: 1.5; }
+#sonos-message { min-height: 20px; }
+.sonos-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sonos-box label { display: grid; gap: 7px; color: var(--text-muted); font-size: 13px; }
+.sonos-box input,.sonos-box select { width: 100%; min-width: 0; }
+.sonos-room-picker { max-width: 650px; }
+.sonos-empty { padding: 22px; text-align: center; color: var(--text-muted); background: var(--bg-main, transparent); border-radius: 14px; }
+.sonos-player { display: grid; gap: 18px; max-width: 920px; }
+.sonos-now { padding: 20px; border: 1px solid var(--sonos-border); border-radius: 16px; display: grid; gap: 20px; }
+.sonos-status { display: grid; gap: 7px; }
+.sonos-playback { font-size: 11px; font-weight: 650; letter-spacing: 1px; text-transform: uppercase; color: var(--text-muted); }
+.sonos-track { font-size: 21px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.sonos-topology { display: grid; gap: 12px; }
+.sonos-topology-content { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,320px),1fr)); gap: 12px; }
+.sonos-group-card { min-width: 0; padding: 15px; border: 1px solid var(--sonos-border); border-radius: 14px; display: grid; align-content: start; gap: 10px; }
+.sonos-group-selected { border-color: var(--accent, #007b70); }
+.sonos-group-heading,.sonos-member-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; }
+.sonos-group-heading h5 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.sonos-group-badge,.sonos-member-badge { font-size: 10px; font-weight: 600; color: var(--text-muted); }
+.sonos-group-badge { margin-left: auto; }
+.sonos-member-list { display: grid; gap: 10px; list-style: none; margin: 0; padding: 0; }
+.sonos-group-member { min-width: 0; }
+.sonos-member-title strong { font-size: 13px; overflow-wrap: anywhere; }
+.sonos-bonded-members { border-left: 2px solid var(--sonos-border); margin: 10px 0 0 5px; padding-left: 13px; }
+.sonos-group-member[aria-current="true"] > .sonos-member-title strong { color: var(--accent, #007b70); }
+.sonos-group-notice { font-size: 12px; color: var(--text-muted); padding-top: 8px; border-top: 1px solid var(--sonos-border); }
+.sonos-topology[data-state="stale"] .sonos-group-card { border-style: dashed; }
+.sonos-topology[data-state="stale"] #sonos-topology-note { font-weight: 600; }
+.sonos-scope { padding: 0 2px; }
+.sonos-checked { font-size: 11px; }
+.sonos-transport { display: flex; flex-wrap: wrap; gap: 8px; }
+.sonos-transport button { min-width: 85px; }
+.sonos-volume { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+.sonos-volume-control { flex: 1 1 230px; max-width: 480px; min-width: 0; }
+.sonos-volume-title { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; }
+.sonos-volume-title output { font-size: 15px; font-weight: 650; min-width: 24px; }
+.sonos-volume-title > span { margin-left: auto; font-size: 11px; }
+#sonos-volume { accent-color: var(--accent, #007b70); cursor: pointer; padding: 0; height: 30px; background: transparent; }
+.sonos-room-volumes { display: grid; gap: 0; max-width: 700px; overflow: hidden; border: 1px solid var(--sonos-border); border-radius: 14px; }
+.sonos-volume-row { padding: 16px 20px; border-bottom: 1px solid var(--sonos-border); }
+.sonos-volume-row:nth-child(even) { background: color-mix(in srgb, var(--text-primary, #202020) 3%, transparent); }
+.sonos-volume-row .sonos-volume-title { margin-bottom: 7px; gap: 12px; }
+.sonos-volume-row label { font-size: 15px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.sonos-volume-row output { margin-left: auto; font-variant-numeric: tabular-nums; text-align: right; }
+.sonos-volume-row .sonos-volume-title > span { margin-left: 0; white-space: nowrap; }
+.sonos-volume-line { display: flex; align-items: center; gap: 16px; }
+.sonos-volume-line input[type="range"] { min-width: 0; width: 100%; height: 36px; padding: 0; accent-color: var(--accent, #007b70); cursor: pointer; background: transparent; }
+.sonos-volume-line input[type="range"]:disabled { cursor: default; opacity: .5; }
+.sonos-volume-mute { display: grid; place-items: center; flex: 0 0 44px; width: 44px; height: 44px; padding: 8px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; }
+.sonos-volume-mute:hover { background: color-mix(in srgb, var(--accent, #007b70) 12%, transparent); }
+.sonos-volume-mute:focus-visible, .sonos-volume-line input:focus-visible { outline: 2px solid var(--accent, #007b70); outline-offset: 3px; }
+.sonos-volume-icon { display: inline-block; width: 24px; height: 24px; flex: 0 0 24px; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 9h4l5-4v14l-5-4H3zM15 8a5 5 0 0 1 0 8l1.3 1.5a7 7 0 0 0 0-11zM18 4a10 10 0 0 1 0 16l1.2 1.6a12 12 0 0 0 0-19.2z'/%3E%3C/svg%3E") center / contain no-repeat; }
+.sonos-volume-icon.is-muted { opacity: .45; }
+.sonos-group-volume-row { background: color-mix(in srgb, var(--accent, #007b70) 6%, transparent) !important; }
+.sonos-group-volume-row .sonos-volume-line > .sonos-volume-icon { margin: 10px; }
+.sonos-room-volumes > .sonos-muted { padding: 12px 20px; font-size: 12px; line-height: 1.5; }
+.sonos-extras { display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--sonos-border); padding-top: 16px; }
+.sonos-extras button { border-color: transparent; }
+.sonos-extras button[aria-expanded="true"] { border-color: var(--sonos-border); background: var(--bg-main, transparent); }
+.sonos-extra-panel { max-width: 920px; display: grid; justify-items: start; gap: 14px; padding: 18px; border: 1px solid var(--sonos-border); border-radius: 14px; }
+.sonos-extra-panel > label { width: 100%; }
+.sonos-extra-panel > p { color: var(--text-muted); font-size: 13px; }
+.sonos-activity-item { display: grid; gap: 4px; padding: 10px 0; border-bottom: 1px solid var(--sonos-border); }
+.sonos-activity-item small { color: var(--text-muted); }
+.sonos-confirmation { max-width: 920px; display: grid; gap: 16px; padding: 20px; border: 2px solid var(--accent, #007b70); border-radius: 14px; }
+#sonos-review { display: grid; gap: 9px; font-size: 14px; overflow-wrap: anywhere; }
+.sonos-discovery { padding: 18px; border: 1px solid var(--sonos-border); border-radius: 14px; display: grid; gap: 16px; }
+#sonos-found { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,190px),1fr)); gap: 10px; }
+.sonos-speaker-card { display: grid; align-content: start; gap: 8px; padding: 14px; border: 1px solid var(--sonos-border); border-radius: 12px; min-width: 0; }
+.sonos-speaker-card strong { overflow-wrap: anywhere; }
+.sonos-speaker-card p { color: var(--text-muted); font-size: 12px; }
+.sonos-speaker-card button { justify-self: start; margin-top: 4px; }
+#sonos-discovery-hint { grid-column: 1 / -1; }
+@media(max-width:600px) {
+  .sonos-header { align-items: start; flex-wrap: wrap; }
+  .sonos-header > .sonos-actions { width: 100%; }
+  .sonos-header > .sonos-actions > button { flex: 1; }
+  .sonos-now,.sonos-discovery,.sonos-extra-panel,.sonos-confirmation { padding: 14px; }
+  .sonos-transport button { min-width: 0; flex: 1 1 26%; }
+  .sonos-volume { gap: 10px; }
+  .sonos-volume-control { max-width: none; flex-basis: 100%; }
+  .sonos-volume > .sonos-actions { width: 100%; }
+  .sonos-volume > .sonos-actions > button { flex: 1; }
+  .sonos-volume-row { padding: 12px; }
+  .sonos-volume-line { gap: 8px; }
+  .sonos-room-volumes > .sonos-muted { padding: 10px 12px; }
+  .sonos-track { font-size: 19px; }
+}

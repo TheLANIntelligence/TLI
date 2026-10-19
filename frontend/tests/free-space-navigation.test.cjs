@@ -27,8 +27,16 @@ test('fallback navigation updates the path draft and dispatches input without in
  assert.equal(f.input.value,'N:\\');assert.deepEqual(f.calls,[['panel','panel-visualizer'],['input','input'],['focus']]);
 });
 test('Dashboard storage handoff uses the same prepared-location contract',()=>{
- const f=fixture();f.ctx._openStorage('C:\\');
- assert.deepEqual(f.calls,[['panel','panel-visualizer'],['prepare','C:\\']]);
+ const f=fixture();f.ctx.window.TLIStorageWorkspace={prepare:options=>f.calls.push(['workspace',options.view,options.root,options.source])};
+ f.ctx._openStorage('C:\\');
+ assert.deepEqual(f.calls,[['workspace','space','C:\\','dashboard']]);
+});
+
+test('Dashboard storage fallback prepares a draft without calling a legacy scan helper',()=>{
+ const f=fixture();f.ctx.window.TLIVisualizer.scanPath=()=>assert.fail('Review must not invoke a scan helper.');
+ f.ctx._openStorage('C:\\');
+ assert.equal(f.input.value,'C:\\');
+ assert.deepEqual(f.calls,[['panel','panel-visualizer'],['input','input'],['focus']]);
 });
 
 test('common host paths arriving after session lock cannot restore private suggestions',async()=>{

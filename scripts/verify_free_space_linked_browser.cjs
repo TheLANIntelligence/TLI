@@ -59,7 +59,7 @@ async function main(){
    await page.locator('#visualizerTypeBars .fs-extension-row').filter({hasText:'.gguf'}).click();
    assert.match(await page.locator('#visualizerTypeBars').innerText(),/\.zip/);assert.equal(await page.locator('#vis4-summary').innerText(),total);
    assert.ok(await page.locator('.fs-tree-row[aria-expanded]').count()>0);assert.match(await page.locator('#visualizerStatusLine').innerText(),/hidden|filtered|matching/i);
-   await page.locator('#fs-extension-filter').fill('');
+   await page.getByRole('button',{name:'Clear Extension: .gguf',exact:true}).click();
   });
   await check('Selected explanations are explicit, scoped and handle expired evidence',async()=>{
    assert.equal(report.requests.filter(r=>r.path==='/visualizer/investigate').length,0);

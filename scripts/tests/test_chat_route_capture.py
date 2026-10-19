@@ -32,6 +32,10 @@ class RealRouteCapture(unittest.TestCase):
                 history=[{'role':'user','content':'HISTORY_OFF_CANARY'},{'role':'assistant','content':'PRIVATE_ASSISTANT_CANARY'}]),
             item('foreign-report','Did the test print?',foreign_reports=[report],body={'diagnostic_id':'report-1'}),
             item('action','Turn on Desk lamp',registry=[{'id':'lamp','name':'Desk lamp','ip':'192.0.2.20','relay':0}]),
+            item('action-no-origin','Turn on Desk lamp',origin=None,
+                 registry=[{'id':'lamp','name':'Desk lamp','ip':'192.0.2.20','relay':0}]),
+            item('action-foreign-origin','Turn on Desk lamp',origin='https://foreign.invalid',
+                 registry=[{'id':'lamp','name':'Desk lamp','ip':'192.0.2.20','relay':0}]),
             item('device-status','Check Desk lamp',registry=[{'id':'lamp','name':'Desk lamp','ip':'192.0.2.20','relay':0}]),
             item('diagnostic','Check my network'),
             item('case-linked-facts','Explain which possibilities this report cannot rule out.',reports=[report],
@@ -79,6 +83,15 @@ class RealRouteCapture(unittest.TestCase):
         for ident,operation in (('action','action_execution'),('device-status','device_status_observation'),('diagnostic','diagnostic_execution')):
             row=self.rows[ident];self.assertEqual(row['status'],'blocked_effect')
             self.assertTrue(all(r['forbidden_calls']==[operation] and r['model_calls']==0 for r in row['routes']))
+
+    def test_home_capture_keeps_real_origin_rejection_before_effects(self):
+        for ident in ('action-no-origin', 'action-foreign-origin'):
+            row = self.rows[ident]
+            self.assertEqual(row['status'], 'route_error')
+            self.assertTrue(row['route_consistent'])
+            self.assertEqual(row['routes'][0]['http_status'], 403)
+            self.assertTrue(all(r['forbidden_calls'] == [] and r['model_calls'] == 0
+                                and r['seed_stores_unchanged'] for r in row['routes']))
 
     def test_seeded_private_stores_stay_unchanged_and_startup_worker_never_runs(self):
         for ident in ('benign','missing-outcome','report-outcome','document','sharing','foreign-report'):

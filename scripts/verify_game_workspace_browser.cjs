@@ -24,7 +24,7 @@ async function session(browser,width,theme){
   return route.fulfill({status:404,json:{detail:'No synthetic route'}});
  });
  await f.page.evaluate(()=>switchPanel('panel-games'));
- await f.page.locator('#go-analyze-btn').waitFor();return{...f,state};
+ await f.page.locator('#go-analyze-btn').waitFor();await f.page.locator('.game-ai-options > summary').click();await f.page.locator('.game-corrections > summary').click();return{...f,state};
 }
 async function check(f,width,theme,label){const value=await layout(f.page,'panel-games');report.layouts.push({width,theme,label,...value});assert.equal(value.overflow.length,0,JSON.stringify(value.overflow));assert.ok(value.documentWidth<=width+2);assert.equal(value.duplicateIds.length,0);const name=`${label}-${width}-${theme}.png`;await f.page.screenshot({path:path.join(out,name),fullPage:true});report.screenshots.push(name);}
 async function main(){const browser=await chromium.launch({channel:'msedge',headless:true});try{

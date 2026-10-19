@@ -91,7 +91,7 @@ AGENT_TASKS_PATH    = MESH_DATA_DIR / "agent_tasks.json"
 #  Version
 # ============================================
 
-TLI_VERSION = "1.4.5-beta"
+TLI_VERSION = "1.4.7-beta"
 
 # ============================================
 #  LM Studio / HTTP config
@@ -100,20 +100,50 @@ TLI_VERSION = "1.4.5-beta"
 LM_STUDIO_URL        = "http://localhost:1234/v1/chat/completions"
 LM_STUDIO_MODELS_URL = "http://localhost:1234/v1/models"
 
+
+def _new_lm_studio_provider(config):
+    from providers import LMStudioProvider
+    return LMStudioProvider(**config, connect_timeout=HTTP_CONNECT_TIMEOUT,
+                            read_timeout=HTTP_READ_TIMEOUT_GEN, debug_log=log_debug)
+
+
+def _publish_lm_studio(config, provider):
+    # Replace the provider instead of mutating endpoints under an in-flight
+    # request. Its new health cache starts empty; legacy URL aliases stay aligned.
+    globals().update(LM_STUDIO_URL=config["chat_url"],
+                     LM_STUDIO_MODELS_URL=config["models_url"], lm_provider=provider)
+
+
 def load_lm_studio_config_from_disk() -> None:
-    """Override LM_STUDIO_URL/MODELS_URL if a saved config exists (written by onboarding or settings)."""
-    global LM_STUDIO_URL, LM_STUDIO_MODELS_URL
-    cfg_path = Path(DATA_DIR) / "lm_studio_config.json"
-    if not cfg_path.exists():
-        return
+    """Read validated settings before constructing the host's provider."""
+    import lm_studio_config as _lm_config
+    with _lm_config.LOCK:
+        config = _lm_config.read(DATA_DIR)
+        provider = _new_lm_studio_provider(config)
+        _publish_lm_studio(config, provider)
+
+
+def save_lm_studio_url(url: str, *, check=None) -> Dict[str, str]:
+    import lm_studio_config as _lm_config
+    _lm_config._access(check)
     try:
-        data = json.loads(cfg_path.read_text(encoding="utf-8"))
-        if data.get("chat_url"):
-            LM_STUDIO_URL = data["chat_url"]
-        if data.get("models_url"):
-            LM_STUDIO_MODELS_URL = data["models_url"]
+        config = _lm_config.from_url(url)
+        _lm_config._access(check)
+        with _lm_config.LOCK:
+            _lm_config._access(check)
+            _lm_config.read(DATA_DIR, check=check)
+            # Construction is passive. Failed saves leave the running provider
+            # and explicit model/LAN selections intact; known commits publish
+            # before a final access denial can withhold their acknowledgement.
+            provider = _new_lm_studio_provider(config)
+            _lm_config._access(check)
+            _lm_config.write(DATA_DIR, config, check=check,
+                             on_commit=lambda: _publish_lm_studio(config, provider))
+        _lm_config._access(check)
+        return config
     except Exception:
-        pass
+        _lm_config._access(check)
+        raise
 
 HTTP_CONNECT_TIMEOUT = 2.5
 HTTP_READ_TIMEOUT    = 60
@@ -220,21 +250,43 @@ def _ensure_mesh_data_dir() -> None:
 _NODE_CONFIG_LOCK = threading.RLock()
 
 
-def read_node_config() -> Optional[NodeConfig]:
+def read_node_config(*, check=None) -> Optional[NodeConfig]:
     """Read existing identity settings without initializing or repairing files."""
-    try:
-        data = _security.read_json(NODE_CONFIG_PATH, "node configuration", 65536)
-    except FileNotFoundError:
-        if _security.node_dependencies(DATA_DIR):
-            raise _security.SecurityStateUnavailable("node configuration")
-        return None
-    try:
-        cfg = NodeConfig.model_validate(data, strict=True)
-        if not cfg.node_id.strip() or not cfg.node_name.strip() or not cfg.created_at or not cfg.updated_at:
-            raise ValueError("Missing node identity fields")
-        return cfg
-    except Exception as exc:
-        raise _security.SecurityStateUnavailable("node configuration") from exc
+    _security._read_access(check)
+    with _NODE_CONFIG_LOCK:
+        _security._read_access(check)
+        from node_settings import assert_available
+        assert_available(NODE_CONFIG_PATH)
+        try:
+            try:
+                data = _security.read_json(NODE_CONFIG_PATH, "node configuration", 65536, check=check)
+            except FileNotFoundError as exc:
+                if getattr(exc, "security_read_authority_failure", False):
+                    raise
+                _security._read_access(check)
+                if _security.node_dependencies(DATA_DIR, check=check):
+                    raise _security.SecurityStateUnavailable("node configuration")
+                _security._read_access(check)
+                return None
+            _security._read_access(check)
+            cfg = NodeConfig.model_validate(data, strict=True)
+            if not cfg.node_id.strip() or not cfg.node_name.strip() or not cfg.created_at or not cfg.updated_at:
+                raise ValueError("Missing node identity fields")
+            _security._read_access(check)
+            return cfg
+        except Exception as exc:
+            if getattr(exc, "security_read_authority_failure", False):
+                raise
+            _security._read_access(check)
+            if isinstance(exc, _security.SecurityStateUnavailable):
+                raise
+            raise _security.SecurityStateUnavailable("node configuration") from exc
+
+
+def update_node_settings(*, name=None, role=None, check=None):
+    """Checked edits preserve the complete existing node identity document."""
+    from node_settings import update_node_settings as update
+    return update(name=name, role=role, check=check)
 
 
 def save_node_config(cfg: NodeConfig) -> None:
@@ -272,19 +324,32 @@ def _validate_mesh_directory(value):
     return value
 
 
-def load_mesh_directory() -> Dict[str, Any]:
+def load_mesh_directory(*, check=None) -> Dict[str, Any]:
+    _security._read_access(check)
     with MESH_DIRECTORY_LOCK:
+        _security._read_access(check)
         try:
-            return _validate_mesh_directory(_security.read_json(MESH_DIRECTORY_PATH, "computer directory", 32 * 1024 * 1024))
-        except FileNotFoundError:
+            value = _validate_mesh_directory(_security.read_json(
+                MESH_DIRECTORY_PATH, "computer directory", 32 * 1024 * 1024, check=check))
+        except FileNotFoundError as exc:
+            if getattr(exc, "security_read_authority_failure", False):
+                raise
+            _security._read_access(check)
             try:
-                cfg = _security.read_json(NODE_CONFIG_PATH, "node configuration", 65536)
-            except FileNotFoundError:
+                cfg = _security.read_json(NODE_CONFIG_PATH, "node configuration", 65536, check=check)
+            except FileNotFoundError as exc:
+                if getattr(exc, "security_read_authority_failure", False):
+                    raise
+                _security._read_access(check)
                 cfg = {}
+            _security._read_access(check)
             if (not isinstance(cfg, dict) or cfg.get("peer_trust_established") is True
                     or cfg.get("role") == "member" or cfg.get("host_device_id")):
                 raise _security.SecurityStateUnavailable("computer directory")
-            return {}
+            value = {}
+        finally:
+            _security._read_access(check)
+        return value
 
 
 def save_mesh_directory(devices: Dict[str, Any]) -> None:
@@ -583,55 +648,116 @@ def conversation_transaction(function):
     return guarded
 
 
-@conversation_transaction
-def load_conversations() -> Dict[str, Any]:
+def load_conversations(*, check=None) -> Dict[str, Any]:
+    """Read existing history; optional authority stays bound through the read.
+
+    Legacy internal callers retain their existing contract. Supplying a check
+    does not initialize keys or grant authority to those no-check callers.
+    """
+    denied = None
+
+    def authorize():
+        nonlocal denied
+        if denied is not None:
+            raise denied
+        if check is not None:
+            try:
+                check()
+            except Exception as error:
+                denied = error
+                raise
+
+    def read_existing():
+        try:
+            with open(CONVERSATIONS_FILE, "rb") as f:
+                authorize()
+                raw = f.read()
+                authorize()
+
+            data = json.loads(raw)
+            authorize()
+            if not isinstance(data, dict):
+                raise ValueError("Conversation store must be an object")
+
+            if data.get("_tli_enc"):
+                blob = base64.b64decode(data["data"])
+                nonce, ct = blob[:12], blob[12:]
+                authorize()
+                key = _store_key("conversations_key.bin")
+                authorize()
+                plaintext = AESGCM(key).decrypt(nonce, ct, None)
+                authorize()
+                data = json.loads(plaintext.decode("utf-8"))
+                authorize()
+
+            if not isinstance(data, dict) or any(not isinstance(value, dict) for value in data.values()):
+                raise ValueError("Unsupported conversation structure")
+
+            # Legacy plaintext remains unchanged until an explicit save.
+            authorize()
+            return data
+        except FileNotFoundError:
+            authorize()
+            return {}
+        except Exception as exc:
+            authorize()
+            raise _saved_data_unavailable("Conversation history", exc) from exc
+
+    authorize()
     try:
-        with open(CONVERSATIONS_FILE, "rb") as f:
-            raw = f.read()
-
-        # Try JSON parse first
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            raise ValueError("Conversation store must be an object")
-
-        # Encrypted envelope: {"_tli_enc": 1, "data": "<base64>"}
-        if data.get("_tli_enc"):
-            blob = base64.b64decode(data["data"])
-            nonce, ct = blob[:12], blob[12:]
-            plaintext = AESGCM(_store_key("conversations_key.bin")).decrypt(nonce, ct, None)
-            data = json.loads(plaintext.decode("utf-8"))
-
-        if not isinstance(data, dict) or any(not isinstance(value, dict) for value in data.values()):
-            raise ValueError("Unsupported conversation structure")
-
-        # Legacy plaintext — return as-is; will be encrypted on next save
-        return data
-    except FileNotFoundError:
-        return {}
-    except Exception as exc:
-        raise _saved_data_unavailable("Conversation history", exc) from exc
+        with CONVERSATIONS_LOCK:
+            authorize()
+            result = read_existing()
+    except Exception:
+        authorize()
+        raise
+    authorize()
+    return result
 
 
 @conversation_transaction
-def save_conversations(conversations: Dict[str, Any]) -> None:
+def save_conversations(conversations: Dict[str, Any], *, check=None) -> None:
     # Reject replacement of unreadable existing history even when a caller
     # supplies a fresh dictionary without first loading the current store.
-    previous = load_conversations()
-    key = _get_conv_key()
-    plaintext = json.dumps(conversations, ensure_ascii=False).encode("utf-8")
-    nonce = os.urandom(12)
-    ct = AESGCM(key).encrypt(nonce, plaintext, None)
-    envelope = {
-        "_tli_enc": 1,
-        "data": base64.b64encode(nonce + ct).decode("ascii"),
-    }
+    if check is not None:
+        check()
     tmp_path = Path(CONVERSATIONS_FILE + ".tmp")
+    staged = False
     try:
+        previous = load_conversations()
+        if check is not None:
+            check()
+        key = _get_conv_key()
+        plaintext = json.dumps(conversations, ensure_ascii=False).encode("utf-8")
+        nonce = os.urandom(12)
+        ct = AESGCM(key).encrypt(nonce, plaintext, None)
+        envelope = {
+            "_tli_enc": 1,
+            "data": base64.b64encode(nonce + ct).decode("ascii"),
+        }
+        if check is not None:
+            check()
         with tmp_path.open("w", encoding="utf-8") as f:
+            staged = True
             json.dump(envelope, f)
+        if check is not None:
+            check()
         tmp_path.replace(CONVERSATIONS_FILE)
-    except OSError as exc:
-        raise _saved_data_unavailable("Conversation history", exc) from exc
+    except Exception as exc:
+        if check is not None:
+            if staged:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            # A slow or failed read/write must not reveal its result after
+            # the operation's originally captured access has ended.
+            check()
+        if isinstance(exc, OSError):
+            raise _saved_data_unavailable("Conversation history", exc) from exc
+        raise
+    if check is not None:
+        check()
     from workspace_events import publish
     for ident in previous.keys() | conversations.keys():
         if previous.get(ident) != conversations.get(ident):
@@ -835,41 +961,54 @@ DEFAULT_MODEL_KEY = "deepseek"
 
 
 def load_model_config_from_disk() -> None:
-    global MODEL_CONFIG, DEFAULT_MODEL_KEY
-    if not MODEL_CONFIG_FILE.exists():
-        return
-    try:
-        raw = MODEL_CONFIG_FILE.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        models = data.get("models")
-        default_key = data.get("default_key") or data.get("default_model_key")
-        if isinstance(models, dict) and models:
-            new_config: Dict[str, Dict[str, str]] = {}
-            for key, val in models.items():
-                if not isinstance(val, dict):
-                    continue
-                model_id = val.get("id")
-                if not model_id:
-                    continue
-                new_config[key] = {"id": model_id, "label": val.get("label") or key}
-            if new_config:
-                MODEL_CONFIG = new_config
-        if isinstance(default_key, str) and default_key in MODEL_CONFIG:
-            DEFAULT_MODEL_KEY = default_key
-        log_debug("models", "INFO", "Loaded model config from disk",
-                  default_key=DEFAULT_MODEL_KEY, keys=list(MODEL_CONFIG.keys()))
-    except Exception as e:
-        log_debug("models", "ERROR", "Failed to load model config from disk", error=str(e))
+    # Startup must fail clearly on damaged saved choices, rather than silently
+    # using a different model. Missing files alone use immutable built-in defaults.
+    read_model_settings()
 
 
-def save_model_config_to_disk() -> None:
-    try:
-        payload = {"models": MODEL_CONFIG, "default_key": DEFAULT_MODEL_KEY}
-        MODEL_CONFIG_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        log_debug("models", "INFO", "Saved model config to disk",
-                  default_key=DEFAULT_MODEL_KEY, keys=list(MODEL_CONFIG.keys()))
-    except Exception as e:
-        log_debug("models", "ERROR", "Failed to save model config to disk", error=str(e))
+def _publish_model_settings(document) -> None:
+    import selection_settings as settings
+    projected = settings.model_projection(document)
+    globals().update(MODEL_CONFIG=projected["models"], DEFAULT_MODEL_KEY=projected["default_key"])
+
+
+def read_model_settings(*, check=None):
+    import selection_settings as settings
+    with settings.LOCK:
+        document = settings.read(MODEL_CONFIG_FILE, "models", check=check)
+        settings._access(check)
+        _publish_model_settings(document)
+        result = settings.model_projection(document)
+        settings._access(check)
+        return result
+
+
+def save_default_model(model_id, label=None, *, check=None):
+    import selection_settings as settings
+    document = settings.update(MODEL_CONFIG_FILE, "models",
+        lambda value: settings.choose_model(value, model_id, label), check=check,
+        on_commit=_publish_model_settings)
+    projected = settings.model_projection(document)
+    result = {"ok": True, "default_key": projected["default_key"],
+              "model": projected["models"][projected["default_key"]]}
+    settings._access(check)
+    return result
+
+
+def save_model_config_to_disk(*, check=None) -> None:
+    """Compatibility writer for internal rehearsal callers; never delete presets."""
+    from copy import deepcopy
+    import selection_settings as settings
+    with settings.LOCK:
+        models, default = deepcopy(MODEL_CONFIG), DEFAULT_MODEL_KEY
+        def merge(document):
+            for key, row in models.items():
+                document["models"].setdefault(key, {}).update(row)
+            document["default_key"] = default
+            if "default_model_key" in document:
+                document["default_model_key"] = default
+        settings.update(MODEL_CONFIG_FILE, "models", merge, check=check,
+                        on_commit=_publish_model_settings)
 
 
 # ============================================
@@ -896,27 +1035,42 @@ def get_active_system_limits() -> Dict[str, int]:
 
 
 def load_system_profile_from_disk() -> None:
+    read_profile_settings()
+
+
+def _publish_profile_settings(document) -> None:
     global CURRENT_SYSTEM_PROFILE
-    try:
-        if not SYSTEM_PROFILE_FILE.exists():
-            return
-        raw = SYSTEM_PROFILE_FILE.read_text(encoding="utf-8")
-        data = json.loads(raw) if raw else {}
-        prof = (data.get("profile") or "").strip().lower()
-        if prof in SYSTEM_PROFILES:
-            CURRENT_SYSTEM_PROFILE = prof
-            log_debug("system", "INFO", "Loaded system profile", profile=prof)
-    except Exception as e:
-        log_debug("system", "ERROR", "Failed to load system profile", error=str(e))
+    CURRENT_SYSTEM_PROFILE = document["profile"].strip().lower()
 
 
-def save_system_profile_to_disk() -> None:
-    try:
-        payload = {"profile": CURRENT_SYSTEM_PROFILE}
-        SYSTEM_PROFILE_FILE.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        log_debug("system", "INFO", "Saved system profile", profile=CURRENT_SYSTEM_PROFILE)
-    except Exception as e:
-        log_debug("system", "ERROR", "Failed to save system profile", error=str(e))
+def read_profile_settings(*, check=None):
+    from copy import deepcopy
+    import selection_settings as settings
+    with settings.LOCK:
+        document = settings.read(SYSTEM_PROFILE_FILE, "profile", check=check)
+        settings._access(check)
+        _publish_profile_settings(document)
+        current = document["profile"].strip().lower()
+        result = {"current": current, "profiles": deepcopy(SYSTEM_PROFILES),
+                  "ui_defaults": deepcopy(SYSTEM_PROFILES[current]["ui_defaults"]),
+                  "limits": dict(SYSTEM_PROFILE_LIMITS[current])}
+        settings._access(check)
+        return result
+
+
+def save_profile(profile, *, check=None):
+    import selection_settings as settings
+    document = settings.update(SYSTEM_PROFILE_FILE, "profile",
+        lambda value: settings.choose_profile(value, profile), check=check,
+        on_commit=_publish_profile_settings)
+    settings._access(check)
+    return {"ok": True, "current": document["profile"]}
+
+
+def save_system_profile_to_disk(*, check=None) -> None:
+    import selection_settings as settings
+    with settings.LOCK:
+        save_profile(CURRENT_SYSTEM_PROFILE, check=check)
 
 
 # ============================================
@@ -973,24 +1127,13 @@ def is_protected_system_path(path: Path) -> bool:
 # ============================================
 
 def load_shelly_registry() -> List[Dict[str, Any]]:
-    if SHELLY_REGISTRY_PATH.exists():
-        try:
-            with SHELLY_REGISTRY_PATH.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return data
-        except Exception:
-            pass
-    return []
+    from shelly_store import read
+    return read(SHELLY_REGISTRY_PATH)
 
 
-def save_shelly_registry(devices: List[Dict[str, Any]]) -> None:
-    try:
-        SHELLY_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with SHELLY_REGISTRY_PATH.open("w", encoding="utf-8") as f:
-            json.dump(devices, f, indent=2)
-    except Exception:
-        pass
+def save_shelly_registry(devices: List[Dict[str, Any]], *, check=None, **options) -> None:
+    from shelly_store import write
+    write(SHELLY_REGISTRY_PATH, devices, check=check, **options)
 
 
 # ============================================
@@ -1003,21 +1146,51 @@ _PIN_CONFIG_LOCK = threading.RLock()
 def read_pin_config() -> Dict[str, Any]:
     """Absent new PINs and explicitly disabled PINs are the only open states."""
     try:
-        data = _security.read_json(PIN_CONFIG_FILE, "PIN configuration", 65536)
+        data = _security.read_json(PIN_CONFIG_FILE, "PIN configuration", 65536, reject_duplicates=True)
     except FileNotFoundError:
         if _security.companion_dependencies(DATA_DIR):
             raise _security.SecurityStateUnavailable("PIN configuration")
         return {"enabled": False}
     if isinstance(data, dict):
+        if "attempts" in data:
+            _validate_pin_attempts(data["attempts"])
         if data.get("enabled") is False and "hash" not in data and "salt" not in data:
             return {"enabled": False}
         if all(isinstance(data.get(k), str) and re.fullmatch(r"[0-9a-f]{64}", data[k]) for k in ("hash", "salt")) and data.get("enabled", True) is True:
-            return {"enabled": True, "hash": data["hash"], "salt": data["salt"]}
+            result = {"enabled": True, "hash": data["hash"], "salt": data["salt"]}
+            if "attempts" in data:
+                result["attempts"] = dict(data["attempts"])
+            return result
     raise _security.SecurityStateUnavailable("PIN configuration")
 
 
 def load_pin_config() -> Dict[str, Any]:
     return read_pin_config()
+
+
+def _validate_pin_attempts(value) -> None:
+    import math
+    if (not isinstance(value, dict) or set(value) != {"failures", "blocked_until"}
+            or type(value["failures"]) is not int or not 0 <= value["failures"] <= 32
+            or type(value["blocked_until"]) not in (int, float)
+            or not 0 <= value["blocked_until"] <= 32503680000
+            or not math.isfinite(value["blocked_until"])
+            or value["failures"] < 5 and value["blocked_until"] != 0
+            or value["failures"] >= 5 and value["blocked_until"] == 0):
+        raise _security.SecurityStateUnavailable("PIN configuration")
+
+
+def record_pin_attempts(failures: int, blocked_until: float) -> None:
+    """Preserve credentials and compatible metadata while journaling attempts."""
+    with _PIN_CONFIG_LOCK:
+        cfg = read_pin_config()
+        if not cfg["enabled"]:
+            raise _security.SecurityStateUnavailable("PIN configuration")
+        attempts = {"failures": failures, "blocked_until": blocked_until}
+        _validate_pin_attempts(attempts)
+        data = _security.read_json(PIN_CONFIG_FILE, "PIN configuration", 65536, reject_duplicates=True)
+        data["attempts"] = attempts
+        _security.write_json(PIN_CONFIG_FILE, data, "PIN configuration")
 
 
 def save_pin_config(pin_hash: str, salt: str) -> None:
@@ -1028,11 +1201,14 @@ def save_pin_config(pin_hash: str, salt: str) -> None:
         _security.write_json(PIN_CONFIG_FILE, {"hash": pin_hash, "salt": salt}, "PIN configuration", new=not PIN_CONFIG_FILE.exists())
 
 
-def clear_pin_config() -> None:
+def clear_pin_config(*, check=None) -> None:
     with _PIN_CONFIG_LOCK:
         read_pin_config()
+        if check is not None:
+            check()
         # An explicit marker distinguishes authorized removal from lost settings.
-        _security.write_json(PIN_CONFIG_FILE, {"enabled": False}, "PIN configuration", new=not PIN_CONFIG_FILE.exists())
+        _security.write_json(PIN_CONFIG_FILE, {"enabled": False}, "PIN configuration",
+                             new=not PIN_CONFIG_FILE.exists(), before_commit=check)
 
 
 # ============================================
@@ -1040,20 +1216,14 @@ def clear_pin_config() -> None:
 # ============================================
 
 def load_license() -> Dict[str, Any]:
-    """Return stored license dict, e.g. {"key": "TLI1-..."}. Empty dict if none."""
-    if not LICENSE_FILE.exists():
-        return {}
-    try:
-        data = json.loads(LICENSE_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+    """Read preserved license metadata; only a fresh missing file is empty."""
+    from license_store import read
+    return read(LICENSE_FILE)
 
 
-def save_license(data: Dict[str, Any]) -> None:
-    tmp = LICENSE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    tmp.replace(LICENSE_FILE)
+def save_license(data: Dict[str, Any], *, check=None, **options) -> None:
+    from license_store import write
+    write(LICENSE_FILE, data, check=check, **options)
 
 
 # ============================================
@@ -1063,54 +1233,38 @@ def save_license(data: Dict[str, Any]) -> None:
 ALERTS_FILE = Path(os.path.join(DATA_DIR, "tli_alerts.json"))
 
 
-def load_alerts() -> List[Dict[str, Any]]:
-    return load_json_file(ALERTS_FILE, default=[])
+def load_alerts(*, check=None) -> List[Dict[str, Any]]:
+    from alert_store import read
+    return read(ALERTS_FILE, check=check)
 
 
-def save_alerts(alerts: List[Dict[str, Any]]) -> None:
-    save_json_file(ALERTS_FILE, alerts)
+def save_alerts(alerts: List[Dict[str, Any]], *, check=None) -> None:
+    """Compatibility full replacement; producer edits use serialized helpers."""
+    from alert_store import save
+    save(ALERTS_FILE, alerts, check=check)
 
 
-def add_alert(kind: str, message: str, detail: str = "", severity: str = "warn") -> Optional[Dict[str, Any]]:
+def add_alert(kind: str, message: str, detail: str = "", severity: str = "warn", *, check=None) -> Optional[Dict[str, Any]]:
     """Add alert unless one with the same kind is already active. Returns None if deduped."""
-    alerts = load_alerts()
-    for a in alerts:
-        if a.get("kind") == kind and not a.get("dismissed"):
-            return None  # already active, don't double-up
-    alert: Dict[str, Any] = {
-        "id": f"alert-{uuid.uuid4().hex[:10]}",
-        "kind": kind,
-        "message": message,
-        "detail": detail,
-        "severity": severity,
-        "created_at": now_iso(),
-        "dismissed": False,
-    }
-    alerts.append(alert)
-    save_alerts(alerts)
-    return alert
+    from alert_store import add
+    return add(ALERTS_FILE, kind, message, detail, severity, check=check)
 
 
-def dismiss_alert(alert_id: str) -> bool:
-    alerts = load_alerts()
-    for a in alerts:
-        if a.get("id") == alert_id:
-            a["dismissed"] = True
-            save_alerts(alerts)
-            return True
-    return False
+def dismiss_alert(alert_id: str, *, check=None) -> bool:
+    from alert_store import dismiss
+    return dismiss(ALERTS_FILE, alert_id, check=check)
 
 
-def resolve_alert(kind: str) -> None:
+def resolve_alert(kind: str, *, check=None) -> None:
     """Auto-dismiss an active alert when its condition clears."""
-    alerts = load_alerts()
-    changed = False
-    for a in alerts:
-        if a.get("kind") == kind and not a.get("dismissed"):
-            a["dismissed"] = True
-            changed = True
-    if changed:
-        save_alerts(alerts)
+    from alert_store import resolve
+    resolve(ALERTS_FILE, kind, check=check)
+
+
+def dismiss_all_alerts(*, check=None) -> int:
+    """Dismiss the current active rows in one producer-safe transaction."""
+    from alert_store import dismiss_all
+    return dismiss_all(ALERTS_FILE, check=check)
 
 
 # ============================================
@@ -1121,6 +1275,16 @@ SESSION_TTL_SECONDS: int = 86_400  # 24 hours
 
 # token → {"expiry": float, "user_id": str}
 _active_sessions: Dict[str, Dict[str, Any]] = {}
+_session_revocation_epoch = object()
+
+
+def session_revocation_epoch() -> object:
+    """Process-local invalidation marker, never an access credential.
+
+    Long-lived local invitations also need revocation when no PIN cookie existed
+    at issuance. Comparing only current PIN mode misses off/on/off transitions.
+    """
+    return _session_revocation_epoch
 
 
 def create_session_token(user_id: str = "local") -> str:
@@ -1148,12 +1312,17 @@ def get_session_user_id(token: str) -> str:
 
 
 def revoke_all_sessions() -> None:
+    global _session_revocation_epoch
+    _session_revocation_epoch = object()
     _active_sessions.clear()
     _discard_optional_session_state("intelligence.note_search", "clear_browser")
     _discard_optional_session_state("mcp_bridge", "revoke_all_grants")
     _discard_optional_session_state("home_assistant_bridge", "revoke_all_connections")
+    _discard_optional_session_state("pihole_bridge", "revoke_all_connections")
+    _discard_optional_session_state("pihole_self_service", "revoke_all_connections")
     _discard_optional_session_state("mcp_client", "revoke_all_connections")
     _discard_optional_session_state("storage_jobs", "revoke_all_sessions")
+    _discard_optional_session_state("voice_service", "revoke_all_sessions")
 
 
 def revoke_session_token(token: str) -> None:
@@ -1162,8 +1331,10 @@ def revoke_session_token(token: str) -> None:
     _discard_optional_session_state("intelligence.note_search", "clear_browser", token)
     _discard_optional_session_state("mcp_bridge", "revoke_browser_session", token)
     _discard_optional_session_state("home_assistant_bridge", "revoke_browser_session", token)
+    _discard_optional_session_state("pihole_bridge", "revoke_browser_session", token)
     _discard_optional_session_state("mcp_client", "revoke_browser_session", token)
     _discard_optional_session_state("storage_jobs", "revoke_browser_session", token)
+    _discard_optional_session_state("voice_service", "revoke_browser_session", token)
 
 
 def _discard_optional_session_state(module_name: str, method: str, *args) -> None:

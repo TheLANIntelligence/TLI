@@ -144,6 +144,12 @@ data: {"type":"done"}
   clients must not invent one.
 - `error`: failed terminal event with `detail`. Preserve partial text and mark
   failure, rather than presenting it as a completed answer.
+  Private built-in diagnostic intents may additionally return
+  `code: "session_changed"` and `status_code: 401` or `403` when their captured
+  browser authority ends. These fields describe the failure after streaming
+  headers were sent; they do not change the HTTP response status. No further
+  diagnostic text or `done` frame follows, and the client must not retry the
+  diagnostic automatically. Turns saved before revocation remain saved.
 
 ```text
 data: {"type":"error","detail":"No available image-capable model. The image was not sent."}
@@ -650,3 +656,20 @@ responses are recovered by GET using the original request ID; clients must not
 create a new request automatically. Restarted hosts mark unfinished work
 `interrupted`, without replay. Settings and owner boundaries are documented in
 [the shared workspace contract](TLI_SHARED_WORKSPACE.md).
+
+### Task runs
+
+`POST /api/runs` also accepts `kind: "agent_task"`. The same `meta`, `delta`,
+`done`, `error`, and reconnect snapshot contract applies. Task progress is
+additive under `meta.agent`: `id`, `revision`, `status`, optional `activity`,
+`pending`, and bounded receipt summaries. Full owner-authorized receipts are
+read through `/api/tasks/{id}`. A run may complete successfully while its task
+is `needs_input`; `done` means this run finished, not that a game launch or
+external effect was verified. The result includes `task_id`, `task_status`,
+`conversation_id`, `reply`, and `agent`.
+
+Command/speaker approval and deliberate continuation are separate operations.
+`POST /api/tasks/{id}/approve` binds the pending review and expected revision;
+`POST /api/tasks/{id}/resume` creates a new idempotent host run with an optional
+`follow_up`. Restart marks unfinished runs interrupted. Previously recorded
+effects are retained, never replayed by reconnect. See [task contracts](TLI_TASK_AGENT.md).

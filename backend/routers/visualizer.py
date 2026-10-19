@@ -12,7 +12,7 @@ import time
 from contextlib import contextmanager
 from itertools import islice
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Literal
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Response, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -129,10 +129,12 @@ def save_storage_scan(req: SaveStorageScanRequest, response: Response, user: str
 
 
 @visualizer_router.post("/history/compare")
-def compare_storage_scan(req: CompareStorageScanRequest, response: Response, user: str = Depends(require_session)):
+def compare_storage_scan(req: CompareStorageScanRequest, request: Request, response: Response, user: str = Depends(require_session)):
     from intelligence.storage_history import compare
     response.headers["Cache-Control"] = "no-store"
-    return compare(user, req.baseline_id, req.scan_id)
+    result = compare(user, req.baseline_id, req.scan_id)
+    result["indexed_comparison"] = storage_jobs.inventory_comparison(storage_jobs.access(request, user), req.baseline_id, req.scan_id)
+    return result
 
 
 @visualizer_router.delete("/history/{snapshot_id}")
@@ -400,3 +402,17 @@ def storage_job_results(job_id: str, request: Request, response: Response, user:
 def cancel_storage_job(job_id: str, request: Request, response: Response, user: str = Depends(require_session)):
     response.headers["Cache-Control"] = "no-store"
     return storage_jobs.cancel(storage_jobs.access(request, user), job_id)
+
+
+@visualizer_router.get("/jobs/{job_id}/inventory")
+def storage_job_inventory(job_id: str, request: Request, response: Response,
+                          mode: Literal["children", "search", "extension", "largest", "item"] = "children",
+                          path: Optional[str] = Query(None, min_length=1, max_length=4096),
+                          q: str = Query("", max_length=256), extension: str = Query("", max_length=80),
+                          sort: Literal["size", "name", "allocated_size", "modified_at"] = "size",
+                          order: Literal["asc", "desc"] = "desc",
+                          offset: int = Query(0, ge=0, le=500_001), limit: int = Query(100, ge=1, le=200),
+                          user: str = Depends(require_session)):
+    response.headers["Cache-Control"] = "no-store"
+    return storage_jobs.inventory_query(storage_jobs.access(request, user), job_id, mode=mode, path=path,
+                                        q=q, extension=extension, sort=sort, order=order, offset=offset, limit=limit)

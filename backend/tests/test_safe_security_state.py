@@ -134,7 +134,7 @@ def test_corrupt_pin_routes_fail_before_mutation_even_with_auth_override(install
     app.dependency_overrides[system_routes.require_session] = lambda: "owner"
     monkeypatch.setattr(S, "revoke_all_sessions", lambda: pytest.fail("Must not revoke sessions"))
     before = snapshot(installation)
-    client = TestClient(app)
+    client = TestClient(app, base_url="https://localhost", headers={"Origin": "https://localhost"}, client=("127.0.0.1", 50000))
     response = client.get("/system/pin/status") if body is None else client.post("/system/pin/" + endpoint, json=body)
     assert response.status_code == 503
     assert snapshot(installation) == before and path.exists()
@@ -145,7 +145,7 @@ def test_emergency_reset_requires_session_when_pin_enabled(installation):
     app = FastAPI()
     app.include_router(system_routes.router)
     before = snapshot(installation)
-    assert TestClient(app).post("/system/pin/emergency-reset").status_code == 401
+    assert TestClient(app, base_url="https://localhost", headers={"Origin": "https://localhost"}).post("/system/pin/emergency-reset").status_code == 401
     assert snapshot(installation) == before
 
 

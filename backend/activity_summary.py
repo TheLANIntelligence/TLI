@@ -111,10 +111,14 @@ def get_summary(user: str) -> dict:
         raise HTTPException(503, "Activity summary is unavailable. Your review position was not changed.") from exc
 
 
-def mark_reviewed(user: str, cursor: dict) -> dict:
+def mark_reviewed(user: str, cursor: dict, *, check=None) -> dict:
     # Acknowledge the snapshot the user actually saw, never the newest event.
     with LOCK:
+        if check:
+            check()
         snapshot = activity_snapshot()
+        if check:
+            check()
         current = snapshot["cursor"]
         if cursor["stream_id"] != current["stream_id"] or cursor["sequence"] > current["sequence"]:
             raise HTTPException(409, "Activity changed after a restart. Refresh before marking it reviewed.")
@@ -125,6 +129,8 @@ def mark_reviewed(user: str, cursor: dict) -> dict:
                 raise HTTPException(409, "Retained activity changed. Refresh before marking it reviewed.")
         try:
             previous = read_private(user, "activity-review", None)
+            if check:
+                check()
             old = (previous or {}).get("cursor", {})
             old_history = (previous or {}).get("history_cursor", {})
             if old.get("stream_id") == cursor["stream_id"] and old.get("sequence", -1) >= cursor["sequence"] and (
@@ -140,7 +146,13 @@ def mark_reviewed(user: str, cursor: dict) -> dict:
                     reviewed["history_cursor"]["sequence"] = max(old_history.get("sequence", 0), history_cursor["sequence"])
             elif old_history:
                 reviewed["history_cursor"] = old_history
+            if check:
+                check()
             write_private(user, "activity-review", reviewed)
+            if check:
+                check()
             return {"ok": True, **reviewed}
+        except HTTPException:
+            raise
         except Exception as exc:
             raise HTTPException(503, "Could not save your review position. Please retry.") from exc

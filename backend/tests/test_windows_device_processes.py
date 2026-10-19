@@ -7,6 +7,7 @@ import subprocess
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from routers import device_routes, tool_routes
 
@@ -131,26 +132,18 @@ def test_network_tools_use_hidden_processes_and_keep_results(monkeypatch, headle
     assert [kwargs["timeout"] for _, kwargs in calls] == [15, 8]
 
 
-@pytest.mark.parametrize("language,executable", [
-    ("ps1", "powershell.exe"), ("bat", "cmd.exe"), ("py", None),
-])
-def test_script_tool_is_hidden_and_returns_captured_result(
-    monkeypatch, headless_windows, tmp_path, language, executable,
+@pytest.mark.parametrize("language", ["ps1", "bat", "py"])
+def test_retired_script_tool_never_launches_a_process_or_changes_source(
+    monkeypatch, headless_windows, tmp_path, language,
 ):
     script = tmp_path / f"sample.{language}"
     script.write_text("# Never executed by this test", encoding="utf-8")
-    monkeypatch.setattr(tool_routes, "get_tool", lambda _: {
-        "script_path": str(script), "language": language,
-    })
+    before = script.read_bytes()
     monkeypatch.setattr(tool_routes.S, "SCRIPTS_DIR", tmp_path)
     calls = _capture(monkeypatch, [_completed("", "script diagnostic\n", 2)])
 
-    result = asyncio.run(tool_routes.tools_run_for_ui(
-        tool_routes.SimpleToolRunRequest(tool_id="sample"), _session="test-user",
-    ))
-
-    assert result == {"output": "script diagnostic", "exit_code": 2}
-    assert calls[0][0][0] == (executable or tool_routes.sys.executable)
-    assert calls[0][0][-1] == str(script)
-    assert calls[0][1]["cwd"] == str(tmp_path)
-    assert calls[0][1]["shell"] is False
+    with pytest.raises(HTTPException) as failure:
+        tool_routes.tools_run_for_ui(tool_routes.SimpleToolRunRequest(tool_id="sample"), check=lambda: None)
+    assert failure.value.status_code == 410
+    assert calls == []
+    assert script.read_bytes() == before

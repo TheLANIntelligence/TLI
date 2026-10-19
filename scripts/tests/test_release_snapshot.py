@@ -144,6 +144,7 @@ def test_host_launchers_and_named_public_guides_ship_without_unlisted_documents(
                 "TLI_Update.bat", "TLI_Update.ps1", "TLI_Update.command", "TLI_Update.sh", "docs/TLI_UPDATES.md",
                 "Uninstall_TLI.bat", "TLI_Uninstall.ps1", "Uninstall_TLI.command", "Uninstall_TLI.sh", "docs/TLI_UNINSTALL.md",
                 "TLI.exe", "build_launcher.ps1", "desktop/TliLauncher.cs", "desktop/tli.ico",
+                "docs/TLI_TASK_AGENT.md", "docs/TLI_SONOS.md", "docs/TLI_HOST_VOICE.md",
                 "docs/TLI_HOST_START.md", "docs/HOST_START.md", "docs/TLI_SMART_HUB_REFINEMENT.md",
                 "docs/RELEASE_1.4.0_BETA.md", "docs/RELEASE_1.4.1_BETA.md",
                 "backend/ai/runtime/LICENSE-llama.cpp.txt", "backend/ai/runtime/LICENSE-LLVM-OpenMP.txt",
@@ -159,6 +160,38 @@ def test_host_launchers_and_named_public_guides_ship_without_unlisted_documents(
     copied = Path(result["snapshot_root"])
     assert {entry["path"] for entry in json.loads(Path(result["manifest_path"]).read_text())["files"]} == set(included)
     assert not (copied / "docs/private.md").exists()
+
+
+def test_optional_setup_inputs_keep_exact_bytes_without_widening_text_allowlist(tmp_path):
+    included = {
+        "backend/requirements-sonos.txt": b"synthetic-sonos==1\r\n",
+        "backend/requirements-voice.txt": b"synthetic-voice==2\n",
+        "docs/TLI_TASK_AGENT.md": b"Reviewed task setup\n",
+        "docs/TLI_SONOS.md": b"Reviewed speaker setup\n",
+        "docs/TLI_HOST_VOICE.md": b"Reviewed voice setup\n",
+        "backend/requirements-bluetooth.txt": b"bleak==3.0.2; sys_platform == 'win32'\n",
+        "docs/TLI_BLUETOOTH.md": b"Bluetooth setup and experimental profile limits\n",
+    }
+    excluded = ["backend/requirements-private.txt", "backend/requirements-voice-dev.txt",
+                "backend/routers/requirements-sonos.txt", "backend/data/requirements-voice.txt",
+                "docs/TLI_HOST_VOICE_PRIVATE.md", "docs/archive/TLI_SONOS.md",
+                "backend/models/voice/model.bin", "data/voice/generated.wav",
+                "backend/requirements-bluetooth-private.txt", "data/bluetooth/devices.json"]
+    for name, raw in included.items():
+        path = write(tmp_path, name)
+        path.write_bytes(raw)
+    for name in excluded:
+        write(tmp_path, name, "PRIVATE_CANARY_DO_NOT_COPY")
+    result = snapshot.create_snapshot(tmp_path)
+    copied = Path(result["snapshot_root"])
+    manifest = json.loads(Path(result["manifest_path"]).read_text())
+    assert {row["path"] for row in manifest["files"]} == set(included)
+    for name, raw in included.items():
+        assert (copied / name).read_bytes() == raw == (tmp_path / name).read_bytes()
+    for name in excluded:
+        assert not (copied / name).exists()
+        assert (tmp_path / name).read_text() == "PRIVATE_CANARY_DO_NOT_COPY"
+    assert snapshot.verify_snapshot(copied, Path(result["manifest_path"]), tmp_path)["source_matches"] is True
 
 
 def test_fingerprint_is_canonical_and_attempts_never_overwrite(source):

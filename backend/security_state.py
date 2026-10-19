@@ -16,21 +16,50 @@ class SecurityStateUnavailable(HTTPException):
         super().__init__(503, f"The saved {area} is unavailable or incomplete. Existing files were preserved. Stop TLI and restore the matching files from a backup, or use the original operating-system account. Do not run setup over this installation.")
 
 
-def read_json(path, area: str, limit: int = 1024 * 1024):
+def _unique_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("Duplicate saved state key")
+        value[key] = item
+    return value
+
+
+def _read_access(check):
+    if check is not None:
+        try:
+            check()
+        except Exception as error:
+            error.security_read_authority_failure = True
+            raise
+
+
+def read_json(path, area: str, limit: int = 1024 * 1024, *, reject_duplicates: bool = False, check=None):
     """Missing is distinct from unreadable; bounded reads never create directories."""
+    _read_access(check)
     try:
         with Path(path).open("rb") as stream:
+            _read_access(check)
             raw = stream.read(limit + 1)
+        _read_access(check)
         if len(raw) > limit:
             raise ValueError("Oversized saved state")
-        return json.loads(raw.decode("utf-8"))
-    except FileNotFoundError:
+        result = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object if reject_duplicates else None)
+        _read_access(check)
+        return result
+    except FileNotFoundError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
         raise
     except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
         raise SecurityStateUnavailable(area) from exc
 
 
-def write_json(path, value, area: str, *, new: bool = False):
+def write_json(path, value, area: str, *, new: bool = False, before_commit=None):
     """Atomic replacement; exclusive creation supports removable filesystems."""
     path = Path(path)
     temporary = None
@@ -39,6 +68,8 @@ def write_json(path, value, area: str, *, new: bool = False):
         path.parent.mkdir(parents=True, exist_ok=True)
         if new:
             payload = json.dumps(value, indent=2).encode("utf-8")
+            if before_commit is not None:
+                before_commit()
             with path.open("xb") as stream:
                 created = True
                 stream.write(payload)
@@ -50,6 +81,8 @@ def write_json(path, value, area: str, *, new: bool = False):
             json.dump(value, stream, indent=2)
             stream.flush()
             os.fsync(stream.fileno())
+        if before_commit is not None:
+            before_commit()
         os.replace(temporary, path)
         temporary = None
     except Exception as exc:
@@ -58,6 +91,8 @@ def write_json(path, value, area: str, *, new: bool = False):
                 path.unlink()
             except OSError:
                 pass
+        if isinstance(exc, HTTPException):
+            raise
         raise SecurityStateUnavailable(area) from exc
     finally:
         if temporary is not None:
@@ -67,31 +102,64 @@ def write_json(path, value, area: str, *, new: bool = False):
                 pass
 
 
-def companion_dependencies(data_dir) -> bool:
+def companion_dependencies(data_dir, *, check=None) -> bool:
+    _read_access(check)
     try:
-        value = read_json(Path(data_dir) / "companion" / "credentials.json", "Companion credentials")
-    except FileNotFoundError:
+        value = read_json(Path(data_dir) / "companion" / "credentials.json", "Companion credentials", check=check)
+    except FileNotFoundError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
         return False
-    if not isinstance(value, dict) or value.get("version") != 1 or any(not isinstance(value.get(k), dict) for k in ("devices", "pairings", "preferences")):
-        raise SecurityStateUnavailable("Companion credentials")
-    # Even revoked devices prove that this installation previously had a PIN.
-    return bool(value["devices"] or value["pairings"])
+    except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
+        raise
+    try:
+        _read_access(check)
+        if not isinstance(value, dict) or value.get("version") != 1 or any(not isinstance(value.get(k), dict) for k in ("devices", "pairings", "preferences")):
+            raise SecurityStateUnavailable("Companion credentials")
+        # Even revoked devices prove that this installation previously had a PIN.
+        result = bool(value["devices"] or value["pairings"])
+        _read_access(check)
+        return result
+    except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
+        raise
 
 
-def node_dependencies(data_dir) -> bool:
-    if companion_dependencies(data_dir):
-        return True
-    root = Path(data_dir)
-    for relative in ("mesh/mesh_directory.json", "mesh/agent_state.json", "mesh/agent_tasks.json", "intelligence/device_context.json"):
-        try:
-            value = read_json(root / relative, "node configuration")
-        except FileNotFoundError:
-            continue
-        if not isinstance(value, dict):
-            raise SecurityStateUnavailable("node configuration")
-        if value:
+def node_dependencies(data_dir, *, check=None) -> bool:
+    _read_access(check)
+    try:
+        if companion_dependencies(data_dir, check=check):
+            _read_access(check)
             return True
-    return False
+        root = Path(data_dir)
+        for relative in ("mesh/mesh_directory.json", "mesh/agent_state.json", "mesh/agent_tasks.json", "intelligence/device_context.json"):
+            _read_access(check)
+            try:
+                value = read_json(root / relative, "node configuration", check=check)
+            except FileNotFoundError as exc:
+                if getattr(exc, "security_read_authority_failure", False):
+                    raise
+                _read_access(check)
+                continue
+            _read_access(check)
+            if not isinstance(value, dict):
+                raise SecurityStateUnavailable("node configuration")
+            if value:
+                _read_access(check)
+                return True
+        _read_access(check)
+        return False
+    except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _read_access(check)
+        raise
 
 
 def validate_existing_security() -> None:

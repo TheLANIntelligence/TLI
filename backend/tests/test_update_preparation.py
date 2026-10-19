@@ -286,8 +286,8 @@ def test_authorized_prepare_open_and_uncached_status(local, monkeypatch):
     _, client = local
     serve_manifest(monkeypatch, manifest())
     actions = []
-    monkeypatch.setattr(U, "apply", lambda: actions.append("prepare") or True)
-    monkeypatch.setattr(U, "open_prepared_folder", lambda: actions.append("open"))
+    monkeypatch.setattr(U, "apply", lambda **kwargs: kwargs['check']() or actions.append("prepare") or True)
+    monkeypatch.setattr(U, "open_prepared_folder", lambda **kwargs: kwargs['check']() or actions.append("open"))
     headers = {"Origin": "http://localhost:8000"}
     assert client.post("/update/apply", json={}, headers=headers).status_code == 200
     assert client.post("/update/open", json={}, headers=headers).status_code == 200

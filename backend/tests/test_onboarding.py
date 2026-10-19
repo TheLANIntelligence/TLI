@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import companion_auth
 import security_state
+import onboarding_store
 import tli_state as S
 from routers import system_routes as routes
 
@@ -21,10 +22,12 @@ def onboarding(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "log_debug", lambda *args, **kwargs: None)
     monkeypatch.setattr(routes, "_ONBOARDING_COMPLETE_FILE", tmp_path / "onboarding_complete.json")
     monkeypatch.setattr(routes, "_ONBOARDING_STARTED_FILE", tmp_path / "onboarding_started.json")
+    monkeypatch.setattr(onboarding_store, "_SEEN", set())
+    monkeypatch.setattr(onboarding_store, "_UNCERTAIN", set())
     app = FastAPI()
     app.middleware("http")(companion_auth.validate_authorization)
     app.include_router(routes.router)
-    with TestClient(app, base_url="https://testserver") as client:
+    with TestClient(app, base_url="https://localhost", headers={"Origin": "https://localhost"}, client=("127.0.0.1", 50000)) as client:
         yield client
 
 
@@ -53,7 +56,7 @@ def test_started_setup_survives_pin_creation_and_new_browser_until_completed(onb
     assert status(onboarding) == {"complete": False, "started": True}
     # A fresh client has no frontend or authentication state. Progress is read
     # from the host's persisted marker, even though a PIN now exists.
-    with TestClient(onboarding.app, base_url="https://testserver") as reloaded:
+    with TestClient(onboarding.app, base_url="https://localhost", headers={"Origin": "https://localhost"}, client=("127.0.0.1", 50001)) as reloaded:
         assert status(reloaded) == {"complete": False, "started": True}
         assert reloaded.post("/system/onboarding/complete").status_code == 401
         assert reloaded.post("/system/pin/verify", json={"pin": "2468"}).status_code == 200
@@ -101,14 +104,9 @@ def test_save_failure_is_visible_and_preserves_unfinished_progress(onboarding, m
         assert onboarding.post("/system/onboarding/start").status_code == 200
     target = routes._ONBOARDING_STARTED_FILE if endpoint == "start" else routes._ONBOARDING_COMPLETE_FILE
     original = {path.name: path.read_bytes() for path in Path(S.DATA_DIR).iterdir()}
-    real_replace = security_state.os.replace
-
-    def fail_replace(source, destination):
-        if Path(destination) == target:
-            raise PermissionError("Synthetic read-only storage")
-        return real_replace(source, destination)
-
-    monkeypatch.setattr(security_state.os, "replace", fail_replace)
+    # A definite pre-publication failure stays retryable. An exception from the
+    # exclusive publication itself is deliberately uncertain (covered separately).
+    monkeypatch.setattr(onboarding_store.os, "fsync", lambda _: (_ for _ in ()).throw(PermissionError("Synthetic read-only storage")))
     response = onboarding.post("/system/onboarding/" + endpoint)
     assert response.status_code == 503
     assert "preserved" in response.json()["detail"]

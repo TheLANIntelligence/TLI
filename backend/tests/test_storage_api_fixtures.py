@@ -45,7 +45,7 @@ def test_authenticated_api_envelopes_and_observation_host(app, monkeypatch):
                            "protected_prefixes": [], "meta": {"partial": True, "scope": "host_common_folders"}},
     }
     entered, cancel_mode = threading.Event(), [False]
-    def worker(request, cancel, progress, authorized):
+    def worker(request, cancel, progress, authorized, *, inventory=None):
         assert authorized()
         entered.set()
         if cancel_mode[0]: assert cancel.wait(3)

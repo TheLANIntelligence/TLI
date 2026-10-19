@@ -427,7 +427,16 @@ def test_lan_probe_retains_observed_capabilities_without_fabricating_health(monk
     assert not {"has_ai", "ai_healthy", "ai_observed_at"}.intersection(entry)
     assert companion_routes._recent_mesh_ai() is False
     lan_discovery._upsert_peer("peer", "Office", "192.168.1.25", 8000)
-    assert not {"has_ai", "ai_healthy"}.intersection(entry["discovery"])
+    # A less informative route beacon preserves the earlier unsigned hints;
+    # neither those hints nor this newer beacon grants current AI readiness.
+    assert entry["discovery"]["has_ai"] is True and entry["discovery"]["ai_healthy"] is False
+    assert entry["discovery"]["verified"] is False
+    assert not {"has_ai", "ai_healthy", "ai_observed_at"}.intersection(entry)
+    assert companion_routes._recent_mesh_ai() is False
+    lan_discovery._upsert_peer("peer", "Office", "192.168.1.25", 8000,
+                              {"has_ai": None, "ai_healthy": None, "model_state": "unobserved"})
+    assert entry["discovery"]["has_ai"] is None and entry["discovery"]["ai_healthy"] is None
+    assert entry["discovery"]["model_state"] == "unobserved"
     assert entry["discovery"]["verified"] is False
     assert companion_routes._recent_mesh_ai() is False
 

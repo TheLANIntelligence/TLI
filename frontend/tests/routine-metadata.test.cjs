@@ -158,7 +158,7 @@ test('late favorite reads cannot restore names after lock or replace a newer ren
   const pending = f.window.TLIRoutineFavorites.render(f.home);
   f.event('tli-session-locked'); complete({ actions: [clone(f.action)], triggers: [] }); await pending;
   assert.equal(f.text(f.home).trim(), '');
-  f.event('tli-session-unlocked'); const old = f.window.TLIRoutineFavorites.render(f.home);
+  f.event('tli-session-unlocked'); f.event('tli-private-observation-ready'); const old = f.window.TLIRoutineFavorites.render(f.home);
   const finishOld = complete; f.handler(f.defaultHandler); f.action.name = 'New label';
   await f.window.TLIRoutineFavorites.render(f.home);
   finishOld({ actions: [{ ...clone(f.action), name: 'Old label' }], triggers: [] }); await old;

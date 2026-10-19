@@ -25,7 +25,7 @@ def browser(tmp_path, monkeypatch):
 
 
 def headers(token, **values):
-    return {'Cookie': 'tli_session=' + token, **values}
+    return {'Cookie': 'tli_session=' + token, 'Origin': 'https://testserver', **values}
 
 
 def test_lock_revokes_only_requesting_browser_and_clears_cookie(browser):

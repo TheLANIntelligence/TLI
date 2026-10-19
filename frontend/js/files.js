@@ -8,8 +8,10 @@ let filesBucketDestinations = {};
 let filesLastScanRoot = "";
 let filesScanEpoch = 0;
 let filesPrivateEpoch = 0;
+let filesSessionEpoch = 0, filesAccessReady = true, filesVerifiedSession = false, filesPausedFromEpoch = null;
 let filesDraftRevision = 0;
 let filesOperationBusy = false;
+let filesMutationPending = false;
 let filesOperationReview = null;
 let filesPanelSetup = false;
 let filesAdviceBusy = false;
@@ -21,6 +23,21 @@ let filesScanBusy = false, filesLocked = false;
 let filesPendingCandidates = null;
 let filesScanHostId = null;
 
+function filesCurrent(epoch = filesSessionEpoch) { return epoch === filesSessionEpoch && !filesLocked && filesAccessReady; }
+function filesCheck(epoch) { if (!filesCurrent(epoch)) throw new Error('File access changed. Unlock TLI and review again before changing files.'); }
+function filesAccessFailure(response, data, epoch, sent = false) {
+  if (response.status !== 401 && response.status !== 403) return false;
+  const current = filesCurrent(epoch);
+  // The global 401 interceptor can clear this view before fetch resolves.
+  // Retain its public recovery detail only until a newer verified session.
+  if (!current && !(epoch === filesPausedFromEpoch && !filesAccessReady && !filesVerifiedSession)) return true;
+  if (current) window.dispatchEvent(new CustomEvent('tli-session-locked'));
+  const detail = typeof data?.detail === 'string' ? data.detail : 'Unlock TLI or check this browser’s access to the host.';
+  filesSetStatus(detail + (sent ? ' Outcome not confirmed. No retry was sent. Review the current paths and Review undo after unlocking.' : ' No file-change request was sent. Check file access after unlocking.'));
+  if (current) window.TLIPinLock?.checkAndLock();
+  return true;
+}
+
 function filesPathKey(path) {
   const value = String(path || "");
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\') ? value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase() : value.replace(/\/+$/, '') || '/';
@@ -28,7 +45,7 @@ function filesPathKey(path) {
 function filesSamePath(a, b) { return !!a && !!b && filesPathKey(a) === filesPathKey(b); }
 function filesKnownNames() { return Object.values(filesLastScanBuckets?.buckets || {}).flat(); }
 function filesSelect(names, selected = true) {
-  if (filesOperationBusy || filesScanBusy || filesLocked || !filesSamePath($("filesRootInput")?.value.trim(), filesLastScanRoot)) return false;
+  if (filesOperationBusy || filesScanBusy || !filesCurrent() || !filesSamePath($("filesRootInput")?.value.trim(), filesLastScanRoot)) return false;
   const known = new Set(filesKnownNames()), next = new Set(filesSelectedNames);
   for (const name of names) { if (known.has(name)) { if (selected) next.add(name); else next.delete(name); } }
   if (next.size > FILES_SELECTION_LIMIT) {
@@ -37,7 +54,7 @@ function filesSelect(names, selected = true) {
   filesSelectedNames = next; filesInvalidateReview(); filesRenderSelection(); return true;
 }
 function filesPrepare(intent, replace = false) {
-  if (filesLocked || filesOperationBusy || filesScanBusy || !intent || typeof intent.root !== 'string') return {status:'unavailable'};
+  if (!filesCurrent() || filesOperationBusy || filesScanBusy || !intent || typeof intent.root !== 'string') return {status:'unavailable'};
   const input = $("filesRootInput"); if (!input) return {status:'unavailable'};
   const current = input.value.trim() || filesLastScanRoot;
   if (current && !filesSamePath(current, intent.root) && !replace) return {status:'draft-conflict', root:current};
@@ -68,11 +85,14 @@ function filesSetOperationBusy(busy) {
   filesOperationBusy = busy;
   for (const id of ["filesScanButton", "filesPreviewButton", "filesRunButton", "filesUndoButton",
     "filesBatchRenameButton", "filesRootInput", "filesRenamePrefix"]) {
-    const el = $(id); if (el) el.disabled = busy;
+    const el = $(id); if (el) el.disabled = busy || !filesCurrent();
   }
-  document.querySelectorAll(".files-bucket-input, [data-files-preset], [data-files-select]").forEach(el => { el.disabled = busy; });
+  document.querySelectorAll(".files-bucket-input, [data-files-preset], [data-files-select]").forEach(el => { el.disabled = busy || !filesCurrent(); });
+  for (const id of ['filesCustomRulesButton', 'filesInsightButton']) if ($(id)) $(id).disabled = filesAdviceBusy || !filesCurrent();
+  const scan = $('filesScanButton');
+  if (scan) { scan.textContent = filesAccessReady ? 'Scan folder' : 'Check file access'; scan.disabled = busy || filesLocked; }
   const confirm = $("files-operation-confirm");
-  if (confirm) confirm.disabled = busy || !filesOperationReview?.data.can_execute;
+  if (confirm) confirm.disabled = busy || !filesCurrent() || !filesOperationReview?.data.can_execute;
   filesRenderSelection();
 }
 
@@ -110,26 +130,34 @@ function filesValidOperation(data, preview, kind) {
 async function filesOperationRequest(kind, payload, preview) {
   // Older rename/undo handlers ignore confirm:false. Never POST until the host
   // explicitly advertises the reviewed protocol, including after a restart.
-  const epoch = filesPrivateEpoch;
+  const epoch = filesSessionEpoch;
   try {
+    filesCheck(epoch);
     const gate = await fetch("/file/operations/capabilities", {method: "GET", cache: "no-store"});
     let capabilities; try { capabilities = await gate.json(); } catch { /* Fail closed below. */ }
+    if (filesAccessFailure(gate, capabilities, epoch)) throw new Error('File access was denied.');
+    filesCheck(epoch);
     if (!gate.ok || capabilities?.ok !== true || capabilities.protocol !== "reviewed-file-operations-v1") {
       throw new Error("Reviewed file operations are unavailable on this running TLI host. Finish any active work, then restart TLI with the updated code before using Organizer, Rename or Undo.");
     }
-    if (epoch !== filesPrivateEpoch) throw new Error("The browser session changed. Review the operation again after unlocking.");
+    filesCheck(epoch);
   } catch (error) {
     error.fileRequestSent = false; throw error;
   }
+  if (!preview) filesMutationPending = true;
   const res = await fetch("/file/" + kind, {method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(payload)});
-  let data; try { data = await res.json(); } catch { throw new Error("TLI returned an unreadable result."); }
+  const data = await res.json().catch(() => null);
+  if (filesAccessFailure(res, data, epoch, !preview)) throw new Error('File access was denied.');
+  filesCheck(epoch);
+  if (!data) throw new Error("TLI returned an unreadable result.");
   if (!res.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Request failed (${res.status}).`);
   if (!filesValidOperation(data, preview, kind)) throw new Error("TLI did not return a complete, confirmed file-operation result.");
   return data;
 }
 
 function filesRenderOperation(data, kind, preview) {
+  const epoch = filesSessionEpoch;
   const box = filesReviewBox(); box.replaceChildren();
   box.setAttribute('data-operation-phase', preview ? 'review' : 'result');
   const heading = document.createElement("h4");
@@ -149,7 +177,7 @@ function filesRenderOperation(data, kind, preview) {
       history.appendChild(option);
     }
     history.value = data.operation_id || "";
-    history.addEventListener("change", () => filesUndoLast(history.value));
+    history.addEventListener("change", () => { if (filesCurrent(epoch) && filesOperationReview?.data === data) return filesUndoLast(history.value); });
     label.appendChild(history); box.appendChild(label);
   }
   const list = document.createElement("ol"); list.style.paddingInlineStart = "22px";
@@ -176,7 +204,7 @@ function filesRenderOperation(data, kind, preview) {
       leave.id = 'files-leave-blocked'; leave.textContent = 'Leave blocked files here';
       const revision = filesDraftRevision;
       leave.addEventListener('click', () => {
-        if (filesOperationBusy || revision !== filesDraftRevision || filesOperationReview?.data !== data) return;
+        if (!filesCurrent(epoch) || filesOperationBusy || revision !== filesDraftRevision || filesOperationReview?.data !== data) return;
         const blocked = new Set(data.results.filter(row => row.status === 'blocked').map(row => filesPathKey(row.source)));
         const names = filesKnownNames().filter(name => blocked.has(filesPathKey(filesLastScanRoot.replace(/[\\/]$/, '') + '/' + name)));
         if (filesSelect(names, false)) filesSetStatus('Blocked files were removed from the draft. Review moves again to check the remaining files. Nothing moved.');
@@ -187,7 +215,9 @@ function filesRenderOperation(data, kind, preview) {
     const confirm = document.createElement("button"); confirm.id = "files-operation-confirm"; confirm.className = "pill-btn primary";
     const count = data.results.filter(row => row.status === "ready").length;
     confirm.textContent = `${kind === "undo" ? "Restore" : kind === "rename" ? "Rename" : "Move"} ${count} file${count === 1 ? "" : "s"}`;
-    confirm.disabled = !data.can_execute; confirm.addEventListener("click", filesConfirmOperation); box.appendChild(confirm);
+    confirm.disabled = !data.can_execute; confirm.addEventListener("click", () => {
+      if (filesCurrent(epoch) && filesOperationReview?.data === data) return filesConfirmOperation();
+    }); box.appendChild(confirm);
   } else {
     const guidance = document.createElement("p");
     guidance.textContent = data.undo_available ? "Undo evidence was saved. Use Review undo to inspect the original paths before restoring." :
@@ -199,46 +229,46 @@ function filesRenderOperation(data, kind, preview) {
 }
 
 async function filesPreviewOperation(kind, payload) {
-  if (filesOperationBusy || filesScanBusy || filesLocked) return;
+  if (filesOperationBusy || filesScanBusy || !filesCurrent()) return;
   filesScanEpoch++;
   filesInvalidateReview("");
-  const revision = filesDraftRevision, epoch = filesPrivateEpoch;
+  const revision = filesDraftRevision, epoch = filesSessionEpoch;
   filesSetOperationBusy(true); filesSetStatus("Checking the complete plan. No files are being changed…");
   try {
     const data = await filesOperationRequest(kind, {...payload, confirm: false}, true);
-    if (epoch !== filesPrivateEpoch || revision !== filesDraftRevision) return;
+    if (!filesCurrent(epoch) || revision !== filesDraftRevision) return;
     filesOperationReview = {kind, payload: JSON.parse(JSON.stringify(payload)), data, revision};
     filesRenderOperation(data, kind, true); filesSetStatus(data.message);
   } catch (error) {
-    if (epoch === filesPrivateEpoch) filesSetStatus("Review unavailable: " + error.message + " No file-change request was sent.");
-  } finally { if (epoch === filesPrivateEpoch) filesSetOperationBusy(false); }
+    if (filesCurrent(epoch)) filesSetStatus("Review unavailable: " + error.message + " No file-change request was sent.");
+  } finally { if (filesCurrent(epoch)) filesSetOperationBusy(false); }
 }
 
 async function filesConfirmOperation() {
   const review = filesOperationReview;
-  if (filesOperationBusy || !review?.data.can_execute) return;
+  if (!filesCurrent() || filesOperationBusy || !review?.data.can_execute) return;
   const current = review.kind === "organize" ? filesBuildOrganizePayload() : review.kind === "rename" ?
     {path: ($("filesRootInput")?.value || "").trim(), prefix: ($("filesRenamePrefix")?.value || "").trim()} : review.payload;
   if (review.revision !== filesDraftRevision || JSON.stringify(current) !== JSON.stringify(review.payload) || review.data.expires_at * 1000 <= Date.now()) {
     filesInvalidateReview("This review expired or changed. Preview again before changing files."); return;
   }
-  const epoch = filesPrivateEpoch;
+  const epoch = filesSessionEpoch;
   filesOperationReview = null; filesSetOperationBusy(true);
   filesSetStatus("Applying the reviewed file operation…");
   try {
     const data = await filesOperationRequest(review.kind, {...review.payload, confirm: true, preview_id: review.data.preview_id}, false);
-    if (epoch !== filesPrivateEpoch) return;
+    if (!filesCurrent(epoch)) return;
     filesRenderOperation(data, review.kind, false); filesSetStatus(data.message);
     if (data.ok && data.status === "completed") {
       filesLastScanBuckets = null; filesLastScanRoot = ""; filesSelectedNames.clear(); filesPendingCandidates = null; filesScanEpoch++; filesRenderBuckets();
     }
   } catch (error) {
-    if (epoch === filesPrivateEpoch) {
+    if (filesCurrent(epoch)) {
       const message = error.fileRequestSent === false ? "File operation not sent: " + error.message :
         "Outcome not confirmed: " + error.message + " No retry was sent. Inspect the reviewed paths and Review undo before another request.";
       filesSetStatus(message); const note = $("files-operation-note"); if (note) note.textContent = message;
     }
-  } finally { if (epoch === filesPrivateEpoch) filesSetOperationBusy(false); }
+  } finally { if (filesCurrent(epoch)) { filesMutationPending = false; filesSetOperationBusy(false); } }
 }
 
 function filesLoadSavedDestinations() {
@@ -285,7 +315,7 @@ function _foSetActiveTile(kind) {
 }
 
 function filesSetPreset(kind) {
-  if (filesOperationBusy || filesScanBusy || filesLocked) return;
+  if (filesOperationBusy || filesScanBusy || !filesCurrent()) return;
   const path = _tliPathPreset(kind);
   const prepared = window.TLIStorageWorkspace?.prepare ? window.TLIStorageWorkspace.prepare({view:'organize',root:path,source:'organize'}) : filesPrepare({root:path});
   if (prepared.status === 'prepared') _foSetActiveTile(kind);
@@ -383,8 +413,8 @@ function filesRenderSelection() {
   const list = $('files-file-list'); if (!list) return;
   const focus = document.activeElement?.id;
   const current = filesSamePath($('filesRootInput')?.value.trim(), filesLastScanRoot);
-  const disabled = filesOperationBusy || filesScanBusy || filesLocked || !current;
-  const resume = $('files-return-draft'); if (resume) { resume.hidden = current; resume.disabled = filesOperationBusy || filesScanBusy || filesLocked; }
+  const disabled = filesOperationBusy || filesScanBusy || !filesCurrent() || !current;
+  const resume = $('files-return-draft'); if (resume) { resume.hidden = current; resume.disabled = filesOperationBusy || filesScanBusy || !filesCurrent(); }
   const rows = filesMatchingRows(); filesPage = Math.max(0, Math.min(filesPage, Math.max(0, Math.ceil(rows.length / FILES_PAGE_SIZE) - 1)));
   const remaining = filesKnownNames().length - filesSelectedNames.size;
   $('files-selection-count').textContent = `${filesSelectedNames.size} of ${FILES_SELECTION_LIMIT} files selected · ${remaining} ${remaining === 1 ? 'stays' : 'stay'} here · ${rows.length} match${current ? '' : ' · Previous folder draft'}`;
@@ -423,7 +453,7 @@ function filesRenderSelection() {
 // Helper used by the Quick actions cards.
 // It assumes /file/scan has already been run and filled filesLastScanBuckets.
 function filesApplyQuick(bucketName, destName, description) {
-  if (filesOperationBusy || filesScanBusy || filesLocked) return;
+  if (filesOperationBusy || filesScanBusy || !filesCurrent()) return;
   if (!filesLastScanBuckets) {
     showToast("Scan this folder first so TLI can see what's inside.");
     return;
@@ -475,6 +505,7 @@ function filesBuildOrganizePayload() {
 
 async function filesScanFolder() {
   if (filesOperationBusy || filesScanBusy || filesLocked) return;
+  if (!filesAccessReady) { await window.EventInterpreter?.retry(); return; }
   const path = ($("filesRootInput")?.value || "").trim();
   if (!path) {
     showToast("Enter a folder path first.");
@@ -484,8 +515,8 @@ async function filesScanFolder() {
   filesInvalidateReview();
   filesScanBusy = true;
   filesRenderSelection();
-  const epoch = ++filesScanEpoch, privateEpoch = filesPrivateEpoch;
-  const current = () => epoch === filesScanEpoch && privateEpoch === filesPrivateEpoch && path === ($("filesRootInput")?.value || "").trim();
+  const epoch = ++filesScanEpoch, privateEpoch = filesSessionEpoch;
+  const current = () => epoch === filesScanEpoch && filesCurrent(privateEpoch) && path === ($("filesRootInput")?.value || "").trim();
   const previous = filesLastScanRoot ? ` Previous results for ${filesLastScanRoot} remain visible until this scan succeeds.` : "";
   filesSetStatus("Scanning folder…" + previous);
   debugLog("info", "POST /files/scan root=" + path);
@@ -503,9 +534,14 @@ async function filesScanFolder() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ root: path })
     });
+    if (extRes.status === 401 || extRes.status === 403) {
+      const data = await extRes.json().catch(() => null);
+      filesAccessFailure(extRes, data, privateEpoch); return;
+    }
     if (!current()) return;
     if (!extRes.ok) {
       const txt = await extRes.text();
+      if (!current()) return;
       filesSetStatus("Scan failed: " + extRes.status + " · " + txt + previous);
       debugLog("error", "POST /files/scan failed: " + extRes.status + " · " + txt);
       return;
@@ -521,9 +557,14 @@ async function filesScanFolder() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path })
     });
+    if (bucketRes.status === 401 || bucketRes.status === 403) {
+      const data = await bucketRes.json().catch(() => null);
+      filesAccessFailure(bucketRes, data, privateEpoch); return;
+    }
     if (!current()) return;
     if (!bucketRes.ok) {
       const txt = await bucketRes.text();
+      if (!current()) return;
       filesSetStatus("Could not read file categories: " + bucketRes.status + " · " + txt + previous);
       debugLog("error", "POST /file/scan failed: " + bucketRes.status + " · " + txt);
       return;
@@ -582,7 +623,7 @@ async function filesScanFolder() {
     console.error(err);
     filesSetStatus("Scan error: " + err.message + previous);
     debugLog("error", "FILES scan error: " + err.message);
-  } finally { if (privateEpoch === filesPrivateEpoch) { filesScanBusy = false; filesRenderSelection(); } }
+  } finally { if (filesCurrent(privateEpoch)) { filesScanBusy = false; filesRenderSelection(); } }
 }
 
 async function filesPreviewOrganize() {
@@ -607,6 +648,7 @@ async function filesBatchRename() {
 
 // Suggestions are text for review; neither endpoint edits the reviewed file plan.
 async function filesRequestAdvice(kind) {
+  if (!filesCurrent()) return {ok:false};
   if (filesAdviceBusy) return {ok: false, busy: true};
   const path = ($("filesRootInput")?.value || "").trim();
   const rules = ($("filesRulesTextarea")?.value || "").trim();
@@ -616,8 +658,8 @@ async function filesRequestAdvice(kind) {
     filesSetStatus(!path ? "Enter a folder path first." : "Describe the organization suggestion you want.");
     return {ok: false};
   }
-  const epoch = filesPrivateEpoch;
-  const current = () => epoch === filesPrivateEpoch && path === ($("filesRootInput")?.value || "").trim() &&
+  const epoch = filesSessionEpoch;
+  const current = () => filesCurrent(epoch) && path === ($("filesRootInput")?.value || "").trim() &&
     (kind !== "rules" || rules === ($("filesRulesTextarea")?.value || "").trim());
   const buttons = [$("filesCustomRulesButton"), $("filesInsightButton")].filter(Boolean);
   filesAdviceBusy = true;
@@ -631,11 +673,13 @@ async function filesRequestAdvice(kind) {
       body: JSON.stringify(kind === "rules" ? {root: path, rules} : {root: path})
     });
     const data = await response.json().catch(() => null);
+    if (filesAccessFailure(response, data, epoch)) return {ok:false};
+    if (!filesCurrent(epoch)) return {ok:false, stale:true};
     if (!response.ok || data?.ok === false) throw new Error(data?.detail || data?.message || data?.error || `HTTP ${response.status}`);
     const answer = data?.summary || (kind === "insight" && data?.insight);
     if (typeof answer !== "string" || !answer.trim()) throw new Error("AI returned no usable suggestion.");
     if (!current()) {
-      if (epoch === filesPrivateEpoch) filesSetStatus("The folder or request changed. Previous advice is unchanged; ask again for the current folder.");
+      if (filesCurrent(epoch)) filesSetStatus("The folder or request changed. Previous advice is unchanged; ask again for the current folder.");
       return {ok: false, stale: true};
     }
     const checked = new Date().toLocaleString();
@@ -644,12 +688,14 @@ async function filesRequestAdvice(kind) {
       "AI summary received. This is advice about the folder, not a file operation.");
     return {ok: true};
   } catch (error) {
-    if (epoch === filesPrivateEpoch) filesSetStatus("AI request failed: " + error.message + " Previous advice and your file plan are unchanged. Retry when ready.");
+    if (filesCurrent(epoch)) filesSetStatus("AI request failed: " + error.message + " Previous advice and your file plan are unchanged. Retry when ready.");
     return {ok: false, error: error.message};
   } finally {
-    filesAdviceBusy = false;
-    buttons.forEach(button => { button.disabled = false; });
-    box.removeAttribute("aria-busy");
+    if (filesCurrent(epoch)) {
+      filesAdviceBusy = false;
+      buttons.forEach(button => { button.disabled = false; });
+      box.removeAttribute("aria-busy");
+    }
   }
 }
 function filesUseCustomRules() { return filesRequestAdvice("rules"); }
@@ -696,27 +742,6 @@ function setupFilesPanel() {
   for (const [id, label] of [["filesRunButton", "Review moves"], ["filesUndoButton", "Review undo"], ["filesBatchRenameButton", "Preview rename"]]) {
     const button = $(id); if (button) button.textContent = label;
   }
-  const clearPrivate = () => {
-    filesPrivateEpoch++; filesScanEpoch++; filesInvalidateReview("");
-    for (const id of ["filesRulesSummary", "filesInsightBox"]) { const box = $(id); if (box) box.textContent = ""; }
-    psClearScanPreview();
-    _psPrintFile = null;
-    for (const id of ["ps-chosen-file", "ps-print-status", "ps-scan-status"]) {
-      const element = $(id); if (element) element.textContent = "";
-    }
-    const printInput = $("ps-file-input"); if (printInput) printInput.value = "";
-    filesLastScanBuckets = null; filesLastScanRoot = ""; filesSelectedNames.clear(); filesPendingCandidates = null; filesScanHostId = null;
-    filesSearch = ''; filesCategory = 'all'; filesPage = 0; filesScanBusy = false;
-    root.value = ''; filesBucketDestinations = {};
-    $("files-operation-review")?.replaceChildren(); filesRenderBuckets();
-    $("filesExtTableBody")?.replaceChildren();
-    const summary = $("fo-summary-meta"); if (summary) summary.textContent = "";
-    const status = $("filesStatus"); if (status) status.textContent = "";
-    filesSetOperationBusy(false);
-  };
-  window.addEventListener("tli-session-locked", () => { filesLocked = true; clearPrivate(); });
-  window.addEventListener("tli-session-unlocked", () => { filesLocked = false; });
-  window.addEventListener("pagehide", clearPrivate);
 
   // Quick action recipes
   $("filesQuickInstallers")?.addEventListener("click", () =>
@@ -730,10 +755,45 @@ function setupFilesPanel() {
   );
 
   filesRenderBuckets();
-  filesSetStatus("");
+  filesSetStatus(""); filesSetOperationBusy(false);
 }
 
 window.TLIFiles = {prepare:filesPrepare, describeDraft:filesDescribeDraft, select:filesSelect};
+
+function filesClearPrivate() {
+  const pending = filesMutationPending;
+  filesSessionEpoch++; filesScanEpoch++; filesInvalidateReview('');
+  for (const id of ['filesRulesSummary', 'filesInsightBox', 'fo-summary-meta', 'fo-type-bars']) {
+    const box = $(id); if (box) { box.textContent = ''; box.removeAttribute?.('aria-busy'); }
+  }
+  for (const id of ['filesRootInput', 'filesRenamePrefix', 'filesRulesTextarea']) if ($(id)) $(id).value = '';
+  for (const id of ['fo-summary-bar', 'fo-results-section']) if ($(id)) $(id).style.display = 'none';
+  filesLastScanBuckets = null; filesLastScanRoot = ''; filesSelectedNames.clear(); filesPendingCandidates = null; filesScanHostId = null;
+  filesSearch = ''; filesCategory = 'all'; filesPage = 0; filesScanBusy = false; filesAdviceBusy = false; filesMutationPending = false; filesBucketDestinations = {};
+  $('files-operation-review')?.replaceChildren(); $('filesExtTableBody')?.replaceChildren(); filesRenderBuckets();
+  if ($('filesStatus')) $('filesStatus').textContent = pending ? 'File access changed. If a file operation was submitted, its outcome is not confirmed. No retry was sent. Review current paths and Review undo after unlocking.' : '';
+  filesSetOperationBusy(false);
+}
+window.addEventListener?.('tli-session-locked', () => {
+  filesPausedFromEpoch = filesSessionEpoch;
+  filesLocked = true; filesAccessReady = false; filesVerifiedSession = false; filesClearPrivate();
+});
+window.addEventListener?.('tli-session-unlocked', event => {
+  const verified = event?.detail?.source === 'pin-verification';
+  if (!filesLocked && (!verified || filesVerifiedSession)) return;
+  const replace = !filesLocked && filesAccessReady;
+  filesLocked = false; filesAccessReady = false;
+  if (verified) filesVerifiedSession = true;
+  // Lock already cleared private data. A new verified session can also replace
+  // an unlocked session, so invalidate its work before enabling any controls.
+  if (replace) filesClearPrivate();
+  filesSetOperationBusy(false);
+});
+window.addEventListener?.('tli-private-observation-ready', () => {
+  if (filesLocked || filesAccessReady) return;
+  filesAccessReady = true; filesPausedFromEpoch = null; filesSetOperationBusy(false);
+});
+window.addEventListener?.('pagehide', () => { filesAccessReady = false; filesPausedFromEpoch = null; filesClearPrivate(); });
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -776,14 +836,44 @@ function psSetStatus(id, msg, type) {
 // ── On panel open ─────────────────────────────────────────────────────────
 
 let _psLoaded = false, _psOpenPromise = null, _psPrinterPromise = null, _psHandoff = 0;
+let _psPrinterRead = 0, _psScannerRead = 0;
+let _psRecoveryStarted = false;
+
+function psClearPrivate() {
+  _psRecoveryStarted = false;
+  filesPrivateEpoch++; _psPrinterRead++; _psScannerRead++; _psHandoff++;
+  _psLoaded = false; _psOpenPromise = null; _psPrinterPromise = null;
+  psClearScanPreview(); _psPrintFile = null;
+  for (const id of ['ps-chosen-file', 'ps-print-status', 'ps-scan-status', 'ps-platform-tag']) {
+    const node = document.getElementById(id); if (node) node.textContent = '';
+  }
+  for (const id of ['ps-printer-select', 'ps-scanner-select']) {
+    const node = document.getElementById(id); if (node) { node.innerHTML = ''; node.value = ''; }
+  }
+  const input = document.getElementById('ps-file-input'); if (input) input.value = '';
+  document.getElementById('ps-dropzone')?.classList.remove('ps-dropzone-has-file');
+}
+
+function psAccessFailure(response, data, epoch, statusId) {
+  if (response.status !== 401 && response.status !== 403) return false;
+  if (epoch === filesPrivateEpoch && !filesLocked) psClearPrivate();
+  if (!_psRecoveryStarted && epoch + 1 === filesPrivateEpoch) {
+    psSetStatus(statusId, typeof data?.detail === 'string' ? data.detail : 'Unlock TLI, then explicitly retry. If the PIN is off, clear this site’s cookies or use a new private window on localhost.', 'error');
+  }
+  return true;
+}
+window.addEventListener?.('tli-session-locked', () => { filesLocked = true; psClearPrivate(); });
+window.addEventListener?.('tli-session-unlocked', () => { filesLocked = false; });
+window.addEventListener?.('pagehide', psClearPrivate);
 
 async function switchToPrintShop(printerName) {
+  if (filesLocked) return false;
   const handoff = ++_psHandoff;
   switchPanel("panel-printshop");
   psSwitchTab("print");
   await psOnOpen();
   if (_psPrinterPromise) await _psPrinterPromise;
-  if (handoff !== _psHandoff) return false;
+  if (handoff !== _psHandoff || filesLocked) return false;
   const sel = document.getElementById("ps-printer-select");
   const found = !!sel && Array.from(sel.options).some(option => option.value === printerName && printerName);
   if (sel) sel.value = found ? printerName : "";
@@ -792,31 +882,41 @@ async function switchToPrintShop(printerName) {
 }
 
 function psOnOpen() {
+  if (filesLocked) return Promise.resolve();
   if (_psOpenPromise) return _psOpenPromise;
   if (_psLoaded) return Promise.resolve();
   _psLoaded = true;
   psLoadScanners();
-  _psOpenPromise = psLoadPrinters().finally(() => { _psOpenPromise = null; });
+  const work = psLoadPrinters().finally(() => { if (_psOpenPromise === work) _psOpenPromise = null; });
+  _psOpenPromise = work;
   return _psOpenPromise;
 }
 
 // ── Printers ─────────────────────────────────────────────────────────────
 
 function psLoadPrinters() {
+  if (filesLocked) return Promise.resolve();
   if (_psPrinterPromise) return _psPrinterPromise;
-  _psPrinterPromise = psFetchPrinters().finally(() => { _psPrinterPromise = null; });
+  const work = psFetchPrinters().finally(() => { if (_psPrinterPromise === work) _psPrinterPromise = null; });
+  _psPrinterPromise = work;
   return _psPrinterPromise;
 }
 
 async function psFetchPrinters() {
+  if (filesLocked) return;
+  _psRecoveryStarted = true;
+  const epoch = filesPrivateEpoch, read = ++_psPrinterRead;
+  const current = () => !filesLocked && epoch === filesPrivateEpoch && read === _psPrinterRead;
   const sel = document.getElementById("ps-printer-select");
   if (!sel) return;
   sel.innerHTML = '<option value="">Loading…</option>';
   try {
     const r = await fetch("/printshop/printers");
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const data = await r.json();
-    const printers = data.printers || [];
+    const data = await r.json().catch(() => null);
+    if (psAccessFailure(r, data, epoch, 'ps-print-status') || !current()) return;
+    if (!r.ok) throw new Error(data?.detail || "HTTP " + r.status);
+    if (!Array.isArray(data?.printers)) throw new Error('The host returned an invalid printer list.');
+    const printers = data.printers;
 
     // Show platform badge
     const tag = document.getElementById("ps-platform-tag");
@@ -843,7 +943,10 @@ async function psFetchPrinters() {
     }
     sel.innerHTML = html;
   } catch (e) {
+    if (!current()) return;
     sel.innerHTML = '<option value="">Could not load printers</option>';
+    sel.value = ''; _psLoaded = false;
+    psSetStatus('ps-print-status', e.message + ' Refresh printers to retry.', 'error');
     console.error("[PS] printers:", e);
   }
 }
@@ -851,14 +954,20 @@ async function psFetchPrinters() {
 // ── Scanners ──────────────────────────────────────────────────────────────
 
 async function psLoadScanners() {
+  if (filesLocked) return;
+  _psRecoveryStarted = true;
+  const epoch = filesPrivateEpoch, read = ++_psScannerRead;
+  const current = () => !filesLocked && epoch === filesPrivateEpoch && read === _psScannerRead;
   const sel = document.getElementById("ps-scanner-select");
   if (!sel) return;
   sel.innerHTML = '<option value="">Loading…</option>';
   try {
     const r = await fetch("/printshop/scanners");
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const data = await r.json();
-    const scanners = data.scanners || [];
+    const data = await r.json().catch(() => null);
+    if (psAccessFailure(r, data, epoch, 'ps-scan-status') || !current()) return;
+    if (!r.ok) throw new Error(data?.detail || "HTTP " + r.status);
+    if (!Array.isArray(data?.scanners)) throw new Error('The host returned an invalid scanner list.');
+    const scanners = data.scanners;
     if (!scanners.length) {
       sel.innerHTML = '<option value="">No scanners found</option>';
       return;
@@ -867,7 +976,10 @@ async function psLoadScanners() {
       `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`
     ).join("");
   } catch (e) {
+    if (!current()) return;
     sel.innerHTML = '<option value="">Could not load scanners</option>';
+    sel.value = ''; _psLoaded = false;
+    psSetStatus('ps-scan-status', e.message + ' Refresh scanners to retry.', 'error');
     console.error("[PS] scanners:", e);
   }
 }
@@ -877,6 +989,7 @@ async function psLoadScanners() {
 let _psPrintFile = null;
 
 function psPickFile(input) {
+  if (filesLocked) return;
   const f = input.files[0];
   if (!f) return;
   _psPrintFile = f;
@@ -892,6 +1005,7 @@ function psPickFile(input) {
 
 function psDrop(event) {
   event.preventDefault();
+  if (filesLocked) return;
   document.getElementById("ps-dropzone")?.classList.remove("ps-dropzone-hover");
   const f = event.dataTransfer?.files?.[0];
   if (!f) return;
@@ -915,6 +1029,8 @@ function _psHumanSize(bytes) {
 // ── Print job ─────────────────────────────────────────────────────────────
 
 async function psSendPrint() {
+  if (filesLocked) return {ok:false};
+  _psRecoveryStarted = true;
   if (_psPrintBusy) return {ok: false, busy: true};
   const printer = document.getElementById("ps-printer-select")?.value;
   if (!printer) { psSetStatus("ps-print-status", "Select a printer first.", "warn"); return; }
@@ -947,11 +1063,12 @@ async function psSendPrint() {
     form.append("quality",     quality);
 
     const r = await fetch("/printshop/print", { method: "POST", body: form });
+    const data = await r.json().catch(() => null);
+    if (psAccessFailure(r, data, epoch, 'ps-print-status')) return {ok:false};
+    if (epoch !== filesPrivateEpoch || filesLocked) return {ok:false, hidden:true};
     if (!r.ok) {
-      const txt = await r.text().catch(() => "");
-      throw new Error(txt || "HTTP " + r.status);
+      throw new Error(data?.detail || "HTTP " + r.status);
     }
-    const data = await r.json();
     if (data?.status !== "sent" || data?.ok === false || typeof data.printer !== "string" || !data.printer ||
         !Number.isInteger(data.copies) || data.copies < 1) throw new Error("The host did not confirm print-job submission. Check the printer queue before retrying.");
     if (epoch !== filesPrivateEpoch) return {ok: true, hidden: true};
@@ -972,6 +1089,8 @@ async function psSendPrint() {
 // ── Test Print ───────────────────────────────────────────────────────────
 
 async function psTestPrint() {
+  if (filesLocked) return {ok:false};
+  _psRecoveryStarted = true;
   if (_psTestPrintBusy) return {ok: false, busy: true};
   _psTestPrintBusy = true;
   const epoch = filesPrivateEpoch;
@@ -984,13 +1103,14 @@ async function psTestPrint() {
       const result = await window.testPrint();
       if (epoch !== filesPrivateEpoch) return;
       if (result?.ok !== true) throw new Error(result?.message || "The host did not confirm test-page submission.");
-      psSetStatus("ps-print-status", "✓ TLI test page sent to default printer", "ok");
+      psSetStatus("ps-print-status", "Test page submitted to the host’s default printer. Check the printer for physical output.", "ok");
     } else {
       const r = await fetch("/api/printers/test_print", { method: "POST" });
       const j = await r.json().catch(() => ({}));
+      if (psAccessFailure(r, j, epoch, 'ps-print-status')) return {ok:false};
       if (epoch !== filesPrivateEpoch) return;
-      if (!r.ok || j.ok === false) throw new Error(j.message || j.detail || "HTTP " + r.status);
-      psSetStatus("ps-print-status", "✓ TLI test page sent to default printer", "ok");
+      if (!r.ok || j.ok !== true) throw new Error(j.message || j.detail || 'The host did not confirm test-page submission.');
+      psSetStatus("ps-print-status", "Test page submitted to the host’s default printer. Check the printer for physical output.", "ok");
     }
   } catch (e) {
     if (epoch === filesPrivateEpoch) psSetStatus("ps-print-status", "Test print failed: " + e.message, "error");
@@ -1002,9 +1122,16 @@ async function psTestPrint() {
 
 // ── Scan job ──────────────────────────────────────────────────────────────
 
-async function psDeleteScanToken(token) {
-  if (!/^[a-f0-9]{32}$/.test(token || "")) return false;
-  try { return (await fetch(`/printshop/scan/${token}`, {method: "DELETE"})).ok; } catch { return false; }
+async function psDeleteScanToken(token, epoch = filesPrivateEpoch) {
+  if (filesLocked || epoch !== filesPrivateEpoch || !/^[a-f0-9]{32}$/.test(token || "")) return false;
+  try {
+    const response = await fetch(`/printshop/scan/${token}`, {method: "DELETE"});
+    if (response.status === 401 || response.status === 403) {
+      psAccessFailure(response, await response.json().catch(() => null), epoch, 'ps-scan-status');
+      return false;
+    }
+    return response.ok;
+  } catch { return false; }
 }
 
 // Clearing a browser preview is separate from stopping a scanner on the host.
@@ -1020,6 +1147,8 @@ function psClearScanPreview() {
 }
 
 async function psTriggerScan() {
+  if (filesLocked) return {ok:false};
+  _psRecoveryStarted = true;
   if (_psScanBusy) return {ok: false, busy: true};
   const scannerId = document.getElementById("ps-scanner-select")?.value;
   if (!scannerId) { psSetStatus("ps-scan-status", "Select a scanner first.", "warn"); return {ok: false}; }
@@ -1028,7 +1157,7 @@ async function psTriggerScan() {
   const epoch = ++_psScanEpoch;
   const privateEpoch = filesPrivateEpoch;
   const previousToken = _psScanToken;
-  const current = () => epoch === _psScanEpoch && privateEpoch === filesPrivateEpoch;
+  const current = () => !filesLocked && epoch === _psScanEpoch && privateEpoch === filesPrivateEpoch;
   let candidateToken = null, candidateUrl = null, accepted = false;
   _psScanBusy = true;
   const btn = document.getElementById("ps-scan-btn");
@@ -1041,12 +1170,17 @@ async function psTriggerScan() {
     form.append("scanner_id", scannerId); form.append("resolution", String(resolution)); form.append("color_mode", colorMode);
     const response = await fetch("/printshop/scan", {method: "POST", body: form});
     const data = await response.json().catch(() => null);
+    if (psAccessFailure(response, data, privateEpoch, 'ps-scan-status')) return {ok:false};
     if (!response.ok || data?.ok === false) throw new Error(data?.detail || data?.message || `HTTP ${response.status}`);
     if (!/^[a-f0-9]{32}$/.test(data?.token || "") || data?.status !== "ok") throw new Error("The scanner returned an invalid result.");
     candidateToken = data.token;
     if (!current()) return {ok: false, discarded: true};
     const imageResponse = await fetch(`/printshop/scan/${candidateToken}`);
-    if (!imageResponse.ok) throw new Error("Could not retrieve the new scan.");
+    if (!imageResponse.ok) {
+      const error = await imageResponse.json().catch(() => null);
+      if (psAccessFailure(imageResponse, error, privateEpoch, 'ps-scan-status')) return {ok:false};
+      throw new Error(error?.detail || "Could not retrieve the new scan.");
+    }
     const blob = await imageResponse.blob();
     const signature = [...new Uint8Array(await blob.slice(0, 8).arrayBuffer())];
     if (blob.type !== "image/png" || signature.join(',') !== '137,80,78,71,13,10,26,10') throw new Error("The new scan was not a valid PNG image.");
@@ -1059,14 +1193,14 @@ async function psTriggerScan() {
     document.getElementById("ps-preview-wrap").hidden = false;
     if (oldUrl) URL.revokeObjectURL(oldUrl);
     psSetStatus("ps-scan-status", `Scan ready to download — ${resolution} DPI · ${colorMode}. Nothing has been saved to your folders.`, "ok");
-    if (previousToken && previousToken !== candidateToken) await psDeleteScanToken(previousToken);
+    if (previousToken && previousToken !== candidateToken) await psDeleteScanToken(previousToken, privateEpoch);
     return {ok: true};
   } catch (error) {
     if (current()) psSetStatus("ps-scan-status", "Scan failed: " + error.message + (_psScanBlob ? " Your previous scan is unchanged and can still be downloaded." : " Retry when ready."), "error");
     return {ok: false, error: error.message};
   } finally {
     // A rejected candidate belongs to this request; never delete the retained scan.
-    if (!accepted && candidateToken && candidateToken !== previousToken) await psDeleteScanToken(candidateToken);
+    if (!accepted && candidateToken && candidateToken !== previousToken) await psDeleteScanToken(candidateToken, privateEpoch);
     if (!accepted && candidateUrl) URL.revokeObjectURL(candidateUrl);
     _psScanBusy = false;
     controls.forEach(control => { control.disabled = false; });
@@ -1075,7 +1209,7 @@ async function psTriggerScan() {
 }
 
 function psDownloadScan() {
-  if (!_psScanBlob) return;
+  if (filesLocked || !_psScanBlob) return;
   const a = document.createElement("a");
   const url = URL.createObjectURL(_psScanBlob);
   a.href = url; a.download = `tli-scan-${Date.now()}.png`; a.click();
@@ -1083,6 +1217,7 @@ function psDownloadScan() {
 }
 
 async function psDiscardScan() {
+  if (filesLocked) return;
   const token = psClearScanPreview();
   psSetStatus("ps-scan-status", _psScanBusy ? "Preview discarded. The scanner may still be working on the host; its pending result will not replace this view." : "Scan preview discarded.", "");
   if (token) await psDeleteScanToken(token);

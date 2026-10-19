@@ -94,7 +94,7 @@ async function main() {
         if(requireComposer){
           if(!measured.field.fully_visible)report.errors.push(`${name}: field clipped or obscured`);
           if(!measured.send.fully_visible)report.errors.push(`${name}: Send clipped or obscured`);
-          const labels=measured.navigation.flatMap(tab=>tab.texts.filter(text=>/^(Chat|Today|Home)$/.test(text.text)));
+          const labels=measured.navigation.flatMap(tab=>tab.texts.filter(text=>/^(Chat|Library|More)$/.test(text.text)));
           if(labels.length!==3)report.errors.push(`${name}: missing navigation label`);
           for(const label of labels){
             if(!label.fully_visible||label.glyph_bounds.top<label.bounds.y-1||label.glyph_bounds.bottom>label.bounds.bottom+1)report.errors.push(`${name}: ${label.text} navigation glyph clipped`);
@@ -183,7 +183,7 @@ async function acceptance({open,capture,writes,check}) {
     await page.getByRole('button',{name:'History',exact:true}).click();
     await page.getByText('Your conversations',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Close chooser',exact:true}).click();
-    for(const tab of ['Today','Home','Chat']) await page.getByRole('tab',{name:new RegExp(`${tab}$`)}).click();
+    for(const tab of ['Library','More','Chat']) await page.getByRole('tab',{name:new RegExp(`${tab}$`)}).click();
     assert.equal(await input(page).inputValue(),'Unsent draft kept while I inspect context');
     assert.equal((await writes(page)).length,0);
     check(`${label}: status/history/tab navigation preserves draft and creates no mutation or inference`);
@@ -257,3 +257,4 @@ async function acceptance({open,capture,writes,check}) {
   }
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
+

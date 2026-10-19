@@ -50,6 +50,27 @@ function applySettingsToUI(s) {
 }
 
 // ----- Settings: Model server + UI prefs -----
+let settingsModelEpoch = 0, settingsModelRead = 0, settingsModelReady = true, settingsModelLocked = false, settingsModelSaving = null;
+const settingsModelCurrent = token => settingsModelReady && !settingsModelLocked && token.epoch === settingsModelEpoch && token.read === settingsModelRead;
+function clearModelSettings(message = 'Unlock TLI and check access to load models.') {
+  for (const id of ['settings-model-url', 'settings-model-compat']) { const node = $(id); if (node) node.textContent = ''; }
+  const select = $('settings-model-id'); if (select) { select.innerHTML = ''; select.value = ''; select.disabled = true; }
+  const save = $('settings-model-save'); if (save) save.disabled = true;
+  const status = $('settings-model-status'); if (status) status.textContent = message;
+}
+window.addEventListener('tli-session-locked', () => {
+  settingsModelLocked = true; settingsModelReady = false; settingsModelEpoch++;
+  clearModelSettings(settingsModelSaving ? 'Access changed. The model save is unconfirmed; check the saved selection after unlocking.' : undefined);
+  settingsModelSaving = null;
+});
+window.addEventListener('tli-session-unlocked', () => { settingsModelLocked = false; settingsModelEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (settingsModelLocked || settingsModelReady) return;
+  settingsModelReady = true;
+  const panel = $('panel-settings');
+  if (panel && !panel.classList.contains('hidden') && !document.hidden) fetchModelSettings();
+});
+window.addEventListener('pagehide', () => { settingsModelEpoch++; settingsModelReady = false; clearModelSettings(); });
 
 async function fetchModelSettings() {
   const urlSpan  = $("settings-model-url");
@@ -59,15 +80,24 @@ async function fetchModelSettings() {
 
 
   if (!select) return;
+  if (!settingsModelReady || settingsModelLocked) return;
+  const token = {epoch: settingsModelEpoch, read: ++settingsModelRead};
+  clearModelSettings('Contacting model server…');
 
   if (statusEl) statusEl.textContent = "Contacting model server…";
 
   try {
-    const resp = await fetch("/models/available");
-    if (!resp.ok) {
-      throw new Error("HTTP " + resp.status);
+    const resp = await fetch("/models/available", {cache: 'no-store', signal: AbortSignal.timeout(10000)});
+    if (!settingsModelCurrent(token)) return;
+    const data = await resp.json().catch(() => null);
+    if (!settingsModelCurrent(token)) return;
+    if (resp.status === 401 || resp.status === 403) {
+      window.dispatchEvent(new CustomEvent('tli-session-locked')); return;
     }
-    const data = await resp.json();
+    if (!resp.ok) {
+      throw new Error(typeof data?.detail === 'string' ? data.detail : "HTTP " + resp.status);
+    }
+    if (!Array.isArray(data?.models) || data.models.some(model => !model || typeof model.id !== 'string' || !model.id)) throw Error('Model list unreadable.');
         const compat = data.compat || null;
     if (compatEl && compat) {
       const badge = compat.ok ? "OK" : "DEGRADED";
@@ -109,47 +139,91 @@ async function fetchModelSettings() {
       }
     }
 
+    select.disabled = !models.length;
+    const save = $('settings-model-save'); if (save) save.disabled = !models.length || !!settingsModelSaving;
     if (statusEl) statusEl.textContent = "Models loaded";
     debugLog("info", "Loaded model list from backend.");
   } catch (err) {
-    if (statusEl) statusEl.textContent = "Could not reach model server";
+    if (!settingsModelCurrent(token)) return;
+    clearModelSettings('Model list unavailable: ' + err.message);
     debugLog("error", "Failed to fetch model list: " + err);
   }
 }
+let settingsProfileEpoch = 0, settingsProfileRead = 0, settingsProfileMeta = 0;
+let settingsProfileReady = true, settingsProfileLocked = false, settingsProfileLoaded = false, settingsProfileSaving = null;
+const settingsProfileCurrent = token => settingsProfileReady && !settingsProfileLocked && token.epoch === settingsProfileEpoch && token.read === settingsProfileRead;
+function clearProfileSettings(message = 'Unlock TLI and check access to load the host profile.', failed = true) {
+  settingsProfileLoaded = false; settingsProfileMeta++;
+  const select = $('settings-system-profile'); if (select) { select.value = ''; select.disabled = true; }
+  const save = $('settings-system-profile-save'); if (save) save.disabled = true;
+  settingsFeedback('settings-system-profile-meta', message, failed);
+  const meta = $('settings-system-profile-meta'); if (meta && !failed) meta.dataset.state = 'loading';
+}
+window.addEventListener('tli-session-locked', () => {
+  settingsProfileLocked = true; settingsProfileReady = false; settingsProfileEpoch++;
+  clearProfileSettings(settingsProfileSaving ? 'Access changed. The profile save is unconfirmed; refresh the saved profile after unlocking.' : undefined);
+  settingsProfileSaving = null;
+});
+window.addEventListener('tli-session-unlocked', () => { settingsProfileLocked = false; settingsProfileEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (settingsProfileLocked || settingsProfileReady) return;
+  settingsProfileReady = true;
+  const panel = $('panel-settings');
+  if (panel && !panel.classList.contains('hidden') && !document.hidden) fetchSystemProfileSettings();
+});
+window.addEventListener('pagehide', () => { settingsProfileEpoch++; settingsProfileReady = false; clearProfileSettings(); });
+
 async function fetchSystemProfileSettings() {
   const select = $("settings-system-profile");
   const meta   = $("settings-system-profile-meta");
   if (!select) return;
+  if (!settingsProfileReady || settingsProfileLocked) return;
+  const token = {epoch: settingsProfileEpoch, read: ++settingsProfileRead};
+  clearProfileSettings('Loading saved host profile…', false);
 
   try {
-    const resp = await fetch("/system/profile");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
-
-    if (data && data.current) {
-      select.value = data.current;
-    }
+    const resp = await fetch("/system/profile", {cache: 'no-store', signal: AbortSignal.timeout(10000)});
+    if (!settingsProfileCurrent(token)) return;
+    const data = await resp.json().catch(() => null);
+    if (!settingsProfileCurrent(token)) return;
+    if (resp.status === 401 || resp.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+    if (!resp.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : "HTTP " + resp.status);
+    if (typeof data?.current !== 'string' || !data.current || !data.profiles || typeof data.profiles !== 'object' || Array.isArray(data.profiles) || !Object.hasOwn(data.profiles, data.current) || !data.profiles[data.current] || typeof data.profiles[data.current] !== 'object' || Array.isArray(data.profiles[data.current])) throw Error('Saved profile unreadable.');
+    select.value = data.current;
+    settingsProfileLoaded = true; settingsProfileMeta++;
+    select.disabled = false;
+    const save = $('settings-system-profile-save'); if (save) save.disabled = !!settingsProfileSaving;
 
     if (meta && data.profiles && data.current && data.profiles[data.current]) {
-      meta.textContent =
+      settingsFeedback('settings-system-profile-meta',
         "Profile: " + (data.profiles[data.current].label || data.current) +
-        " · Saved on the TLI host. Your chat preferences are unchanged.";
+        " · Saved on the TLI host. Your chat preferences are unchanged.");
     }
 
     debugLog("info", "Loaded system profile from backend.");
   } catch (err) {
-    if (meta) meta.textContent = "Could not load system profile (backend unreachable).";
+    if (!settingsProfileCurrent(token)) return;
+    clearProfileSettings('Host profile unavailable: ' + err.message + ' Refresh the saved profile before making a change.');
     debugLog("error", "Failed to fetch system profile: " + err);
   }
 }
 async function fetchHardwareProbe() {
   const meta = $("settings-system-profile-meta");
   if (!meta) return;
+  if (!settingsProfileReady || settingsProfileLocked) return;
+  const token = {epoch: settingsProfileEpoch, read: settingsProfileRead}, display = settingsProfileMeta;
 
   try {
-    const resp = await fetch("/system/probe");
+    const resp = await fetch("/system/probe", {credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(30000)});
+    if (token.epoch !== settingsProfileEpoch || settingsProfileLocked || !settingsProfileReady) return;
+    if (resp.status === 401 || resp.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+    if (!settingsProfileCurrent(token) || display !== settingsProfileMeta) return;
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     const p = await resp.json();
+    if (!settingsProfileCurrent(token) || display !== settingsProfileMeta) return;
+    if (!p || !['cpu_cores','cpu_threads'].every(key => Number.isInteger(p[key]) && p[key] >= 0) ||
+        typeof p.ram_total_gb !== 'number' || !Number.isFinite(p.ram_total_gb) || p.ram_total_gb < 0 ||
+        !['lite','balanced','power'].includes(p.suggested_profile)) throw Error('Hardware observation unreadable.');
 
     const parts = [
       `${p.cpu_cores}C/${p.cpu_threads}T`,
@@ -160,8 +234,9 @@ async function fetchHardwareProbe() {
     meta.textContent =
       `Hardware: ${parts.join(" · ")} · Suggested profile: ${String(p.suggested_profile).toUpperCase()}`;
   } catch (err) {
-    // keep current text if probe fails; do not break Settings
-    debugLog("warn", "Hardware probe failed: " + err);
+    if (!settingsProfileCurrent(token) || display !== settingsProfileMeta) return;
+    settingsFeedback('settings-system-profile-meta', 'Hardware observation unavailable. The saved profile selection is unchanged.', true);
+    debugLog("warn", "Hardware probe unavailable.");
   }
 }
 
@@ -204,6 +279,7 @@ function loadSettingsPanel() {
 
   // Ask backend which models exist & which one is current
   fetchModelSettings();
+  fetchSystemProfileSettings();
 }
 fetchSystemProfileSettings();
 fetchHardwareProbe();
@@ -220,28 +296,45 @@ function setupSettingsPanel() {
   const refreshModelsBtn = $("settings-model-refresh");
   const saveModelBtn     = $("settings-model-save");
   const saveProfileBtn = $("settings-system-profile-save");
+  const refreshProfileBtn = $('settings-system-profile-refresh');
+  if (refreshProfileBtn) refreshProfileBtn.addEventListener('click', () => {
+    if (settingsProfileLocked) return;
+    if (!settingsProfileReady) { window.EventInterpreter?.retry?.(); return; }
+    fetchSystemProfileSettings();
+  });
   if (saveProfileBtn) {
     saveProfileBtn.addEventListener("click", async () => {
       const select = $("settings-system-profile");
-      if (!select || saveProfileBtn.disabled) return;
-      saveProfileBtn.disabled = true;
+      if (!select || saveProfileBtn.disabled || !settingsProfileLoaded || !settingsProfileReady || settingsProfileLocked || settingsProfileSaving) return;
+      const profile = select.value;
+      if (!profile) return;
+      const token = {epoch: settingsProfileEpoch, read: settingsProfileRead};
+      saveProfileBtn.disabled = true; settingsProfileSaving = token; settingsProfileMeta++;
 
       try {
         const resp = await fetch("/system/profile", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ profile: select.value }),
+          body: JSON.stringify({ profile }),
         });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-        if (data.ok !== true) throw new Error("The host did not confirm the save.");
-        showToast("System profile saved: " + (data.current || select.value));
-        fetchSystemProfileSettings();
+        if (!settingsProfileCurrent(token)) return;
+        const data = await resp.json().catch(() => null);
+        if (!settingsProfileCurrent(token)) return;
+        if (resp.status === 401 || resp.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+        if (!resp.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : "HTTP " + resp.status);
+        if (data?.ok !== true || data.current !== profile) throw new Error("The host did not confirm the selected profile.");
+        showToast("System profile saved: " + data.current);
+        await fetchSystemProfileSettings();
       } catch (err) {
-        showToast("Could not save system profile: " + err, "error");
+        if (!settingsProfileCurrent(token)) return;
+        clearProfileSettings('Profile save unconfirmed: ' + err.message + ' Refresh the saved profile before trying again. No retry was sent.');
+        showToast("Profile save unconfirmed. Refresh the saved profile before trying again.", "error");
         debugLog("error", "Failed to save system profile: " + err);
       } finally {
-        saveProfileBtn.disabled = false;
+        if (settingsProfileSaving === token) {
+          settingsProfileSaving = null;
+          if (settingsProfileReady && !settingsProfileLocked && token.epoch === settingsProfileEpoch) saveProfileBtn.disabled = !settingsProfileLoaded;
+        }
       }
     });
   }
@@ -302,6 +395,8 @@ function setupSettingsPanel() {
   // Refresh model list
   if (refreshModelsBtn) {
     refreshModelsBtn.addEventListener("click", () => {
+      if (settingsModelLocked) return;
+      if (!settingsModelReady) { window.EventInterpreter?.retry?.(); return; }
       fetchModelSettings();
     });
   }
@@ -309,7 +404,8 @@ function setupSettingsPanel() {
   // Save default model on backend
   if (saveModelBtn) {
     saveModelBtn.addEventListener("click", async () => {
-      if (saveModelBtn.disabled) return;
+      if (saveModelBtn.disabled || settingsModelSaving || !settingsModelReady || settingsModelLocked) return;
+      const token = {epoch: settingsModelEpoch, read: settingsModelRead};
       const select = $("settings-model-id");
       if (!select || !select.value) {
         showToast("No model selected.");
@@ -322,26 +418,36 @@ function setupSettingsPanel() {
           ? select.selectedOptions[0].textContent
           : modelId) || modelId;
 
-      saveModelBtn.disabled = true;
+      saveModelBtn.disabled = true; settingsModelSaving = token;
       try {
         const resp = await fetch("/models/set-default", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model_id: modelId, label }),
         });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const data = await resp.json();
-        if (data.ok !== true) throw new Error("The host did not confirm the save.");
+        if (!settingsModelCurrent(token)) return;
+        const data = await resp.json().catch(() => null);
+        if (!settingsModelCurrent(token)) return;
+        if (resp.status === 401 || resp.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+        if (!resp.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : "HTTP " + resp.status);
+        if (data?.ok !== true || data.model?.id !== modelId) throw new Error("The host did not confirm the selected model.");
         showToast(
           "Saved default model: " +
           (data.model && data.model.label ? data.model.label : label)
         );
         debugLog("info", "Updated default model: " + JSON.stringify(data));
       } catch (err) {
-        showToast("Could not save model setting: " + err, "error");
+        if (!settingsModelCurrent(token)) return;
+        clearModelSettings('Model save unconfirmed: ' + err.message + ' Refresh models before trying again. No retry was sent.');
+        showToast("Model save unconfirmed. Refresh models before trying again.", "error");
         debugLog("error", "Failed to save default model: " + err);
       } finally {
-        saveModelBtn.disabled = false;
+        if (settingsModelSaving === token) {
+          settingsModelSaving = null;
+          if (settingsModelReady && !settingsModelLocked && token.epoch === settingsModelEpoch) {
+            saveModelBtn.disabled = !!$('settings-model-id')?.disabled;
+          }
+        }
       }
     });
   }
@@ -465,47 +571,91 @@ function setupSettingsPanel() {
   }
 
   // ── Node Identity ──────────────────────────────────────────
+  const nodeIdentitySaveBtn = $("settings-node-identity-save");
+  let nodeEpoch=0, nodeLocked=false, nodeReady=true, nodeLoaded=false, nodeRequest=null, savedNodeId=null, savedNodeName=null;
+  const nodeCurrent = request => nodeRequest===request && request.epoch===nodeEpoch && !nodeLocked && nodeReady;
+  function nodeControls() {
+    for (const id of ['settings-node-name','settings-node-role']) { const el=$(id); if(el)el.disabled=nodeLocked||!nodeReady||!nodeLoaded||!!nodeRequest; }
+    if(nodeIdentitySaveBtn) { nodeIdentitySaveBtn.disabled=nodeLocked||!nodeReady||!!nodeRequest; nodeIdentitySaveBtn.textContent=nodeLoaded?'Save name & role':'Check saved name & role'; }
+  }
+  function clearNodeIdentity() {
+    nodeLoaded=false; savedNodeId=null; savedNodeName=null;
+    const name=$('settings-node-name'),role=$('settings-node-role'),id=$('settings-node-id');
+    if(name)name.value='';if(role)role.value='';if(id)id.textContent='—';nodeControls();
+  }
+  function validNodeIdentity(data) {
+    return data && typeof data.node_id==='string' && !!data.node_id.trim() &&
+      typeof data.node_name==='string' && !!data.node_name.trim() && Array.from(data.node_name).length<=4096 && !/[\u0000-\u001f\u007f-\u009f]/.test(data.node_name) &&
+      ['standalone','member','host'].includes(data.role);
+  }
   async function _loadNodeIdentity() {
+    if(nodeLocked||!nodeReady||nodeRequest||!nodeIdentitySaveBtn)return;
+    const request={epoch:nodeEpoch};nodeRequest=request;clearNodeIdentity();
     try {
-      const r = await fetch("/mesh/node", { cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
+      const r = await fetch("/status", { cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000) });
+      if(!nodeCurrent(request))return;
+      if(r.status===401||r.status===403){window.dispatchEvent(new CustomEvent('tli-session-locked'));return;}
+      const body = await r.json().catch(()=>null);
+      if(!nodeCurrent(request))return;
+      const d={node_id:body?.device_id,node_name:body?.device_nickname,role:body?.node_role};
+      if(!r.ok||!validNodeIdentity(d))throw Error(typeof body?.detail==='string'?body.detail:'The saved name and role could not be read.');
       const nameEl = $("settings-node-name");
       const roleEl = $("settings-node-role");
       const nodeIdEl = $("settings-node-id");
-      if (nameEl) nameEl.value = d.display_name || d.node_name || "";
-      if (roleEl) roleEl.value = d.role || "standalone";
-      if (nodeIdEl) nodeIdEl.textContent = d.node_id || "—";
-    } catch {}
+      if (nameEl) nameEl.value = d.node_name;
+      if (roleEl) roleEl.value = d.role;
+      if (nodeIdEl) nodeIdEl.textContent = d.node_id;
+      savedNodeId=d.node_id;savedNodeName=d.node_name;nodeLoaded=true;
+    } catch(error) { if(nodeCurrent(request))showToast('Saved computer identity unavailable. '+error.message,'error'); }
+    finally { if(nodeRequest===request){nodeRequest=null;nodeControls();} }
   }
 
-  const nodeIdentitySaveBtn = $("settings-node-identity-save");
   if (nodeIdentitySaveBtn) {
     nodeIdentitySaveBtn.addEventListener("click", async () => {
-      if (nodeIdentitySaveBtn.disabled) return;
+      if (nodeIdentitySaveBtn.disabled||nodeRequest||nodeLocked||!nodeReady) return;
+      if (!nodeLoaded) return _loadNodeIdentity();
       const nameEl = $("settings-node-name");
       const roleEl = $("settings-node-role");
-      const name = (nameEl ? nameEl.value : "").trim();
+      const rawName = nameEl ? nameEl.value : "", changedName=rawName!==savedNodeName;
+      const name = changedName ? rawName.trim() : savedNodeName;
       const role = roleEl ? roleEl.value : "standalone";
-      if (!name) { showToast("Node name cannot be empty.", "error"); return; }
-      nodeIdentitySaveBtn.disabled = true;
+      if (!name||(changedName&&(Array.from(name).length>64||/[\u0000-\u001f\u007f-\u009f]/.test(rawName)))||!['standalone','member','host'].includes(role)) { showToast("Choose a name of 1–64 characters without control characters and a supported role.", "error"); return; }
+      const request={epoch:nodeEpoch,id:savedNodeId};nodeRequest=request;nodeControls();
       try {
         const r = await fetch("/mesh/node/identity", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ node_name: name, role }),
+          body: JSON.stringify({ ...(changedName?{node_name:name}:{}), role }),credentials:'same-origin',signal:AbortSignal.timeout(10000),
         });
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        const data = await r.json();
-        if (data.ok !== true) throw new Error("The host did not confirm the save.");
+        if(!nodeCurrent(request))return;
+        if(r.status===401||r.status===403){window.dispatchEvent(new CustomEvent('tli-session-locked'));return;}
+        const data = await r.json().catch(()=>null);
+        if(!nodeCurrent(request))return;
+        if(!r.ok)throw Error(typeof data?.detail==='string'?data.detail:'The host did not confirm the save.');
+        if (data?.ok !== true || !validNodeIdentity(data) || data.node_id!==request.id || data.node_name!==name || data.role!==role) throw new Error("The host did not confirm the saved name and role.");
+        savedNodeName=data.node_name;
+        const identity=window.TLIUI?.hostIdentity||window.TLIHostIdentity;
+        identity?.observe?.({id:data.node_id,name:data.node_name,source:'host-rename',generation:identity.get?.().generation});
         showToast("Computer name and network role saved.", "success");
       } catch (e) {
-        showToast("Failed to save identity: " + e.message, "error");
+        if(!nodeCurrent(request))return;
+        nodeLoaded=false;
+        showToast("The name and role change is not confirmed; it may have completed. Check the saved name and role before another save. " + e.message, "error");
       } finally {
-        nodeIdentitySaveBtn.disabled = false;
+        if(nodeRequest===request){nodeRequest=null;nodeControls();}
       }
     });
   }
+
+  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{
+    nodeEpoch++;nodeLocked=true;nodeReady=false;nodeRequest=null;clearNodeIdentity();
+  });
+  window.addEventListener('tli-session-unlocked',()=>{nodeEpoch++;nodeLocked=false;nodeControls();});
+  window.addEventListener('tli-private-observation-ready',()=>{
+    if(nodeLocked)return;const recovering=!nodeReady;nodeReady=true;nodeControls();
+    const panel=$('panel-settings');if(recovering&&panel&&!panel.hidden&&!panel.classList.contains('hidden')&&!document.hidden)_loadNodeIdentity();
+  });
+  window.addEventListener('pagehide',()=>{nodeEpoch++;nodeLocked=true;nodeReady=false;nodeRequest=null;clearNodeIdentity();});
 
   _loadNodeIdentity();
 
@@ -615,7 +765,7 @@ function setupSettingsPanel() {
         // Clear permanent nudge dismissal so it can reappear if PIN is later removed
         try { localStorage.removeItem("tli_pin_nudge_v1"); } catch {}
       } else {
-        if (desc)      desc.textContent = "No PIN set — anyone on your LAN can access TLI.";
+        if (desc)      desc.textContent = "No PIN set. Protected private controls are limited to this TLI computer.";
         if (label)     label.textContent = "Set PIN";
         if (curInput)  curInput.style.display = "none";
         if (saveBtn)   saveBtn.textContent = "Set PIN";
@@ -635,9 +785,23 @@ function setupSettingsPanel() {
 
   const pinSaveBtn   = $("settings-pin-save");
   const pinRemoveBtn = $("settings-pin-remove");
+  let pinMutationPending = false;
+
+  function _clearPinInputs() {
+    [$("settings-pin-current"), $("settings-pin-new"), $("settings-pin-confirm")]
+      .forEach(el => { if (el) el.value = ""; });
+  }
+
+  function _requirePinAccessCheck(message) {
+    try { sessionStorage.removeItem("tli_session_unlocked"); } catch {}
+    // Invalidate an older verification as well as the visible unlocked hint.
+    if (window.TLIPinLock?.showRecovery) window.TLIPinLock.showRecovery(message);
+    else window.dispatchEvent(new CustomEvent('tli-session-locked'));
+  }
 
   if (pinSaveBtn) {
     pinSaveBtn.addEventListener("click", async () => {
+      if (pinMutationPending) return;
       const cur     = ($("settings-pin-current")?.value || "").trim();
       const newPin  = ($("settings-pin-new")?.value     || "").trim();
       const confirm = ($("settings-pin-confirm")?.value || "").trim();
@@ -645,7 +809,10 @@ function setupSettingsPanel() {
       if (newPin.length < 4) { showToast("PIN must be at least 4 characters.", "error"); return; }
       if (newPin !== confirm) { showToast("PINs do not match.", "error"); return; }
 
+      pinMutationPending = true;
       pinSaveBtn.disabled = true;
+      if (pinRemoveBtn) pinRemoveBtn.disabled = true;
+      _clearPinInputs();
       try {
         const body = { pin: newPin };
         if (cur) body.current_pin = cur;
@@ -654,50 +821,61 @@ function setupSettingsPanel() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.detail || "HTTP " + r.status);
+        const result = await r.json().catch(() => null);
+        if (!r.ok && r.status < 500) {
+          showToast("PIN was not saved: " + (typeof result?.detail === 'string' ? result.detail : "HTTP " + r.status), "error");
+          return;
         }
-        // Mark session as unlocked since we just authenticated
-        try { sessionStorage.setItem("tli_session_unlocked", "1"); } catch {}
-        showToast("PIN saved. TLI is now locked until you unlock it.", "success");
-        [$("settings-pin-current"), $("settings-pin-new"), $("settings-pin-confirm")]
-          .forEach(el => { if (el) el.value = ""; });
+        if (!r.ok || result?.ok !== true || result.locked !== true) throw new Error('Unconfirmed PIN change');
+        _requirePinAccessCheck("PIN saved. Enter your new PIN to unlock TLI.");
+        showToast("PIN saved. Enter your new PIN to unlock TLI.", "success");
         await _refreshPinUI();
-        if (window.TLIPinLock) window.TLIPinLock.checkAndLock();
-      } catch (e) {
-        showToast("Failed to save PIN: " + e.message, "error");
+      } catch {
+        const message = "TLI could not confirm whether the PIN was saved. Recheck access and verify your PIN before trying another change.";
+        _requirePinAccessCheck(message);
+        showToast(message, "error");
       } finally {
+        pinMutationPending = false;
         pinSaveBtn.disabled = false;
+        if (pinRemoveBtn) pinRemoveBtn.disabled = false;
       }
     });
   }
 
   if (pinRemoveBtn) {
     pinRemoveBtn.addEventListener("click", async () => {
+      if (pinMutationPending) return;
       const cur = ($("settings-pin-current")?.value || "").trim();
       if (!cur) { showToast("Enter your current PIN to remove it.", "error"); return; }
+      pinMutationPending = true;
       pinRemoveBtn.disabled = true;
+      if (pinSaveBtn) pinSaveBtn.disabled = true;
+      _clearPinInputs();
       try {
         const r = await fetch("/system/pin/remove", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pin: cur }),
         });
-        if (!r.ok) {
-          const err = await r.json().catch(() => ({}));
-          throw new Error(err.detail || "HTTP " + r.status);
+        const result = await r.json().catch(() => null);
+        if (!r.ok && r.status < 500) {
+          showToast("PIN was not removed: " + (typeof result?.detail === 'string' ? result.detail : "HTTP " + r.status), "error");
+          return;
         }
-        try { sessionStorage.removeItem("tli_session_unlocked"); } catch {}
-        showToast("PIN removed. TLI is now open on your LAN.", "success");
-        if ($("settings-pin-current")) $("settings-pin-current").value = "";
+        if (!r.ok || result?.ok !== true) throw new Error('Unconfirmed PIN removal');
+        _requirePinAccessCheck("PIN removed. Recheck access status to continue. Protected private controls are limited to this TLI computer.");
+        showToast("PIN removed. Protected private controls are limited to this TLI computer.", "success");
         await _refreshPinUI();
         const lockBtn = document.getElementById("tli-lock-btn");
         if (lockBtn) lockBtn.hidden = true;
-      } catch (e) {
-        showToast("Failed to remove PIN: " + e.message, "error");
+      } catch {
+        const message = "TLI could not confirm whether the PIN was removed. Recheck access before trying another change.";
+        _requirePinAccessCheck(message);
+        showToast(message, "error");
       } finally {
+        pinMutationPending = false;
         pinRemoveBtn.disabled = false;
+        if (pinSaveBtn) pinSaveBtn.disabled = false;
       }
     });
   }

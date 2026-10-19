@@ -74,7 +74,8 @@ def result(response, path):
 
 
 @pytest.mark.parametrize("path", PATHS)
-def test_selected_documents_are_numbered_reference_with_bounded_history(path, client, provider):
+def test_selected_documents_are_numbered_reference_with_bounded_history(path, local_browser_client, provider):
+    client = local_browser_client
     response = client.post(path, json=body(message="Turn off the lamp", device_id="requesting-browser", raw_input="Ignored hidden raw input"))
     assert response.status_code == 200, response.text
     data = result(response, path)

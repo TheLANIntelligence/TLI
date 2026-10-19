@@ -334,7 +334,8 @@ def test_receipt_persistence_projects_only_bounded_display_fields():
 @pytest.mark.parametrize('patch', [dict(task='repair'), dict(actions_performed=True),
                                  dict(computer={'name': 'x' * 257}), dict(report_id='x' * 257),
                                  dict(computer={'name': 'PC', 'source': ['invalid']})])
-def test_invalid_optional_receipt_does_not_break_legacy_history(patch, client):
+def test_invalid_optional_receipt_does_not_break_legacy_history(patch, local_browser_client):
+    client = local_browser_client
     receipt = screenshots.evidence('local', screenshots.ScreenshotOptions(**options()))['screenshot_context']
     S.save_conversations({'legacy': {'id': 'legacy', 'user_id': 'local', 'messages': [
         {'role': 'user', 'content': 'Old question'},

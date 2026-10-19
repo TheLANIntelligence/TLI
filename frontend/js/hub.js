@@ -28,9 +28,43 @@ function setupHubPanel() {
   let _installed  = new Set();
   let _searchQ    = "";
   let _sourceIsSample = true, _settingsBusy = false;
+  let _locked = false, _epoch = 0, _registryEpoch = 0, _sourceEpoch = 0, _source = null;
+  let _savedScripts = new Map(), _installedReadEpoch = 0, _installedReadReady = false;
+  const scriptUnavailable = 'Host script execution is unavailable pending reviewed containment. Installing stores source for review; it does not execute it.';
+  const sourceStatus = document.createElement('p'); sourceStatus.id = 'hub-source-status'; sourceStatus.setAttribute('role', 'status');
+  const sourceCopy = document.createElement('button'); sourceCopy.id = 'hub-copy-source'; sourceCopy.type = 'button'; sourceCopy.className = 'pill-btn ghost'; sourceCopy.textContent = 'Copy source'; sourceCopy.disabled = true;
+  runOutput?.after(sourceStatus, sourceCopy);
+  function clearSource() { _sourceEpoch++; _source = null; sourceCopy.disabled = true; sourceStatus.textContent = ''; if (runOutput) runOutput.textContent = ''; if (runTitle) runTitle.textContent = 'Stored script source'; if (runDrawer) runDrawer.hidden = true; }
+  sourceCopy.addEventListener('click', async () => {
+    if (_locked || sourceCopy.disabled || _source === null) return;
+    const epoch = _epoch, request = _sourceEpoch;
+    sourceCopy.disabled = true;
+    try {
+      await navigator.clipboard.writeText(_source);
+      if (epoch === _epoch && request === _sourceEpoch) sourceStatus.textContent = 'Source copied. Nothing was executed.';
+    } catch (_) {
+      if (epoch === _epoch && request === _sourceEpoch) sourceStatus.textContent = 'Could not copy. Select the source text and copy it manually.';
+    } finally { if (epoch === _epoch && request === _sourceEpoch) sourceCopy.disabled = _locked || _source === null; }
+  });
+  window.addEventListener?.('tli-session-locked', () => {
+    _epoch++; _registryEpoch++; _installedReadEpoch++; _installedReadReady = false; _locked = true; _packages = []; _installed.clear(); _savedScripts.clear(); clearSource(); grid.replaceChildren();
+    if (urlInput) urlInput.value = '';
+    ['pub-code', 'pub-app-html', 'pub-system-prompt', 'pub-automation-json'].forEach(id => { const input = document.getElementById(id); if (input) input.value = ''; });
+    document.getElementById('pub-list')?.replaceChildren();
+    if (document.getElementById('pub-status')) document.getElementById('pub-status').textContent = 'Unlock TLI before publishing.';
+    if (urlSave) urlSave.textContent = 'Save';
+    if (toggle) toggle.disabled = true; if (urlSave) urlSave.disabled = true;
+    _showStatus('Unlock TLI to load packages and stored source.');
+  });
+  window.addEventListener?.('tli-session-unlocked', () => { _locked = false; if (toggle) toggle.disabled = _settingsBusy; if (urlSave) urlSave.disabled = _settingsBusy; });
+  window.addEventListener?.('tli-private-observation-ready', () => { if (!_locked) _loadRegistry(); });
   const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  async function responseJSON(response) {
+  async function responseJSON(response, epoch = _epoch) {
     const data = await response.json().catch(() => null);
+    if (epoch === _epoch && (response.status === 401 || response.status === 403)) {
+      window.dispatchEvent?.(new CustomEvent('tli-session-locked'));
+      window.TLIPinLock?.checkAndLock();
+    }
     if (!response.ok || data?.ok === false) throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
     if (!data || typeof data !== 'object') throw new Error('TLI returned an incomplete response.');
     return data;
@@ -45,7 +79,9 @@ function setupHubPanel() {
   };
 
   // ── Load initial status ────────────────────────────────────────
-  fetch("/hub/status").then(r => r.json()).then(d => {
+  const initialEpoch = _epoch;
+  fetch("/hub/status").then(r => responseJSON(r, initialEpoch)).then(d => {
+    if (initialEpoch !== _epoch || _locked) return;
     if (toggle)   toggle.checked    = d.enabled || false;
     if (urlInput) urlInput.value    = d.hub_url || "";
   }).catch(() => {});
@@ -59,7 +95,8 @@ function setupHubPanel() {
 
   if (urlSave && urlInput) {
     urlSave.addEventListener("click", async () => {
-      if (_settingsBusy) return;
+      if (_settingsBusy || _locked) return;
+      const epoch = _epoch;
       _settingsBusy = true; urlSave.disabled = true;
       urlSave.textContent = "Saving…";
       try {
@@ -67,18 +104,20 @@ function setupHubPanel() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ hub_url: urlInput.value.trim() }),
-        }));
+        }), epoch);
+        if (epoch !== _epoch) return;
         if (result.ok !== true) throw new Error('The host did not confirm the URL save.');
         urlSave.textContent = "Saved ✓";
         setTimeout(() => { urlSave.textContent = "Save"; }, 2000);
-      } catch (error) { urlSave.textContent = 'Save'; _showStatus('URL save failed: ' + error.message + ' Your draft is unchanged.'); }
-      finally { _settingsBusy = false; urlSave.disabled = false; }
+      } catch (error) { if (epoch === _epoch) { urlSave.textContent = 'Save'; _showStatus('URL save failed: ' + error.message + ' Your draft is unchanged.'); } }
+      finally { _settingsBusy = false; urlSave.disabled = _locked; }
     });
   }
 
   if (toggle) {
     toggle.addEventListener("change", async () => {
-      if (_settingsBusy) { toggle.checked = !toggle.checked; return; }
+      if (_settingsBusy || _locked) { toggle.checked = !toggle.checked; return; }
+      const epoch = _epoch;
       const enabled = toggle.checked;
       _settingsBusy = true; toggle.disabled = true;
       try {
@@ -86,12 +125,13 @@ function setupHubPanel() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled }),
-        }));
+        }), epoch);
+        if (epoch !== _epoch) return;
         if (result.ok !== true) throw new Error('The host did not confirm the connection setting.');
         if (enabled) _loadRegistry(false);
         else { _showStatus('Hub disconnected.'); _loadRegistry(true); }
-      } catch (error) { toggle.checked = !enabled; _showStatus('Connection change failed: ' + error.message); }
-      finally { _settingsBusy = false; toggle.disabled = false; }
+      } catch (error) { if (epoch === _epoch) { toggle.checked = !enabled; _showStatus('Connection change failed: ' + error.message); } }
+      finally { _settingsBusy = false; toggle.disabled = _locked; }
     });
   }
 
@@ -109,7 +149,7 @@ function setupHubPanel() {
 
   // ── Script output drawer close ────────────────────────────────
   if (runClose) {
-    runClose.addEventListener("click", () => { runDrawer.hidden = true; });
+    runClose.addEventListener("click", clearSource);
   }
 
   // ── Tabs ───────────────────────────────────────────────────────
@@ -124,10 +164,12 @@ function setupHubPanel() {
         grid.hidden         = isPublish;
         publishForm.hidden  = !isPublish;
         searchRow.hidden    = isPublish;
-        if (runDrawer) runDrawer.hidden = true;
+        clearSource();
 
         if (isPublish) {
           _loadPublishPanel();
+        } else if (_activeType === 'installed') {
+          _loadInstalledScripts();
         } else {
           _render();
         }
@@ -142,12 +184,16 @@ function setupHubPanel() {
 
   // ── Registry loader ────────────────────────────────────────────
   async function _loadRegistry(forceSample = false) {
+    if (_locked) return;
+    const epoch = _epoch, request = ++_registryEpoch;
     _showStatus("Loading…");
     try {
-      const hubStatus = await responseJSON(await fetch('/hub/status'));
+      const hubStatus = await responseJSON(await fetch('/hub/status'), epoch);
+      if (epoch !== _epoch || request !== _registryEpoch) return;
       const useSample = forceSample || !hubStatus.enabled;
       const url = useSample ? "/hub/sample" : "/hub/registry";
-      const data = await responseJSON(await fetch(url));
+      const data = await responseJSON(await fetch(url), epoch);
+      if (epoch !== _epoch || request !== _registryEpoch) return;
       if (!Array.isArray(data.packages)) throw new Error('The registry did not return a package list.');
       _sourceIsSample = useSample;
 
@@ -156,9 +202,32 @@ function setupHubPanel() {
 
       const src = data.source === "sample" ? "Sample packages" : "TLI Hub";
       _showStatus(`${_packages.length} packages · ${src}`, true);
-      _render();
+      if (_activeType === 'installed') _loadInstalledScripts();
+      else _render();
     } catch (e) {
+      if (epoch !== _epoch || request !== _registryEpoch) return;
       _showStatus('Registry unavailable: ' + (e.message || 'network error') + (_packages.length ? ' Previous package cards may be out of date.' : ''));
+    }
+  }
+
+  async function _loadInstalledScripts() {
+    if (_locked || _activeType !== 'installed') return;
+    const epoch = _epoch, request = ++_installedReadEpoch;
+    _installedReadReady = false; grid.replaceChildren(); _showStatus('Loading installed packages…');
+    try {
+      const data = await responseJSON(await fetch('/hub/installed', {cache: 'no-store', signal: AbortSignal.timeout(10000)}), epoch);
+      if (epoch !== _epoch || request !== _installedReadEpoch || _activeType !== 'installed') return;
+      if (!Array.isArray(data.installed) || data.installed.some(row => !row || typeof row.id !== 'string' || typeof row.type !== 'string')) throw new Error('TLI did not return the installed package list.');
+      _installed = new Set(data.installed.map(row => row.id));
+      _savedScripts = new Map(data.installed.filter(row => row.type === 'script').map(row => [row.id, {
+        id:row.id, name:typeof row.name === 'string' ? row.name : row.id, type:'script',
+        version:row.version, author:row.author, description:'Saved script metadata on this host. View the stored source to inspect its contents.',
+      }]));
+      _installedReadReady = true;
+      _showStatus(`${_installed.size} installed packages · saved host metadata`, true);
+      _render();
+    } catch (error) {
+      if (epoch === _epoch && request === _installedReadEpoch && _activeType === 'installed') _showStatus('Installed packages unavailable: ' + error.message);
     }
   }
 
@@ -171,11 +240,14 @@ function setupHubPanel() {
 
   // ── Render ─────────────────────────────────────────────────────
   function _render() {
-    if (!grid) return;
+    if (!grid || _locked) return;
     let filtered = _packages;
 
     if (_activeType === "installed") {
-      filtered = filtered.filter(p => _installed.has(p.id));
+      if (!_installedReadReady) return;
+      const rows = new Map(filtered.filter(p => _installed.has(p.id)).map(p => [p.id, p]));
+      _savedScripts.forEach((saved, id) => { if (_installed.has(id) && rows.get(id)?.type !== 'script') rows.set(id, saved); });
+      filtered = Array.from(rows.values());
     } else if (_activeType !== "all") {
       filtered = filtered.filter(p => p.type === _activeType);
     }
@@ -213,6 +285,7 @@ function setupHubPanel() {
     const typeLabel  = TYPE_LABELS[pkg.type] || pkg.type;
     const tags       = (Array.isArray(pkg.tags) ? pkg.tags : []).map(t => `<span class="hub-pkg-tag">${esc(t)}</span>`).join("");
     const isInstalled = _installed.has(pkg.id);
+    const savedOnly = _savedScripts.has(pkg.id) && !_packages.some(row => row.id === pkg.id && row.type === 'script');
 
     // Theme swatch
     let swatchHtml = "";
@@ -232,7 +305,7 @@ function setupHubPanel() {
     if (isInstalled) {
       if (pkg.type === "script") {
         actionsHtml = `
-          <button class="hub-action-btn hub-run-btn" data-pkg-id="${esc(pkg.id)}" data-pkg-name="${esc(pkg.name)}">Run script on host</button>
+          <button class="hub-action-btn hub-source-btn" data-pkg-id="${esc(pkg.id)}">View stored source</button>
           <button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       } else if (pkg.type === "ai_preset") {
         actionsHtml = `
@@ -249,7 +322,7 @@ function setupHubPanel() {
       } else {
         actionsHtml = `<button class="hub-action-btn hub-uninstall-btn danger" data-pkg-id="${esc(pkg.id)}">Uninstall</button>`;
       }
-    } else {
+    } else if (!savedOnly) {
       actionsHtml = `<button class="hub-install-btn" data-pkg-id="${esc(pkg.id)}">Install</button>`;
     }
 
@@ -257,14 +330,14 @@ function setupHubPanel() {
       <div class="hub-pkg-top">
         <div>
           <div class="hub-pkg-name">${esc(pkg.name)}</div>
-          <div class="hub-pkg-author">by ${esc(pkg.author || "Unknown")} · v${esc(pkg.version || "1.0")}</div>
+          <div class="hub-pkg-author">by ${esc(pkg.author || "Unknown")} · v${esc(pkg.version || (savedOnly ? "unknown" : "1.0"))}</div>
         </div>
         <span class="hub-pkg-type-badge type-${esc(pkg.type)}">${esc(typeLabel)}</span>
       </div>
       ${swatchHtml}
-      <p class="small-meta">Source: ${esc(_sourceIsSample ? 'Bundled sample catalogue' : 'Configured host registry')} · ${isInstalled ? 'Installed on this host' : 'Not installed'}. Listing does not mean reviewed or verified.</p>
+      <p class="small-meta">Source: ${esc(savedOnly ? 'Saved installed metadata; no matching script in this catalogue' : _sourceIsSample ? 'Bundled sample catalogue' : 'Configured host registry')} · ${isInstalled ? 'Installed on this host' : 'Not installed'}. Listing does not mean reviewed or verified.</p>
       <div class="hub-pkg-desc">${esc(pkg.description || "")}</div>
-      <p class="small-meta">${esc(({script: 'Installing stores the script. Run script on host executes its code.', theme: 'Install stores the package. Apply for this session changes this browser’s appearance.', ai_preset: 'Installing stores the preset. Use prompt preset changes the configured AI prompt.', app: 'Installing adds the app package to this host. Open loads its interface.'})[pkg.type] || 'Inspect this package before installing it on the TLI host.')}</p>
+      <p class="small-meta">${esc(({script: scriptUnavailable, theme: 'Install stores the package. Apply for this session changes this browser’s appearance.', ai_preset: 'Installing stores the preset. Use prompt preset changes the configured AI prompt.', app: 'Installing adds the app package to this host. Open loads its interface.'})[pkg.type] || 'Inspect this package before installing it on the TLI host.')}</p>
       ${tags ? `<div class="hub-pkg-tags">${tags}</div>` : ""}
       <div class="hub-pkg-footer">
         <div class="hub-card-actions">${actionsHtml}</div>
@@ -275,7 +348,8 @@ function setupHubPanel() {
     const installBtn = card.querySelector(".hub-install-btn");
     if (installBtn) {
       installBtn.addEventListener("click", async () => {
-        if (installBtn.disabled) return;
+        if (installBtn.disabled || _locked) return;
+        const epoch = _epoch;
         installBtn.textContent = "Installing…";
         installBtn.disabled = true;
         try {
@@ -284,20 +358,21 @@ function setupHubPanel() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ package_id: pkg.id, use_sample: _sourceIsSample }),
           });
-          if (!r.ok) {
-            const d = await r.json().catch(() => ({}));
-            throw new Error(d.detail || "Install failed");
-          }
-          const data = await r.json();
+          const data = await responseJSON(r, epoch);
+          if (epoch !== _epoch) return;
           if (data.ok !== true) throw new Error('The host did not confirm installation.');
           _installed.add(pkg.id);
           if (typeof showToast === "function") showToast(`${pkg.name} installed`, "success");
-          if (pkg.type === "app" && window.TLIApps) window.TLIApps.reload();
+          if (pkg.type === "app") window.TLIApps?.reload({afterMutation: true});
           _render();
         } catch (err) {
+          if (epoch !== _epoch) return;
           installBtn.textContent = "Install";
           installBtn.disabled = false;
           if (typeof showToast === "function") showToast(err.message, "error");
+          // A partial app change may have blocked its saved files. Recheck only
+          // metadata so the app controller can close an unavailable frame.
+          if (pkg.type === "app") window.TLIApps?.reload({afterMutation: true});
         }
       });
     }
@@ -306,50 +381,55 @@ function setupHubPanel() {
     const uninstallBtn = card.querySelector(".hub-uninstall-btn");
     if (uninstallBtn) {
       uninstallBtn.addEventListener("click", async () => {
-        if (uninstallBtn.disabled) return;
+        if (uninstallBtn.disabled || _locked) return;
+        const epoch = _epoch;
         uninstallBtn.textContent = "Removing…";
         uninstallBtn.disabled = true;
         try {
-          const result = await responseJSON(await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}`, { method: "DELETE" }));
+          const result = await responseJSON(await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}`, { method: "DELETE" }), epoch);
+          if (epoch !== _epoch) return;
           if (result.ok !== true) throw new Error('The host did not confirm removal.');
           _installed.delete(pkg.id);
+          _savedScripts.delete(pkg.id);
+          clearSource();
           if (typeof showToast === "function") showToast(`${pkg.name} uninstalled`);
+          if (pkg.type === "app") window.TLIApps?.reload({afterMutation: true});
           _render();
         } catch (err) {
+          if (epoch !== _epoch) return;
           uninstallBtn.textContent = "Uninstall";
           uninstallBtn.disabled = false;
           if (typeof showToast === "function") showToast(err.message, "error");
+          if (pkg.type === "app") window.TLIApps?.reload({afterMutation: true});
         }
       });
     }
 
-    // Run script
-    const runBtn = card.querySelector(".hub-run-btn");
-    if (runBtn) {
-      runBtn.addEventListener("click", async () => {
-        if (runBtn.disabled) return;
-        if (!window.confirm(`Run “${pkg.name}” on the TLI host? This executes the installed script and may change host files or settings. Continue only after reviewing its code.`)) return;
-        runBtn.textContent = "Running…";
-        runBtn.disabled = true;
+    // Stored source is text only; this panel never submits a script run.
+    const sourceBtn = card.querySelector(".hub-source-btn");
+    if (sourceBtn) {
+      sourceBtn.addEventListener("click", async () => {
+        if (sourceBtn.disabled || _locked) return;
+        const epoch = _epoch;
+        clearSource(); const request = _sourceEpoch;
+        sourceBtn.disabled = true;
         if (runDrawer) {
           runDrawer.hidden = false;
-          if (runTitle) runTitle.textContent = pkg.name + " — Output";
-          if (runOutput) runOutput.textContent = "Running…";
+          if (runTitle) runTitle.textContent = pkg.name + ' — Stored source';
         }
+        sourceStatus.textContent = 'Loading stored source…';
         try {
-          const r = await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}/run`, { method: "POST" });
-          const d = await r.json();
-          if (!r.ok) throw new Error(d.detail || `Request failed (${r.status}).`);
-          const out = (d.stdout || "") + (d.stderr ? "\n[stderr]\n" + d.stderr : "");
-          if (runOutput) runOutput.textContent = out || "(no output)";
-          if (d.ok !== true) { if (runTitle) runTitle.textContent = pkg.name + ' — failed or incomplete'; if (typeof showToast === 'function') showToast(`Script did not complete successfully${Number.isInteger(d.exit_code) ? ' (exit ' + d.exit_code + ')' : ''}.`, 'error'); }
-          else if (runTitle) runTitle.textContent = pkg.name + ' — completed';
+          const data = await responseJSON(await fetch(`/hub/packages/${encodeURIComponent(pkg.id)}/source`, {cache: 'no-store', signal: AbortSignal.timeout(10000)}), epoch);
+          if (epoch !== _epoch || request !== _sourceEpoch) return;
+          if (data.id !== pkg.id || typeof data.contents !== 'string' || data.execution_allowed !== false) throw new Error('TLI did not return the stored script source.');
+          _source = data.contents;
+          if (runOutput) runOutput.textContent = _source;
+          sourceCopy.disabled = false;
+          sourceStatus.textContent = 'Stored source — host execution is unavailable. Copying does not execute it.';
         } catch (err) {
-          if (runOutput) runOutput.textContent = "Error: " + err.message;
-          if (typeof showToast === "function") showToast("Script failed: " + err.message, "error");
+          if (epoch === _epoch && request === _sourceEpoch) sourceStatus.textContent = 'Source unavailable: ' + err.message;
         } finally {
-          runBtn.textContent = "Run script on host";
-          runBtn.disabled = false;
+          sourceBtn.disabled = _locked;
         }
       });
     }
@@ -358,10 +438,12 @@ function setupHubPanel() {
     const activateBtn = card.querySelector(".hub-activate-btn");
     if (activateBtn) {
       activateBtn.addEventListener("click", async () => {
-        if (activateBtn.disabled) return;
+        if (activateBtn.disabled || _locked) return;
+        const epoch = _epoch;
         activateBtn.disabled = true;
         try {
-          const d = await responseJSON(await fetch('/hub/presets'));
+          const d = await responseJSON(await fetch('/hub/presets'), epoch);
+          if (epoch !== _epoch) return;
           const preset = (d.presets || []).find(p => p.id === pkg.id);
           if (!preset || typeof preset.system_prompt !== 'string') throw new Error("Preset data not found");
           // Write system prompt into settings
@@ -371,8 +453,9 @@ function setupHubPanel() {
           localStorage.setItem("tli_settings", JSON.stringify(settings));
           if (typeof showToast === "function") showToast(`${pkg.name} activated as system prompt`, "success");
         } catch (err) {
+          if (epoch !== _epoch) return;
           if (typeof showToast === "function") showToast("Could not activate preset: " + err.message, "error");
-        } finally { activateBtn.disabled = false; }
+        } finally { activateBtn.disabled = _locked; }
       });
     }
 
@@ -380,6 +463,7 @@ function setupHubPanel() {
     const previewBtn = card.querySelector(".hub-preview-btn");
     if (previewBtn) {
       previewBtn.addEventListener("click", () => {
+        if (_locked) return;
         const css = decodeURIComponent(previewBtn.dataset.pkgCss || "");
         if (css) _applyTheme(pkg.id, css);
       });
@@ -389,6 +473,7 @@ function setupHubPanel() {
     const openBtn = card.querySelector(".hub-open-btn");
     if (openBtn) {
       openBtn.addEventListener("click", () => {
+        if (_locked) return;
         const panelId = "panel-app-" + pkg.id;
         const panel   = document.getElementById(panelId);
         if (!panel) {
@@ -417,6 +502,7 @@ function setupHubPanel() {
 
   // ── Publish panel ──────────────────────────────────────────────
   async function _loadPublishPanel() {
+    if (_locked) return;
     // Set local registry URL hint
     const urlHint = document.getElementById("pub-local-url");
     if (urlHint) {
@@ -443,7 +529,8 @@ function setupHubPanel() {
     const pubStatus = document.getElementById("pub-status");
     if (submitBtn) {
       submitBtn.onclick = async () => {
-        if (submitBtn.disabled) return;
+        if (submitBtn.disabled || _locked) return;
+        const epoch = _epoch;
         const id   = (document.getElementById("pub-id")?.value || "").trim().replace(/[^a-z0-9\-_]/gi, "-");
         const name = (document.getElementById("pub-name")?.value || "").trim();
         const type = document.getElementById("pub-type")?.value;
@@ -491,15 +578,17 @@ function setupHubPanel() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
-          }));
+          }), epoch);
+          if (epoch !== _epoch) return;
           if (result.ok !== true) throw new Error('The host did not confirm publication.');
           if (pubStatus) pubStatus.textContent = `Published to this host’s registry: ${name}`;
           if (typeof showToast === "function") showToast(`${name} published to local registry`, "success");
           _renderPublishedList();
         } catch (err) {
+          if (epoch !== _epoch) return;
           if (pubStatus) pubStatus.textContent = "Error: " + err.message;
         } finally {
-          submitBtn.disabled = false;
+          submitBtn.disabled = _locked;
         }
       };
     }
@@ -509,9 +598,11 @@ function setupHubPanel() {
 
   async function _renderPublishedList() {
     const listEl = document.getElementById("pub-list");
-    if (!listEl) return;
+    if (!listEl || _locked) return;
+    const epoch = _epoch;
     try {
-      const d = await responseJSON(await fetch('/hub/local-registry'));
+      const d = await responseJSON(await fetch('/hub/local-registry'), epoch);
+      if (epoch !== _epoch) return;
       if (!Array.isArray(d.packages)) throw new Error('The host did not return a package list.');
       const pkgs = d.packages;
       if (!pkgs.length) {
@@ -531,13 +622,15 @@ function setupHubPanel() {
 
       listEl.querySelectorAll("[data-unpublish-id]").forEach(btn => {
         btn.addEventListener("click", async () => {
-          if (btn.disabled) return;
+          if (btn.disabled || _locked) return;
+          const actionEpoch = _epoch;
           btn.disabled = true;
-          try { const result = await responseJSON(await fetch(`/hub/local-registry/${encodeURIComponent(btn.dataset.unpublishId)}`, { method: 'DELETE' })); if (result.ok !== true) throw new Error('The host did not confirm removal.'); await _renderPublishedList(); }
-          catch (error) { btn.disabled = false; _showStatus('Removal failed: ' + error.message); }
+          try { const result = await responseJSON(await fetch(`/hub/local-registry/${encodeURIComponent(btn.dataset.unpublishId)}`, { method: 'DELETE' }), actionEpoch); if (actionEpoch !== _epoch) return; if (result.ok !== true) throw new Error('The host did not confirm removal.'); await _renderPublishedList(); }
+          catch (error) { if (actionEpoch === _epoch) { btn.disabled = false; _showStatus('Removal failed: ' + error.message); } }
         });
       });
     } catch {
+      if (epoch !== _epoch) return;
       listEl.innerHTML = `<div class="hub-empty-sub">Could not load published packages.</div>`;
     }
   }

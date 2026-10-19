@@ -4,6 +4,7 @@
   const everyday=['messages','observe','coordinate'],grantNames={messages:'Messages & files',observe:'Observations',coordinate:'Coordination',inference:'AI compute'};
   let dialog,body,status,opener,epoch=0,locked=false,kind='',selected='',requestId='',requestsView=false;
   let nearby,review,verification,setupBox,unsubscribe,phoneUnmount,peers=[],selection=0,readinessRead=0,resuming=false,pinContinuation=null;
+  let acknowledgedPhoneNetwork='';
   const requests=new Set(),n=(tag,text,cls)=>{const e=document.createElement(tag);if(text!=null)e.textContent=text;if(cls)e.className=cls;return e;};
   const live=t=>!locked&&dialog?.open&&epoch===t&&!document.hidden;
   const identifier=v=>typeof v==='string'&&v.length>0&&v.length<=128&&!/[\x00-\x1f]/.test(v);
@@ -24,18 +25,27 @@
   function selectKind(value){kind=value;selected='';requestId='';requestsView=false;render();}
   async function readiness(ticket){
     const slot=setupBox,read=++readinessRead;
-    const results=await Promise.allSettled([api('/mesh/trust/setup',undefined,ticket),api('/api/companion/v1/setup',undefined,ticket),window.TLIConnectionSetup?.local()?api('/api/network-setup/v1/status',undefined,ticket):Promise.resolve(null)]);
+    const results=await Promise.allSettled([kind==='phone'?Promise.resolve(null):api('/mesh/trust/setup',undefined,ticket),api('/api/companion/v1/setup',undefined,ticket),window.TLIConnectionSetup?.local()?api('/api/network-setup/v1/status',undefined,ticket):Promise.resolve(null)]);
     if(!live(ticket)||slot!==setupBox||read!==readinessRead)return;
     const computer=results[0].status==='fulfilled'?results[0].value:null,phone=results[1].status==='fulfilled'?results[1].value:null,network=results[2].status==='fulfilled'?results[2].value:null;
-    const ready=kind==='phone'?phone?.pairing_ready:computer?.ready||computer?.stable_origins?.length>0;
+    const ready=kind==='phone'?phone?.pairing_ready&&location.protocol==='https:':computer?.ready||computer?.stable_origins?.length>0;
+    const networkKey=network?JSON.stringify([network.installation_id,network.running,network.certificate?.fingerprint]):'unknown';
+    const setupReceipt=window.TLIConnectionSetup?.result?.();
+    const firewallReviewed=setupReceipt?.action==='firewall'&&setupReceipt.status==='completed'&&network&&
+      ['host','port','https'].every(key=>setupReceipt.settings?.[key]===network.running?.[key]);
+    const needsNetworkReview=kind==='phone'&&ready&&window.TLIConnectionSetup?.local()&&
+      (!network||network.firewall?.supported)&&!firewallReviewed&&acknowledgedPhoneNetwork!==networkKey;
+    if(kind==='phone')window.TLICompanion?.setPrepared?.(!!ready&&!needsNetworkReview);
     if(resuming&&results[2].status==='fulfilled'&&network){history.replaceState(null,'',location.pathname+location.search);resuming=false;}
-    slot.replaceChildren(n('h3',ready?'This workspace is ready to connect':'Prepare this workspace'));
-    slot.append(n('p',ready?'Secure LAN access is configured. Review what the other device can share.':computer?.reason||phone?.reason||'Secure LAN access is not ready. Review network setup below.'));
-    const origin=computer?.stable_origins?.[0]||phone?.origins?.[0]||computer?.origins?.[0];if(origin)slot.append(n('p',origin,'peer-pairing-address'));
+    slot.replaceChildren(n('h3',kind==='phone'?(needsNetworkReview?'1 · Allow phone connections':ready?'1 · Computer prepared':'1 · Prepare this computer'):(ready?'This workspace is ready to connect':'Prepare this workspace')));
+    slot.append(n('p',needsNetworkReview?'TLI is running securely. Review Windows access for your phone, or continue if you have already allowed TLI on this home network. The phone will verify that it can connect.':ready?(kind==='phone'?'You can connect your Android app. Keep this computer awake with TLI running.':'Secure LAN access is configured. Review what the other device can share.'):
+      kind==='phone'?'We’ll guide you through owner access, secure home-network setup and a restart only if needed.':computer?.reason||phone?.reason||'Secure LAN access is not ready. Review network setup below.'));
+    const origin=computer?.stable_origins?.[0]||phone?.origins?.[0]||computer?.origins?.[0];if(origin&&kind!=='phone')slot.append(n('p',origin,'peer-pairing-address'));
     if(phone?.pin_enabled===false){const pin=n('section');slot.append(pin);window.TLIConnectionSetup?.mountPin(pin,{api:(path,payload)=>api(path,payload,ticket),current:()=>live(ticket),onStart:()=>{pinContinuation={kind,deviceId:selected,requestId,requests:requestsView};},onVerified:()=>{void readiness(ticket);if(kind==='phone')void window.TLICompanion?.refresh?.();},onSettled:()=>{if(!locked)pinContinuation=null;}});}
-    const controls=n('section');window.TLIConnectionSetup?.mount(controls,{record:network,api:(path,payload)=>api(path,payload,ticket),current:()=>live(ticket)});
-    if(ready){const details=n('details');details.open=!!window.TLIConnectionSetup?.receipt();details.append(n('summary','Network setup & repair'),controls);slot.append(details);}else slot.append(controls);
-    slot.append(b('Refresh readiness',()=>readiness(ticket)));
+    const controls=n('section');
+    if(phone?.pin_enabled!==false)window.TLIConnectionSetup?.mount(controls,{record:network,api:(path,payload)=>api(path,payload,ticket),current:()=>live(ticket),onSettled:()=>{void readiness(ticket);void window.TLICompanion?.refresh?.();}});
+    const refresh=b('Refresh readiness',()=>readiness(ticket));
+    if(ready&&!needsNetworkReview){const details=n('details');details.append(n('summary','Computer connection details'),controls,refresh);slot.append(details);}else{if(phone?.pin_enabled!==false)slot.append(controls);if(needsNetworkReview)slot.append(b('Network access is already allowed — continue',()=>{acknowledgedPhoneNetwork=networkKey;void readiness(ticket);},'btn-outline'));slot.append(refresh);}
   }
   function actionsFor(peer,ready,slot){
     if(ready.includes('messages'))slot.append(b('Open messages & files',()=>{close();window.TLIChat?.openPeer?.(peer.id);},'btn-primary'));
@@ -99,10 +109,11 @@
   function nodeInstructions(){const details=n('details');details.append(n('summary','Set up an inference Node'),n('p','Run the Node on its own computer with LM Studio and a loaded text model. Open its pairing window locally, then compare the entire code here and in its terminal.'),n('pre','TLI_Node.bat run --state-dir "<Node state folder>" --pair\n\n# If discovery is unavailable, copy a public invitation:\nTLI_Node.bat invitation --state-dir "<Node state folder>"'),n('p','For a saved connection replacement, review the update on both computers. The Node shares AI inference only.'));return details;}
   function render(){
     epoch++;selection++;detach();const ticket=epoch;body.replaceChildren();status.textContent='';nearby=review=verification=setupBox=null;
+    document.getElementById('tli-connect-device-title').textContent=kind==='phone'?'Connect phone':'Connect a device';
     if(!kind){body.append(n('p','Connect your phone or another computer to this home workspace.'),b('Phone or phone browser',()=>selectKind('phone'),'btn-primary'),b('Full TLI computer',()=>selectKind('computer'),'btn-primary'),b('Inference Node',()=>selectKind('node'),'btn-primary'));return;}
-    body.append(b('Choose another device type',()=>selectKind('')));
+    if(kind!=='phone')body.append(b('Choose another device type',()=>selectKind('')));
     setupBox=n('section');setupBox.append(n('p','Checking this workspace…'));body.append(setupBox);void readiness(ticket).catch(error=>{if(live(ticket))status.textContent=error.message;});
-    if(kind==='phone'){const phone=n('section',null,'connect-device-phone');body.append(phone);if(window.TLICompanion?.mount)phoneUnmount=window.TLICompanion.mount(phone);else phone.append(n('p','Pair the installed phone app using a temporary QR invitation.'),b('Open phone pairing',()=>{close();window.TLICompanion?.open({step:'pair'});}));const browser=n('details');browser.append(n('summary','Use the full phone browser workspace'),n('p','Open this host’s HTTPS address on your phone, unlock with your owner PIN, and add it to your home screen.'));const legacy=n('a','Legacy companion and local history');legacy.href='/companion/legacy';browser.append(legacy);body.append(browser);return;}
+    if(kind==='phone'){const phone=n('section',null,'connect-device-phone');body.append(phone);if(window.TLICompanion?.mount)phoneUnmount=window.TLICompanion.mount(phone);else phone.append(n('p','Reload the updated TLI page to continue phone setup.'));return;}
     if(kind==='node')body.append(nodeInstructions());
     nearby=n('section');review=n('section');review.id='tli-connect-device-review';verification=n('section');verification.id='tli-connect-device-verification';body.append(nearby,review,verification,invitation(ticket));
     const startingSelection=selected,pendingRequest=requestId,showRequests=requestsView;let attached=!!pendingRequest||showRequests;
@@ -113,9 +124,9 @@
   function open(options={}){if(locked||document.hidden)return;ensure();kind=['phone','computer','node'].includes(options.kind)?options.kind:'';selected=identifier(options.deviceId)?options.deviceId:'';requestId=identifier(options.requestId)?options.requestId:'';requestsView=options.requests===true;opener=document.activeElement;if(!dialog.open)dialog.showModal();render();document.getElementById('tli-connect-device-title').focus();}
   function resumeURL(value){try{const url=new URL(value);if(!['http:','https:'].includes(url.protocol)||!['localhost','127.0.0.1','[::1]'].includes(url.hostname)||url.username||url.password)return value;const params=new URLSearchParams({connect_device:kind||'computer'});if(identifier(selected))params.set('peer',selected);if(identifier(requestId))params.set('request',requestId);const receipt=window.TLIConnectionSetup?.receipt();if(/^[a-f0-9]{32,64}$/.test(receipt||''))params.set('setup_receipt',receipt);url.hash=params.toString();return url.href;}catch{return value;}}
   function resume(){if(locked||!location.hash.startsWith('#connect_device='))return;const params=new URLSearchParams(location.hash.slice(1)),value=params.get('connect_device');if(!['computer','node','phone'].includes(value))return;resuming=true;window.TLIConnectionSetup?.resume(params.get('setup_receipt'));open({kind:value,deviceId:params.get('peer'),requestId:params.get('request')});}
-  function install(){for(const[id,selector]of[['mesh','#panel-mesh .mcd-header-right'],['messages','#panel-tli-chat .tli-chat-titleblock'],['phone','#native-companion-settings .native-companion-overview']]){const anchor=document.querySelector(selector);if(anchor&&!document.getElementById('tli-connect-device-'+id)){const entry=b('Connect device',()=>open(),'btn-primary');entry.id='tli-connect-device-'+id;anchor.prepend(entry);}}}
+  function install(){for(const[id,selector]of[['mesh','#panel-mesh .mcd-header-right'],['messages','#panel-tli-chat .tli-chat-titleblock'],['phone','#native-companion-settings .native-companion-overview']]){const anchor=document.querySelector(selector);if(anchor&&!document.getElementById('tli-connect-device-'+id)){const entry=b(id==='phone'?'Connect phone':'Connect device',()=>open(id==='phone'?{kind:'phone'}:{}),'btn-primary');entry.id='tli-connect-device-'+id;anchor.prepend(entry);}}}
   window.TLIConnectDevice={open,close,install,resumeURL,isOpen:()=>!!dialog?.open};
-  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{locked=true;if(event!=='tli-session-locked')pinContinuation=null;close();peers=[];window.TLIConnectionSetup?.clear();body?.replaceChildren();if(status)status.textContent='';});
+  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{locked=true;acknowledgedPhoneNetwork='';if(event!=='tli-session-locked')pinContinuation=null;close();peers=[];if(event==='tli-session-locked')window.TLIConnectionSetup?.suspend();else window.TLIConnectionSetup?.clear();body?.replaceChildren();if(status)status.textContent='';});
   window.addEventListener('tli-session-unlocked',()=>{locked=false;install();if(pinContinuation&&!dialog?.open){const options=pinContinuation;pinContinuation=null;open(options);}else resume();});window.addEventListener('pagehide',close);
   document.addEventListener('visibilitychange',()=>{if(document.hidden){epoch++;for(const request of requests)request.abort();requests.clear();}else if(dialog?.open)render();});
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{install();resume();});else{install();resume();}

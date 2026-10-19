@@ -1,0 +1,34 @@
+.pihole-access-page{margin:0;min-height:100vh;background:#0b1517;color:#eaf2ef;font:16px/1.55 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:grid;place-items:start center;padding:clamp(20px,6vw,72px) 16px;box-sizing:border-box}
+.pihole-access-card{width:min(100%,600px);box-sizing:border-box;background:#122326;border:1px solid #284245;border-radius:24px;padding:clamp(24px,5vw,44px);box-shadow:0 24px 80px #0003}
+.pihole-access-brand{font-weight:800;letter-spacing:.08em;color:#74dec0;display:flex;align-items:center;gap:16px;margin-bottom:32px}
+.pihole-access-brand span{font-size:11px;letter-spacing:.15em;color:#9fb8b5;font-weight:600}
+.pihole-access-card h1{font-size:clamp(30px,7vw,44px);line-height:1.1;letter-spacing:-.035em;margin:0 0 20px;max-width:10em}
+.pihole-access-intro{font-size:17px;color:#c4d5d1;margin-bottom:28px}
+.pihole-access-page button,.pihole-access-page input{font:inherit;box-sizing:border-box}
+.pihole-access-page button{min-height:48px;padding:12px 18px;border:1px solid #446864;border-radius:12px;background:#1c393a;color:#f3fbf7;font-weight:650;cursor:pointer}
+.pihole-access-page button.primary{background:#8ae2c4;color:#102b24;border-color:#8ae2c4}
+.pihole-access-page button:disabled{opacity:.48;cursor:not-allowed}
+.pihole-access-page button:focus-visible,.pihole-access-page input:focus-visible{outline:3px solid #b6f6dc;outline-offset:3px}
+.pihole-access-page input{width:100%;min-height:48px;background:#0c1c20;border:1px solid #486662;border-radius:10px;padding:12px;color:inherit}
+.pihole-access-page label{display:grid;gap:8px;font-weight:600}
+.pihole-access-actions{display:flex;flex-wrap:wrap;gap:10px;margin:18px 0}
+.pihole-access-actions .primary{flex:1 1 180px}
+.pihole-access-state{padding:20px;border:1px solid #3a5954;border-radius:16px;margin:24px 0 18px;background:#0d1c1e}
+.pihole-access-state h2{margin:0 0 8px;font-size:21px;line-height:1.3}
+.pihole-access-state p{margin:6px 0;overflow-wrap:anywhere}
+.pihole-access-status{min-height:1.55em;color:#e2f1e8;overflow-wrap:anywhere}
+.pihole-access-outcome{border-left:3px solid #c8b777;padding:2px 0 2px 14px;margin:20px 0;overflow-wrap:anywhere}
+.pihole-access-outcome:empty{display:none}
+.pihole-access-muted{color:#a9c0b9;font-size:14px;overflow-wrap:anywhere}
+.pihole-access-footnote{border-top:1px solid #2b4540;margin-top:28px;padding-top:18px}
+.pihole-sharing-workspace{margin-top:24px;padding:24px;border:1px solid var(--border-subtle,#334b48);border-radius:16px;background:var(--bg-panel,#142223);color:var(--text-main,inherit)}
+.pihole-sharing-workspace h2{margin:0 0 10px}.pihole-sharing-workspace h3{margin:24px 0 12px}.pihole-sharing-workspace p{overflow-wrap:anywhere}
+.pihole-sharing-form,.pihole-sharing-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:14px;margin-top:16px}
+.pihole-sharing-field{display:grid;gap:6px;min-width:0}.pihole-sharing-field input,.pihole-sharing-field select{min-height:42px;box-sizing:border-box;width:100%;padding:10px;border-radius:8px;border:1px solid var(--border-strong,#486660);background:var(--bg-main,#0e1b1e);color:var(--text-main,inherit);font:inherit}
+.pihole-sharing-check{display:flex;gap:10px;align-items:flex-start;grid-column:1/-1;font-size:14px}.pihole-sharing-check input{margin-top:4px;flex:none}
+.pihole-sharing-actions{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}.pihole-sharing-actions button,.pihole-sharing-row button{min-height:42px}
+.pihole-sharing-muted{font-size:14px;color:var(--text-muted,#a9bfb9)}.pihole-sharing-status{min-height:1.5em}
+.pihole-sharing-list{display:grid;gap:14px}.pihole-sharing-row{border:1px solid var(--border-subtle,#3a554f);border-radius:12px;padding:16px;min-width:0;overflow-wrap:anywhere}.pihole-sharing-row h4{margin:0 0 6px}.pihole-sharing-row .pihole-sharing-check{margin:14px 0}
+.pihole-sharing-link{word-break:break-all;display:block;color:var(--accent,#78dcb9);margin-top:12px}.pihole-sharing-qr{display:block;width:180px;max-width:100%;height:auto;background:white;padding:8px;border-radius:8px;margin:16px 0}
+@media(max-width:480px){.pihole-access-page{padding:12px}.pihole-access-card{padding:24px 20px;border-radius:18px}.pihole-access-actions button{flex:1 1 100%}.pihole-sharing-workspace{padding:16px}.pihole-sharing-actions button{flex:1 1 100%}}
+@media(prefers-color-scheme:light){.pihole-access-page{background:#eaf1ed;color:#15392f}.pihole-access-card{background:#fff;border-color:#cdded4;box-shadow:0 20px 70px #244c3110}.pihole-access-brand{color:#17785a}.pihole-access-brand span,.pihole-access-muted{color:#526d61}.pihole-access-intro{color:#486657}.pihole-access-state{background:#f1f7f3;border-color:#bdd4c7}.pihole-access-status{color:#254a37}.pihole-access-page input{background:#fff;border-color:#9bbbae}.pihole-access-page button{background:#e6f2e9;color:#183c2d;border-color:#a2c8b4}.pihole-access-page button.primary{background:#1c7656;color:#fff;border-color:#1c7656}.pihole-access-page button:focus-visible,.pihole-access-page input:focus-visible{outline-color:#168153}.pihole-access-footnote{border-color:#d0e2d6}}

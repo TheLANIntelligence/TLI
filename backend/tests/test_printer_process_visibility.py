@@ -62,14 +62,14 @@ def test_scan_app_hides_wrapper_and_preserves_visible_destination(processes):
 
 def test_requested_printer_settings_remains_visible(processes):
     calls, _ = processes
-    assert printers.open_add_printer() == {"ok": True}
+    assert printers.open_add_printer(check=lambda: None) == {"ok": True}
     assert calls == [(["explorer.exe", "ms-settings:printers"], {"close_fds": True})]
 
 
 def test_printer_discovery_hides_console_before_powershell_starts(processes, monkeypatch):
     calls, _ = processes
-    monkeypatch.setattr(printers, "get_printers", lambda: [{"name": "Sample"}])
-    assert printers.discover_printers() == [{"name": "Sample"}]
+    monkeypatch.setattr(printers, "get_printers", lambda **kwargs: [{"name": "Sample"}])
+    assert printers.discover_printers(check=lambda: None) == [{"name": "Sample"}]
     assert calls[0][0][0] == "powershell"
     assert calls[0][1] == {"close_fds": True, "creationflags": 0x08000000}
 

@@ -36,6 +36,7 @@ ROOT_FILES = {
     "Uninstall_TLI.command", "Uninstall_TLI.sh",
 }
 PUBLIC_GUIDES = {
+    "TLI_TASK_AGENT.md", "TLI_SONOS.md", "TLI_HOST_VOICE.md", "TLI_BLUETOOTH.md",
     "TLI_SEAMLESS_CONNECTIONS.md",
     "TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "SSE_SCHEMA.md",
     "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
@@ -103,7 +104,8 @@ def is_application_path(value: str) -> bool:
     if len(parts) >= 4 and parts[:3] == ("backend", "ai", "runtime"):
         return (suffix in {".exe", ".dll", ".so", ".dylib", ".txt", ".md", ".json", ".metal", ".metallib"}
                 or name in {"llama-server", "llama_server", "LICENSE", "README"} or ".so." in name)
-    return (suffix == ".py" or value == "backend/requirements.txt"
+    return (suffix == ".py" or value in {"backend/requirements.txt", "backend/requirements-sonos.txt", "backend/requirements-voice.txt",
+                                       "backend/requirements-bluetooth.txt"}
             or suffix == ".txt" and "prompts" in parts
             or suffix == ".json" and parts[1] == "game_configs")
 
@@ -161,9 +163,13 @@ def _manifest(raw: bytes, expected_version=None, expected_platform=None) -> dict
     return manifest
 
 
-def _digest_stream(stream, limit=MAX_FILE_BYTES):
+def _digest_stream(stream, limit=MAX_FILE_BYTES, *, check=None):
     digest, total = hashlib.sha256(), 0
-    while chunk := stream.read(1024 * 1024):
+    while True:
+        if check: check()
+        chunk = stream.read(1024 * 1024)
+        if check: check()
+        if not chunk: break
         total += len(chunk)
         if total > limit:
             raise UpdateError("File exceeds its declared size")
@@ -171,17 +177,20 @@ def _digest_stream(stream, limit=MAX_FILE_BYTES):
     return total, digest.hexdigest()
 
 
-def _hash(path):
+def _hash(path, *, check=None):
+    if check: check()
     with path.open("rb") as stream:
-        return _digest_stream(stream)
+        return _digest_stream(stream, check=check)
 
 
-def _inspect_zip(zf, expected_version=None, expected_platform=None):
+def _inspect_zip(zf, expected_version=None, expected_platform=None, *, check=None):
+    if check: check()
     infos = zf.infolist()
     if not 2 <= len(infos) <= MAX_FILES + 1:
         raise UpdateError("Invalid archive file count")
     seen = set()
     for info in infos:
+        if check: check()
         _path_parts(info.filename)
         kind = stat.S_IFMT(info.external_attr >> 16)
         if info.is_dir() or kind not in {0, stat.S_IFREG} or info.flag_bits & 1:
@@ -208,7 +217,7 @@ def _inspect_zip(zf, expected_version=None, expected_platform=None):
         if info.file_size != entry["size"]:
             raise UpdateError(f"Release size mismatch: {path}")
         with zf.open(info) as stream:
-            size, digest = _digest_stream(stream, entry["size"])
+            size, digest = _digest_stream(stream, entry["size"], check=check)
         if size != entry["size"] or digest != entry["sha256"]:
             raise UpdateError(f"Release hash mismatch: {path}")
     return manifest
@@ -237,24 +246,32 @@ def _no_links(path):
     return absolute
 
 
-def extract_archive(archive: Path, destination: Path, expected_version=None, expected_platform=None) -> dict:
+def extract_archive(archive: Path, destination: Path, expected_version=None, expected_platform=None, *, check=None) -> dict:
     """Extract into a new staging directory, only after complete validation."""
     destination = _no_links(destination)
     if destination.exists():
         raise UpdateError("Staging destination must not already exist")
     try:
         with zipfile.ZipFile(archive) as zf:
-            manifest = _inspect_zip(zf, expected_version, expected_platform)
+            manifest = _inspect_zip(zf, expected_version, expected_platform, check=check)
+            if check: check()
             destination.mkdir(parents=True)
             try:
                 for entry in manifest["files"]:
+                    if check: check()
                     path = destination / entry["path"]
                     path.parent.mkdir(parents=True, exist_ok=True)
                     with zf.open(entry["path"]) as src, path.open("xb") as out:
-                        shutil.copyfileobj(src, out, 1024 * 1024)
+                        while True:
+                            if check: check()
+                            chunk = src.read(1024 * 1024)
+                            if check: check()
+                            if not chunk: break
+                            out.write(chunk)
                     path.chmod(entry["mode"])
+                if check: check()
                 (destination / MANIFEST_NAME).write_bytes(zf.read(MANIFEST_NAME))
-                _validate_source(destination, expected_platform)
+                _validate_source(destination, expected_platform, check=check)
             except BaseException:
                 shutil.rmtree(destination)
                 raise
@@ -267,14 +284,17 @@ def _platform():
     return "windows" if sys.platform == "win32" else "macos" if sys.platform == "darwin" else "linux"
 
 
-def _validate_source(source, expected_platform=None):
+def _validate_source(source, expected_platform=None, *, check=None):
+    if check: check()
     manifest_path = _no_links(source / MANIFEST_NAME)
     if not manifest_path.is_file() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
         raise UpdateError("Source is missing a valid release manifest")
     manifest = _manifest(manifest_path.read_bytes(), expected_platform=expected_platform)
+    if check: check()
     expected = {entry["path"] for entry in manifest["files"]} | {MANIFEST_NAME}
     found = set()
     for directory, dirs, files in os.walk(source, followlinks=False):
+        if check: check()
         # Normal setup can prepare Python or create private state in this source
         # folder. Prune those trees entirely: never inspect, inventory or install
         # their contents, including links inside a private model/environment tree.
@@ -297,9 +317,11 @@ def _validate_source(source, expected_platform=None):
     if found != expected:
         raise UpdateError("Extracted package contains unlisted or missing files")
     for entry in manifest["files"]:
+        if check: check()
         path = source / entry["path"]
-        if not path.is_file() or _hash(path) != (entry["size"], entry["sha256"]):
+        if not path.is_file() or _hash(path, check=check) != (entry["size"], entry["sha256"]):
             raise UpdateError(f"Extracted release hash mismatch: {entry['path']}")
+    if check: check()
     return manifest
 
 
@@ -317,7 +339,8 @@ def ensure_stopped(target: Path):
         import psutil
     except ImportError as exc:
         raise UpdateError("Process verification needs psutil. Run this updater with the existing installation's .venv Python, or prepare TLI using its normal setup first.") from exc
-    script_names = {"main.py", "host_control_server.py", "host_launcher.py", "desktop_launcher.py", "tli_sentinel.ps1", "tli_node.py"}
+    script_names = {"main.py", "host_control_server.py", "host_launcher.py", "desktop_launcher.py", "tli_sentinel.ps1", "tli_node.py",
+                    "tli_bootstrap.ps1", "tli_start.sh"}
     binary_names = {"tli.exe", "tli_backend.exe", "tli_backend", "llama-server", "llama-server.exe", "llama_server.exe"}
     try:
         processes = psutil.process_iter(["pid", "name", "exe", "cmdline", "cwd"], ad_value=None)
@@ -561,20 +584,22 @@ def require_full_release(manifest: dict, platform=None):
         raise UpdateError(f"Use a complete release package for an in-place update; missing: {missing}")
 
 
-def install(source: Path, target: Path) -> dict:
+def install(source: Path, target: Path, *, expected_manifest_sha256=None) -> dict:
     """Apply verified application files transactionally to a stopped installation."""
     source, target = _no_links(source).resolve(), _target(target)
     if source == target or _inside(target, source):
         raise UpdateError("Update source and installed TLI folder must be separate")
     if _inside(source, target) and not _inside(source, target / "data" / "updates"):
         raise UpdateError("An update inside the installation must be staged under data/updates")
+    if expected_manifest_sha256 is not None and _hash(source / MANIFEST_NAME)[1] != expected_manifest_sha256:
+        raise UpdateError("The reviewed update manifest changed before installation")
     manifest = _validate_source(source, _platform())
     require_full_release(manifest)
     with _installation_lock(target):
-        return _install(source, target, manifest)
+        return _install(source, target, manifest, expected_manifest_sha256=expected_manifest_sha256)
 
 
-def _install(source, target, manifest):
+def _install(source, target, manifest, *, expected_manifest_sha256=None):
     ensure_stopped(target)
     for _, previous in _journals(target):
         if previous.get("status") not in ("complete", "rolled_back"):
@@ -585,6 +610,8 @@ def _install(source, target, manifest):
     priorities = {"backend/update_install.py": 0, "backend/main.py": 1}
     files.sort(key=lambda entry: priorities.get(entry["path"], 2))
     manifest_size, manifest_hash = _hash(source / MANIFEST_NAME)
+    if expected_manifest_sha256 is not None and manifest_hash != expected_manifest_sha256:
+        raise UpdateError("The reviewed update manifest changed during verification")
     files.append({"path": MANIFEST_NAME, "size": manifest_size, "sha256": manifest_hash, "mode": 0o644})
     for entry in files:
         destination = _no_links(target / entry["path"])

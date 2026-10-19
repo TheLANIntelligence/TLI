@@ -25,7 +25,8 @@ def routine_api(tmp_path, monkeypatch):
     monkeypatch.setattr("intelligence.devices.with_context", lambda rows: rows)
     app = FastAPI(); app.include_router(A.router)
     app.dependency_overrides[require_session] = lambda: "alice"
-    with TestClient(app) as api:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                    headers={"Origin": "http://localhost"}) as api:
         api.cookies.set("tli_session", "routine-session")
         action = api.post("/actions/approve", json={"name": "Evening", "request_id": "create",
             "steps": [{"type": "shelly.switch", "device": "lamp", "value": "on", "driver_note": {"keep": True}, "_saved_driver_config": {"keep": True}}]}).json()["action"]
@@ -154,7 +155,7 @@ def test_failed_write_preserves_store_and_metadata_validation(routine_api, monke
     path, _ = A._paths(); before = path.read_bytes()
     for body in ({"name": "  "}, {"archived": "false"}, {"steps": []}, {"enabled": True}):
         assert patch(api, ident, **body).status_code == 422
-    def fail(*args):
+    def fail(*args, **kwargs):
         from fastapi import HTTPException
         raise HTTPException(503, "Fixture disk full")
     monkeypatch.setattr(A, "_save_json", fail)
@@ -165,7 +166,7 @@ def test_failed_write_preserves_store_and_metadata_validation(routine_api, monke
 def test_receipt_failure_does_not_lose_confirmed_mutation_or_retry_it(routine_api, monkeypatch):
     api, ident, calls = routine_api
     body = {"expected_revision": definition(api, ident)["revision"], "request_id": "edit", "name": "Saved"}
-    monkeypatch.setattr(A, "_append_receipt", lambda row: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(A, "_append_receipt", lambda row, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
     result = api.patch(f"/actions/{ident}", json=body)
     assert result.status_code == 200 and result.json()["receipt_saved"] is False
     assert api.patch(f"/actions/{ident}", json=body).json()["duplicate"] is True

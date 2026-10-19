@@ -32,14 +32,14 @@ test('old note names resolve to the existing notebook shortcut; native pairing h
   for (const alias of ['notebook','saved notes','memory']) assert.ok(notes.aliases.includes(alias));
   const companion = navigation.find(n => n.id === 'panel-companion');
   assert.equal(companion.group, 'Devices');
-  assert.match(companion.prerequisites, /PIN.*HTTPS.*LAN.*certificate/);
-  assert.match(companion.result, /creates no invitation/);
+  assert.match(companion.prerequisites, /computer awake.*same home network/);
+  assert.match(companion.result, /prepare this computer.*install the app.*private pairing code/);
   assert.match(navigation.find(n => n.id === 'panel-mesh').result, /Browser satellite/);
 });
 
 test('storage and device workspaces open directly from primary navigation and retain specialist parents', () => {
   const api = catalogue();
-  assert.deepEqual(Array.from(api.navigation.filter(n => n.primary), n => n.label), ['Dashboard','Ask TLI','Files','Free Space','Game Optimizer','Vault','Computers','Smart home','Routines','Phone Companion','Printers & scanners','USB drives']);
+  assert.deepEqual(Array.from(api.navigation.filter(n => n.primary), n => n.label), ['Dashboard','Ask TLI','Files','Free Space','Game Optimizer','Vault','Computers','Smart home','Routines','Connect phone','Printers & scanners','USB drives']);
   for (const item of api.navigation) {
     assert.ok(api.navigation.some(n => n.id === item.parent));
     assert.equal(api.rootFor(item.id), item.parent);
@@ -69,4 +69,24 @@ test('corrupt and stale browser pins cannot inject new destinations into the cat
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/ui-foundation.js'),'utf8'),context);
   assert.deepEqual(Array.from(context.window.TLIUI.getPins()),['panel-builder']);
   assert.equal(context.window.TLIUI.setPinned('panel-does-not-exist',true),false);
+});
+
+test('HomeLab is hidden from the shared catalogue and old pins without rewriting stored preferences', () => {
+  let stored = JSON.stringify(['panel-homelab','panel-builder']), writes = 0;
+  const original = stored;
+  const context = vm.createContext({CustomEvent: class {constructor(type) {this.type = type;}},
+    window:{addEventListener(){},dispatchEvent(){}},
+    document:{readyState:'loading',addEventListener(){},querySelector(){return null;},querySelectorAll(){return [];},getElementById(){return null;}},
+    localStorage:{getItem(){return stored;},setItem(key,value){assert.equal(key,'tli_navigation_pins_v1');stored=value;writes++;}}});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/ui-foundation.js'),'utf8'),context);
+  const api = context.window.TLIUI;
+  assert.equal(api.isPanelHidden('panel-homelab'),true);
+  assert.equal(api.isPanelHidden('panel-homeauto'),false);
+  assert.equal(api.navigation.some(n=>n.id==='panel-homelab'),false);
+  assert.deepEqual(Array.from(api.getPins()),['panel-builder']);
+  assert.equal(api.setPinned('panel-homelab',true),false);
+  assert.equal(stored,original);assert.equal(writes,0);
+  assert.equal(api.setPinned('panel-tools',true),true);
+  assert.deepEqual(JSON.parse(stored),['panel-builder','panel-tools','panel-homelab']);
+  assert.deepEqual(Array.from(api.getPins()),['panel-builder','panel-tools']);
 });

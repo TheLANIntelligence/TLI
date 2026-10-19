@@ -1,5 +1,6 @@
 """Exercise detached execution, admission identity and owned continuation."""
 import json
+import asyncio
 import threading
 import time
 
@@ -228,6 +229,29 @@ def test_phone_browser_uses_full_workspace_and_preserves_legacy(client):
     legacy = client.get("/companion/legacy")
     assert "/js/companion.js" in legacy.text
     assert client.get("/manifest.json").json()["start_url"] == "/"
+
+
+def test_task_replay_rechecks_original_browser_between_frames(monkeypatch):
+    from routers import workspace_routes
+    import browser_authority
+    active = [True]
+    def check():
+        if not active[0]:
+            raise HTTPException(401, "Original session revoked")
+    value = {"kind": "agent_task", "status": "completed", "replay_reset": False, "cursor": 2,
+             "events": [{"id": 1, "event": {"type": "meta", "agent": {"id": "task-fixture"}}},
+                        {"id": 2, "event": {"type": "delta", "text": "private evidence"}}]}
+    monkeypatch.setattr(workspace_routes.host_runs, "get", lambda *_: value)
+    monkeypatch.setattr(workspace_routes, "operation_access", lambda *_: check)
+    monkeypatch.setattr(browser_authority, "browser_control_access", lambda *_: check)
+    async def read():
+        response = workspace_routes.stream_run("run-fixture", request(), after=0, owner="local")
+        iterator = response.body_iterator
+        assert "task-fixture" in await anext(iterator)
+        active[0] = False
+        with pytest.raises(HTTPException, match="Original session revoked"):
+            await anext(iterator)
+    asyncio.run(read())
 
 
 def test_builder_run_continues_and_cancelled_creation_keeps_recovery_project(store, monkeypatch):

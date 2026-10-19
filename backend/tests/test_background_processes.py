@@ -6,6 +6,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 import process_utils
 from builder import command_runner
@@ -78,29 +79,24 @@ def test_approved_builder_command_keeps_capture_and_timeout(monkeypatch, tmp_pat
 
 
 @pytest.mark.parametrize("shell", ["powershell", "bash"])
-def test_hub_script_runs_hidden_and_returns_result(monkeypatch, tmp_path, shell):
+def test_retired_hub_script_never_launches_or_changes_saved_source(monkeypatch, tmp_path, shell):
     monkeypatch.setattr(hub_routes, "_load_installed", lambda: [{"id": "fixture", "type": "script"}])
     monkeypatch.setattr(hub_routes, "_pkg_dir", lambda: tmp_path)
     (tmp_path / "script_fixture.json").write_text(json.dumps({"shell": shell, "code": "fixture text"}), encoding="utf-8")
+    before = (tmp_path / "script_fixture.json").read_bytes()
     def run(command, **kwargs):
-        assert command[0] == shell and command[-1] == "fixture text"
-        assert kwargs == {"capture_output": True, "text": True, "timeout": 30,
-                          **process_utils.hidden_process_kwargs()}
-        return SimpleNamespace(returncode=2, stdout="fixture output", stderr="fixture error")
-    monkeypatch.setattr(hub_routes.subprocess, "run", run)
-    assert hub_routes.hub_run_script("fixture") == {"ok": False, "exit_code": 2,
-        "stdout": "fixture output", "stderr": "fixture error", "shell": shell}
+        pytest.fail("Retired Hub execution must not launch any process")
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(HTTPException) as failure:
+        hub_routes.hub_run_script("fixture", check=lambda: None)
+    assert failure.value.status_code == 410
+    assert (tmp_path / "script_fixture.json").read_bytes() == before
 
 
-def test_firewall_helper_keeps_existing_rules_without_console(monkeypatch):
-    monkeypatch.setattr(lan_discovery.platform, "system", lambda: "Windows")
+def test_legacy_firewall_helper_never_launches_or_changes_rules(monkeypatch):
     monkeypatch.setattr(lan_discovery.S, "server_port", lambda: 8443)
-    calls = []
     def run(command, **kwargs):
-        calls.append(command)
-        assert kwargs == {"capture_output": True, "timeout": 5, **process_utils.hidden_process_kwargs()}
-        return SimpleNamespace(returncode=1)
-    monkeypatch.setattr(lan_discovery.subprocess, "run", run)
-    lan_discovery._try_open_firewall()
-    assert len(calls) == 2
-    assert "localport=8443" in calls[0] and "localport=47474" in calls[1]
+        pytest.fail("Discovery must not launch a firewall configuration command")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "Popen", run)
+    assert lan_discovery._try_open_firewall() is None

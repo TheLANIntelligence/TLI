@@ -6,9 +6,9 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../js/mesh.js'), 'utf8');
 function fixture(failNode, failDirectory, service = true) {
   const previous = {node_id:'preserved-id', role:'host'}, oldDirectory={devices:[{id:'a'}]}, rendered=[], messages=[];
-  const context = vm.createContext({window:{},meshUiLocked:false,meshUiEpoch:0,meshUiCurrent:()=>true,document:{hidden:false}, currentNodeConfig:previous, meshDirectoryCache:oldDirectory,
+  const context = vm.createContext({window:{},meshUiLocked:false,meshUiReady:true,meshNodeRefresh:null,meshUiEpoch:0,meshUiCurrent:()=>true,document:{hidden:false}, currentNodeConfig:previous, meshDirectoryCache:oldDirectory,
     console:{error(){}}, $:()=>({textContent:''}), setInlineStatus: (...args)=>messages.push(args), showToast(){}, debugLog(){}, syncMeshContextTags(){},
-    renderMeshNode: data=>rendered.push(data), renderMeshDirectory: data=>rendered.push(data),
+    setMeshNodeControls(){},renderMeshNode: data=>rendered.push(data), renderMeshDirectory: data=>rendered.push(data),
     fetch: async url=>({ok:!failDirectory&&(!failNode||url!='/mesh/node'),status:503,json:async()=>url==='/mesh/node'?previous:oldDirectory})
   });
   if(service) context.window.MeshService={fetchNode:async()=>{if(failNode)throw new Error('HTTP 503');return previous;},fetchDirectory:async()=>{if(failDirectory)throw new Error("HTTP 503");return oldDirectory;}};

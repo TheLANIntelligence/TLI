@@ -18,7 +18,7 @@ def _base_snapshot() -> dict:
     }
 
 
-def test_command_center_endpoint_returns_aggregate(authed_client, monkeypatch):
+def test_command_center_endpoint_returns_aggregate(browser_client, monkeypatch):
     monkeypatch.setattr(dp, '_read_state', lambda: {'cpu_pct':None,'ram_pct':None,'probed_ts':1000,'probe_error':'Probe unavailable'})
     monkeypatch.setattr(dp, "_node_snapshot", lambda: {
         "id": "node-1",
@@ -55,10 +55,10 @@ def test_command_center_endpoint_returns_aggregate(authed_client, monkeypatch):
         "peer_count": 0,
         "online_peer_count": 0,
     })
-    monkeypatch.setattr(dp, "_active_alerts", lambda: [])
+    monkeypatch.setattr(dp, "_active_alerts", lambda **kwargs: [])
     monkeypatch.setattr(dp, "get_top_action", lambda: None)
 
-    res = authed_client.get("/dashboard/command-center")
+    res = browser_client.get("/dashboard/command-center")
 
     assert res.status_code == 200
     body = res.json()
@@ -114,7 +114,7 @@ def test_command_center_health_score_reflects_attention_needed():
 def test_command_center_requires_session_when_pin_enabled(client, monkeypatch):
     monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
 
-    res = client.get("/dashboard/command-center")
+    res = client.get("https://testserver/dashboard/command-center")
 
     assert res.status_code == 401
 
@@ -122,8 +122,12 @@ def test_command_center_requires_session_when_pin_enabled(client, monkeypatch):
 def test_action_mutations_require_session_when_pin_enabled(client, monkeypatch):
     monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
 
-    approve = client.post("/actions/approve", json={"name": "Test", "steps": []})
-    run = client.post("/actions/run/act_missing")
+    # Reach PIN admission through the supported browser transport, rather than
+    # stopping at the earlier origin/remote-HTTP boundary.
+    headers = {"Origin": "https://testserver"}
+    approve = client.post("https://testserver/actions/approve", headers=headers,
+                          json={"name": "Test", "steps": []})
+    run = client.post("https://testserver/actions/run/act_missing", headers=headers)
 
     assert approve.status_code == 401
     assert run.status_code == 401

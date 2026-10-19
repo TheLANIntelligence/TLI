@@ -3,6 +3,7 @@ from fastapi import HTTPException
 import tli_state as S
 from conversation_guard import assert_idle
 from workspace_events import publish
+from private_client_authority import checked_call
 
 PROTOCOL = "tli-conversation-settings-v1"
 
@@ -20,9 +21,19 @@ def public(conv):
             "compute_selection": conv.get("compute_selection"), "settings_revision": conv.get("settings_revision", 0)}
 
 
-@S.conversation_transaction
-def get(ident, owner):
-    return public(owned(S.load_conversations(), ident, owner))
+def get(ident, owner, *, check=None):
+    """Optional checked reader; an internal owner alone grants no HTTP access."""
+    authorize = check or (lambda: None)
+    def read():
+        authorize()
+        with S.CONVERSATIONS_LOCK:
+            authorize()
+            conversations = S.load_conversations(check=check) if check is not None else S.load_conversations()
+            authorize()
+            value = public(owned(conversations, ident, owner))
+            authorize()
+        return value
+    return checked_call(authorize, read) if check is not None else read()
 
 
 @S.conversation_transaction

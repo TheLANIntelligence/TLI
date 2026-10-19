@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../js/pin-lock.js'), 'utf8'
 const settings = fs.readFileSync(path.join(__dirname, '../js/settings.js'), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
 function fixture({ response = { data: { enabled: true } }, unlocked = false } = {}) {
-  const nodes = {}, events = {}, docEvents = {}, storage = new Map(unlocked ? [['tli_session_unlocked', '1']] : []), calls = [];
+  const nodes = {}, events = {}, docEvents = {}, storage = new Map(unlocked ? [['tli_session_unlocked', '1']] : []), calls = [], timers = [];
   let handler = async () => response;
   function element() {
     const classes = new Set(['hidden']);
@@ -21,16 +21,16 @@ function fixture({ response = { data: { enabled: true } }, unlocked = false } = 
     Object.defineProperty(n, 'id', { set(id) { nodes[id] = n; } }); return n;
   }
   for (const id of ['tli-lock-screen', 'tli-lock-input', 'tli-lock-error', 'tli-lock-btn', 'tli-lock-submit', 'tli-lock-forgot', 'tli-lock-reset-panel', 'tli-lock-reset-confirm-btn', 'tli-lock-reset-cancel-btn', 'recovery-copy', 'settings-pin-status-desc', 'settings-pin-action-label', 'settings-pin-current', 'settings-pin-save', 'settings-pin-remove', 'settings-pin-callout']) nodes[id] = element();
-  const ctx = vm.createContext({ console, setTimeout() {},
-    CustomEvent: class { constructor(type) { this.type = type; } },
+  const ctx = vm.createContext({ console, setTimeout(callback) { timers.push(callback); },
+    CustomEvent: class { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
     document: { body: { style: {} }, getElementById: id => nodes[id] || null, querySelectorAll: selector => selector === '.tli-pin-nudge' && nodes.nudge ? [nodes.nudge] : [], createElement: element, addEventListener: (event, fn) => (docEvents[event] ||= []).push(fn) },
     sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     localStorage: { getItem: () => 'dismissed', removeItem() {} },
     window: { addEventListener: (event, fn) => (events[event] ||= []).push(fn), dispatchEvent: event => { for (const fn of events[event.type] || []) fn(event); } },
-    fetch: async (url, options) => { calls.push({ url, options }); const result = await handler(url, options); return { ok: (result.status || 200) === 200, status: result.status || 200, json: async () => { if (result.invalidJSON) throw new Error('Bad JSON'); return result.data; } }; },
+    fetch: async (url, options) => { calls.push({ url, options }); const result = await handler(url, options); return { ok: (result.status || 200) === 200, status: result.status || 200, headers: new Headers(result.headers || {}), json: async () => { if (result.invalidJSON) throw new Error('Bad JSON'); return result.data; } }; },
   });
   vm.runInContext(source, ctx);
-  return { ctx, nodes, calls, storage, events, handler(fn) { handler = fn; },
+  return { ctx, nodes, calls, storage, events, timers, handler(fn) { handler = fn; },
     async init() { for (const fn of docEvents.DOMContentLoaded) fn(); await ctx.window.TLIPinLock.checkAndLock(); },
     locked: () => !nodes['tli-lock-screen'].classList.contains('hidden'),
     refresh: () => ctx.window.TLIPinLock.checkAndLock(),
@@ -145,10 +145,14 @@ test('unavailable or malformed access status stays locked and clears the cached 
 });
 
 test('only an explicit disabled status permits the open-access UI, and enabled status asks for PIN', async () => {
-  const f = fixture(); await f.init(); assert.equal(f.locked(), true);
+  const f = fixture(); const unlocks = [];
+  f.ctx.window.addEventListener('tli-session-unlocked', event => unlocks.push(event));
+  await f.init(); assert.equal(f.locked(), true);
   f.handler(async () => ({ data: { enabled: false } })); await f.refresh();
   assert.equal(f.locked(), false); assert.equal(f.nodes['tli-lock-screen'].attrs['aria-hidden'], 'true'); assert.equal(f.nodes['tli-lock-btn'].hidden, true);
   assert.equal(f.nodes['tli-lock-recheck'].hidden, true);
+  assert.equal(unlocks.length, 1);
+  assert.equal(unlocks[0].detail?.source, undefined, 'PIN-disabled status must not trigger automatic recovery after a denied private read');
 });
 
 test('connection failures offer explicit recheck without automatic retries', async () => {
@@ -183,7 +187,8 @@ test('PIN verification requires confirmed success and retains readable security-
 });
 
 test('duplicate PIN submits execute once and confirmed verification unlocks access', async () => {
-  const f = fixture(); let resumed=0; f.ctx.window.addEventListener('tli-session-unlocked',()=>resumed++);
+  const f = fixture(); let resumed=0, unlockDetail;
+  f.ctx.window.addEventListener('tli-session-unlocked',event=>{resumed++;unlockDetail=event.detail;});
   await f.init(); let finish; f.handler(() => new Promise(resolve => { finish = resolve; })); f.nodes['tli-lock-input'].value = '1234';
   const first = f.nodes['tli-lock-submit'].click(); await f.nodes['tli-lock-input'].fire('keydown', { key: 'Enter' }); await f.nodes['tli-lock-submit'].click();
   assert.equal(f.calls.filter(c => c.url.endsWith('/verify')).length, 1);
@@ -191,6 +196,7 @@ test('duplicate PIN submits execute once and confirmed verification unlocks acce
   finish({ data: { ok: true } }); await first;
   assert.equal(f.locked(), false); assert.equal(f.storage.get('tli_session_unlocked'), '1'); assert.equal(f.nodes['tli-lock-input'].value, '');
   assert.equal(resumed,1,'A confirmed unlock resumes subscribed views exactly once');
+  assert.equal(unlockDetail?.source, 'pin-verification', 'Confirmed PIN success can request fresh authorized reads');
 });
 
 test('a late verification success cannot reopen a manually locked view', async () => {
@@ -250,7 +256,8 @@ test('setup verification confirms the supplied PIN and removes the obsolete PIN 
   const f = fixture({ response: { data: { enabled: false } } }); await f.init();
   f.nodes.nudge = f.ctx.document.createElement('aside');
   f.nodes['tli-lock-input'].value = 'unrelated lock-screen input';
-  let resumed = 0; f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+  let resumed = 0, unlockDetail;
+  f.ctx.window.addEventListener('tli-session-unlocked', event => { resumed++; unlockDetail = event.detail; });
   f.handler(async () => ({ data: { ok: true } }));
   assert.equal(await f.ctx.window.TLIPinLock.verifyForSetup('new saved PIN'), true);
   const call = f.calls.find(c => c.url === '/system/pin/verify');
@@ -258,6 +265,7 @@ test('setup verification confirms the supplied PIN and removes the obsolete PIN 
   assert.equal(call.options.credentials, 'same-origin');
   assert.equal(f.storage.get('tli_session_unlocked'), '1');
   assert.equal(f.locked(), false); assert.equal(resumed, 1);
+  assert.equal(unlockDetail?.source, 'pin-verification', 'Setup verification resumes the same guarded reads as the lock screen');
   assert.equal(f.nodes.nudge.removed, true);
   assert.equal(f.nodes['tli-lock-submit'].disabled, false);
 });
@@ -313,4 +321,51 @@ test('background rejection does not override an explicit setup PIN verification'
   finishVerification({ data: { ok: true } });
   assert.equal(await verification, true);
   assert.equal(f.locked(), false); assert.equal(f.storage.get('tli_session_unlocked'), '1');
+});
+
+test('rate-limited PIN verification stays locked, shows the server wait and never schedules a retry', async () => {
+  for (const unlocked of [false, true]) {
+    const f = fixture({ unlocked }); await f.init(); let resumed = 0;
+    f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+    f.handler(async () => ({ status: 429, headers: { 'Retry-After': '42' }, data: { detail: 'Too many PIN attempts. Try again in 42 seconds.' } }));
+    f.nodes['tli-lock-input'].value = 'private-attempt'; await f.nodes['tli-lock-submit'].click();
+    assert.equal(f.locked(), true); assert.equal(f.storage.has('tli_session_unlocked'), false); assert.equal(resumed, 0);
+    assert.match(f.nodes['tli-lock-error'].textContent, /Too many PIN attempts\. Try again in 42 seconds\./);
+    assert.equal(f.nodes['tli-lock-input'].value, '');
+    for (const timer of f.timers.splice(0)) timer(); await tick();
+    assert.equal(f.calls.filter(call => call.url === '/system/pin/verify').length, 1);
+    assert.equal(f.calls.filter(call => call.url === '/system/pin/status').length, 1, 'Rate limiting must not trigger a background access check');
+    assert.equal(f.nodes['tli-lock-submit'].disabled, false, 'Only an explicit later attempt may retry');
+    f.handler(async () => ({ data: { ok: true } })); f.nodes['tli-lock-input'].value = 'explicit-new-attempt';
+    await f.nodes['tli-lock-submit'].click();
+    assert.equal(f.locked(), false); assert.equal(resumed, 1); assert.equal(f.nodes['tli-lock-error'].textContent, '');
+    assert.equal(f.calls.filter(call => call.url === '/system/pin/verify').length, 2);
+  }
+});
+
+test('a lost verification response clears the submitted PIN immediately and remains locked without retrying', async () => {
+  const f = fixture(); await f.init(); let rejectVerification;
+  f.handler(() => new Promise((resolve, reject) => { rejectVerification = reject; }));
+  f.nodes['tli-lock-input'].value = 'private-attempt'; const verification = f.nodes['tli-lock-submit'].click();
+  assert.equal(f.nodes['tli-lock-input'].value, '', 'The secret is cleared before any network result');
+  rejectVerification(new Error('Request body private-attempt')); await verification;
+  for (const timer of f.timers.splice(0)) timer(); await tick();
+  assert.equal(f.locked(), true); assert.equal(f.storage.has('tli_session_unlocked'), false);
+  assert.match(f.nodes['tli-lock-error'].textContent, /Could not reach TLI.*Access remains locked/);
+  assert.doesNotMatch(f.nodes['tli-lock-error'].textContent, /private-attempt/);
+  assert.equal(f.calls.filter(call => call.url === '/system/pin/verify').length, 1);
+});
+
+test('setup verification propagates a rate limit and requires a new explicit attempt to unlock', async () => {
+  const f = fixture(); await f.init(); let resumed = 0;
+  f.ctx.window.addEventListener('tli-session-unlocked', () => resumed++);
+  f.handler(async () => ({ status: 429, headers: { 'Retry-After': '19' }, data: { detail: 'Too many PIN attempts. Try again in 19 seconds.' } }));
+  await assert.rejects(f.ctx.window.TLIPinLock.verifyForSetup('private-attempt'), /Too many PIN attempts\. Try again in 19 seconds\./);
+  for (const timer of f.timers.splice(0)) timer(); await tick();
+  assert.equal(f.locked(), true); assert.equal(f.storage.has('tli_session_unlocked'), false); assert.equal(resumed, 0);
+  assert.equal(f.calls.filter(call => call.url === '/system/pin/verify').length, 1);
+  f.handler(async () => ({ data: { ok: true } }));
+  assert.equal(await f.ctx.window.TLIPinLock.verifyForSetup('explicit-new-attempt'), true);
+  assert.equal(f.locked(), false); assert.equal(resumed, 1);
+  assert.equal(f.calls.filter(call => call.url === '/system/pin/verify').length, 2);
 });

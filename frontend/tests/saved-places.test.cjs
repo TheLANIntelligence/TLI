@@ -56,6 +56,28 @@ test('favorite panel options and navigation use the current shared catalogue lab
   await f.api.open();await find(f,'Open').click();assert.deepEqual(f.opened,['panel-reports']);assert.equal(f.scans.length,0);
 });
 
+test('old HomeLab favorites stay stored but disappear from manager, Dashboard and panel choices', async () => {
+  const hidden = row({id:'c'.repeat(32),name:'My lab',kind:'panel',target:'panel-homelab'});
+  const rows = [hidden,row()], original = JSON.stringify(rows);
+  const navigation = [{id:'panel-homelab',label:'HomeLab',kind:'panel'},{id:'panel-files',label:'Files',kind:'panel'}];
+  const f = fixture(rows,{dashboard:true,navigation});
+  assert.deepEqual(f.nodes['places-panel'].children.map(node=>node.value),['panel-files']);
+  await f.api.refreshHome();
+  assert.doesNotMatch(content(f.nodes['places-home-list']),/My lab|HomeLab/);
+  assert.match(content(f.nodes['places-home-list']),/My drive/);
+  assert.equal(f.nodes['places-home-count'].textContent,'1');
+  await f.api.open();
+  assert.doesNotMatch(content(f.nodes['places-list']),/My lab|HomeLab/);
+  assert.match(content(f.nodes['places-list']),/My drive/);
+  assert.match(f.nodes['places-status'].textContent,/^1 saved places\./);
+  await f.api.openFavorite(hidden.id);
+  assert.match(f.nodes['places-status'].textContent,/no longer available/);
+  assert.equal(f.nodes['places-entry-'+hidden.id],undefined);
+  assert.ok(f.requests.every(([,options])=>options.method==='GET'));
+  assert.equal(f.scans.length+f.opened.length+f.notes.length,0);
+  assert.equal(JSON.stringify(rows),original);
+});
+
 test('search opens and focuses the existing favorite without checking or executing its target', async () => {
   const f = fixture(); await f.api.openFavorite(row().id);
   assert.equal(f.requests.length, 1); assert.equal(f.requests[0][1].method, 'GET');

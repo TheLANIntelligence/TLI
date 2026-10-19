@@ -241,20 +241,21 @@ test('older or unreachable hosts cannot silently ignore opt-out', async () => {
 test('401 capability preflight dispatches the real lock event and resets ordinary chat controls once', async () => {
   const f = fixture();
   const app = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
-  const listener = app.match(/function clearLocalChatSession\(\) \{[\s\S]*?\n\}\r?\nwindow\.addEventListener\("tli-session-locked", clearLocalChatSession\);/);
-  assert.ok(listener, 'existing app session-lock handler');
+  const start = app.indexOf('function clearLocalChatSession()'), end = app.indexOf('let meshDirectoryCache =',start);
+  assert.ok(start >= 0 && end > start, 'real chat lifecycle handler block');
   let deleted = 0, aborted = 0;
   f.ctx.window.TLIConversationLoad = { deleted() { deleted++; } };
   f.ctx.inFlightController = { abort() { aborted++; } };
   for (const id of ['chat-input', 'chat-send-btn', 'abort-chat-btn']) f.nodes[id] = f.element(id === 'chat-input' ? 'textarea' : 'button');
   f.nodes['chat-input'].value = 'Private question'; f.nodes['chat-send-btn'].disabled = true; f.nodes['abort-chat-btn'].disabled = false;
-  vm.runInContext(listener[0], f.ctx);
+  vm.runInContext(app.slice(start,end), f.ctx);
   f.nodes['memory-use-saved'].checked = false;
   const request = f.api.requestContext({});
   f.handler(() => ({ status: 401, body: { detail: 'Locked' } }));
   await assert.rejects(f.api.ensureAvailable(request), /could not confirm/);
   assert.deepEqual(f.dispatched.filter(type => type !== 'tli-chat-context-changed'), ['tli-session-locked']);
   assert.equal(deleted, 1); assert.equal(aborted, 1);
+  assert.equal(f.ctx.window.TLIConversationLoad.locked, true); assert.equal(f.ctx.window.TLIConversationLoad.ready, false);
   assert.equal(f.nodes['chat-input'].value, ''); assert.equal(f.nodes['chat-send-btn'].disabled, false); assert.equal(f.nodes['abort-chat-btn'].disabled, true);
   assert.equal(f.api.isCurrent(request), false); assert.equal(f.calls.length, 1);
 });

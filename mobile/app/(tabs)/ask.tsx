@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
+import { Alert, Image, Keyboard, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, ScrollView, Switch, TextInput, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useHeaderHeight } from 'expo-router/react-navigation';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -53,7 +53,7 @@ export default function AskScreen() {
   const report = reports.data?.reports.find(r => r.id === reportId);
   const contextCount = state.selectedNotes.length + Number(!!state.selectedCase) + Number(!!photo) + Number(!!target) + Number(!!reportId)+documents.length;
   const contextConflict = !!state.selectedCase && !!(photo || target || reportId || state.selectedNotes.length) || !!state.selectedNotes.length && !!(photo || target || reportId)||!!documents.length&&!!(photo||target||reportId||state.selectedNotes.length||state.selectedCase||state.computeSelection);
-  const contextSummary = [state.selectedCase?.title, state.selectedNotes.length ? `${state.selectedNotes.length} selected notes` : '', photo ? 'Photo' : '', target ? targetDevice?.name || 'Selected device' : '', reportId ? 'Saved report' : ''].filter(Boolean).join(' · ');
+  const contextSummary = [state.selectedCase?.title, state.selectedNotes.length ? `${state.selectedNotes.length} selected notes` : '', photo ? 'Photo' : '', documents.length ? `${documents.length} document${documents.length === 1 ? '' : 's'}` : '', target ? targetDevice?.name || 'Selected device' : '', reportId ? 'Saved report' : ''].filter(Boolean).join(' · ');
   const sharingSummary = [!useSaved ? 'Saved-note recall off' : '', !useHistory ? 'Earlier conversation off' : ''].filter(Boolean).join(' · ');
   const openPanel = (next: 'context' | 'status') => { Keyboard.dismiss(); setPanel(next); };
   const leaveContext = (action: () => void) => {
@@ -115,6 +115,21 @@ export default function AskScreen() {
     catch (error) { if (mounted.current && clientRef.current === client) setError(errorText(error)); }
     finally { if (mounted.current) setPhotoBusy(false); }
   };
+  const addPhoto = () => {
+    Keyboard.dismiss();
+    if (photoBusy || state.sending || state.loadingConversation) return;
+    if (!state.bootstrap?.capabilities.vision) { setError('Photo questions need a vision model on your TLI computer. Open connection details to check AI readiness. Your draft is kept.'); return; }
+    const client = state.client, token = navigationEpoch.current;
+    const select = (source: 'camera' | 'library') => {
+      if (mounted.current && foregroundRef.current && clientRef.current === client && navigationEpoch.current === token) void pick(source);
+    };
+    if (Platform.OS === 'web') { select('library'); return; }
+    Alert.alert('Add a photo', 'Review your photo before sending it with your question.', [
+      { text: 'Take photo', onPress: () => select('camera') },
+      { text: 'Choose photo', onPress: () => select('library') },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
   const submit = async () => {
     if (!canSend || submitting.current) return;
     submitting.current = true;
@@ -169,9 +184,11 @@ export default function AskScreen() {
       {error.toLowerCase().includes('access') && <Button secondary title="Open phone settings" onPress={() => void Linking.openSettings()} />}
     </ScrollView>
     <View testID="chat-composer" style={{ marginHorizontal: 10, marginBottom: 8, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 12, gap: 6, flexShrink: 0, backgroundColor: t.card, borderWidth: 1, borderColor: t.borderStrong, borderRadius: 24, boxShadow: `0px 5px 18px ${t.dark ? "#00000024" : "#173f3114"}` }}>
-      <Row style={{ gap: 8 }}><ChatAction title={contextCount ? `Context · ${contextCount}` : 'Add context'} accessibilityLabel={contextCount ? `Context · ${contextCount}` : 'Add context'} onPress={() => openPanel('context')} disabled={state.sending || state.loadingConversation} /><View style={{ flex: 1, minWidth: 0 }}><Copy muted size={12} numberOfLines={1}>{contextSummary || 'Photos, notes & devices'}</Copy>{!!sharingSummary && <Copy muted size={11} numberOfLines={2}>{sharingSummary}</Copy>}</View></Row>
+      <Row style={{ gap: 6, flexWrap: 'wrap' }}><ChatAction title="Photo" accessibilityLabel="Add photo" onPress={addPhoto} disabled={state.sending || state.loadingConversation || photoBusy || !state.foreground} /><ChatAction title="Document" accessibilityLabel="Add document" onPress={() => { Keyboard.dismiss(); setDocumentReview(true); }} disabled={state.sending || state.loadingConversation || !state.foreground} /><ChatAction title={contextCount ? `Context · ${contextCount}` : 'Add context'} accessibilityLabel={contextCount ? `Context · ${contextCount}` : 'Add context'} onPress={() => openPanel('context')} disabled={state.sending || state.loadingConversation} /></Row>
+      {!!(contextSummary || sharingSummary) && <Copy muted size={12} numberOfLines={2}>{[contextSummary, sharingSummary].filter(Boolean).join(' · ')}</Copy>}
       {contextConflict && <Copy size={12} style={{ color: t.danger }}>Selected context conflicts. Review it before sending.</Copy>}
       <Row style={{ gap: 8, alignItems: 'flex-end' }}><TextInput testID="chat-message-input" accessibilityLabel="Message to TLI" placeholder="Message to TLI" placeholderTextColor={t.muted} multiline value={draft} onChangeText={updateDraft} maxLength={16000} editable={!state.sending && !state.loadingConversation} style={[styles.input, { color: t.text, borderColor: t.border, backgroundColor: t.background, flex: 1, minWidth: 0, maxHeight: compactChat ? 72 : 120, minHeight: 52, textAlignVertical: 'top', paddingHorizontal: 12 }]} /><Button title={state.sending ? 'Stop' : photo ? 'Send photo' : 'Send'} accessibilityLabel={state.sending ? 'Stop waiting' : photo ? 'Send message and photo' : 'Send message'} disabled={!state.sending && !canSend} onPress={() => state.sending ? state.stop() : void submit()} /></Row>
+      {!compactChat && !draft && !state.sending && <Copy muted size={11}>Prefer speaking? Use your keyboard’s microphone, then review the words and tap Send.</Copy>}
     </View>
     </View>
     <Modal visible={!!panel && state.foreground} animationType="slide" presentationStyle="pageSheet" onDismiss={contextDismissed} onRequestClose={() => setPanel(null)}><SafeAreaView testID={panel === 'context' ? 'chat-context-sheet' : 'chat-status-sheet'} style={{ flex: 1, backgroundColor: t.background }}><View style={{ paddingHorizontal: 18, borderBottomWidth: 1, borderColor: t.border }}><Row style={{ justifyContent: 'space-between' }}><Copy size={20} weight="600">{panel === 'context' ? 'Message context' : 'Connection details'}</Copy><IconButton icon="close-outline" label={panel === 'context' ? 'Close message context' : 'Close connection details'} onPress={() => setPanel(null)} /></Row></View><Screen contentContainerStyle={{ padding: 18, gap: 16 }}>

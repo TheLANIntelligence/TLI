@@ -117,14 +117,14 @@ def test_descendants_cannot_consume_their_parent_reservation(monkeypatch, tmp_pa
 
     assert tree["size"] == 147
     assert len(retained_nodes(tree)) == 10
-    assert [row["name"] for row in tree["children"]] == ["Many files"]
+    assert [row["name"] for row in tree["children"]] == ["Many files", "later.bin"]
     folder = tree["children"][0]
-    assert len(folder["children"]) == 8
+    assert len(folder["children"]) == 7
     assert folder["size"] == 140
-    assert folder["omitted_bytes"] == 84
-    assert folder["omitted_entries"] == 12
-    assert tree["omitted_bytes"] == 7
-    assert tree["omitted_entries"] == 1
+    assert folder["omitted_bytes"] == 91
+    assert folder["omitted_entries"] == 13
+    assert tree.get("omitted_bytes", 0) == 0
+    assert tree.get("omitted_entries", 0) == 0
     assert meta["representation_limited"] is True
     assert meta["partial"] is False
     assert meta["files"] == len(largest) == 21
@@ -160,9 +160,9 @@ def test_empty_directory_reservation_does_not_starve_later_folders(monkeypatch, 
     tree, _, meta = algorithms._scan_tree(tmp_path, max_nodes=3)
     assert tree["size"] == 9
     assert len(retained_nodes(tree)) == 3
-    assert [row["name"] for row in tree["children"]] == ["Useful"]
-    assert tree["children"][0]["children"][0]["name"] == "first.bin"
-    assert tree["children"][0]["omitted_bytes"] == 3
+    assert [row["name"] for row in tree["children"]] == ["Useful", "later.bin"]
+    assert tree["children"][0]["children"] == []
+    assert tree["children"][0]["omitted_bytes"] == 5
     assert meta["partial"] is False
 
 

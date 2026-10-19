@@ -18,6 +18,27 @@
 .download-release-caption { text-align: right; color: var(--download-muted); font-size: 12px; line-height: 2; }
 .download-release-caption a { color: var(--download-text); }
 .platform-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.companion-intro { margin-top: 20px; padding: 32px 36px; border: 1px solid var(--download-border); border-radius: 20px; background: #edf4ed; scroll-margin-top: 12px; }
+.companion-intro > div { min-width: 0; }
+.companion-intro h2 { margin: 10px 0; font-size: clamp(25px,3vw,34px); letter-spacing: -.04em; line-height: 1.15; }
+.companion-intro p:not(.eyebrow) { margin: 0; font-size: 15px; line-height: 1.7; color: var(--download-muted); }
+.companion-intro .eyebrow { font-size: 11px; }
+.companion-intro h3 { margin: 0 0 8px; font-size: 17px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; }
+.companion-intro .companion-release-label { margin-bottom: 12px; font-size: 13px; font-weight: 600; color: var(--download-accent); }
+.companion-download-action { flex: 0 0 270px; }
+.companion-download-action .button { display: flex; gap: 16px; justify-content: space-between; min-height: 52px; font-size: 14px; }
+.companion-download-action #android-download-note { margin-top: 10px; font-size: 12px; text-align: center; }
+.companion-download { margin-top: 28px; padding-top: 25px; border-top: 1px solid var(--download-border); }
+.companion-download-heading { display: flex; align-items: center; justify-content: space-between; gap: 22px; }
+.companion-download-heading > * { min-width: 0; }
+.companion-steps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 30px; margin: 28px 0; padding-left: 22px; color: var(--download-muted); font-size: 15px; line-height: 1.7; }
+.companion-steps li { padding-left: 5px; }
+.companion-steps li::marker { font-weight: 600; color: var(--download-accent); }
+.companion-update { padding: 20px; border: 1px solid var(--download-border); border-radius: 12px; background: var(--download-surface); }
+.companion-intro .disclosure-content p + p { margin-top: 14px; }
+.companion-intro .copyable { background: var(--download-surface); }
+.companion-intro .copy-button { min-height: 44px; font-size: 13px; }
+@media (max-width: 760px) { .companion-download-heading { flex-direction: column; align-items: stretch; } .companion-intro { padding: 24px; } .companion-download-action { flex-basis: auto; } .companion-steps { grid-template-columns: 1fr; gap: 24px; } }
 .platform-card { min-width: 0; padding: 36px; background: var(--download-surface); border: 1px solid var(--download-border); border-radius: 20px; box-shadow: 0 15px 40px rgba(54,101,66,.035); }
 .platform-windows { background: linear-gradient(125deg,rgba(176,220,182,.22),rgba(226,243,225,.08)),#ffffff; border-color: rgba(39,108,65,.25); }
 .platform-topline { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 35px; }

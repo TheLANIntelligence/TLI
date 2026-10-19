@@ -60,22 +60,23 @@ def test_warning_explanations_include_clearing_conditions_and_monitoring_gaps():
     assert rows[0]["kind"] == "monitoring" and "missing" in rows[0]["clears_when"].lower()
 
 
-def test_preferences_default_persistence_and_invalid_mode(tmp_path, monkeypatch, authed_client):
+def test_preferences_default_persistence_and_invalid_mode(tmp_path, monkeypatch, browser_client):
     monkeypatch.setattr(S, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(dp, "_narrator_policy", NarratorPolicy())
     assert settings.read() == {"mode": "balanced"}
     assert not (tmp_path / "narrator-settings.json").exists()
-    result = authed_client.put("/dashboard/narrator/settings", json={"mode": "quiet"})
+    result = browser_client.put("/dashboard/narrator/settings", json={"mode": "quiet"})
     assert result.status_code == 200 and result.json()["scope"] == "host"
     assert dp._narrator_policy.mode == "quiet" and settings.read()["mode"] == "quiet"
-    assert authed_client.get("/dashboard/narrator/settings").json()["mode"] == "quiet"
-    assert authed_client.put("/dashboard/narrator/settings", json={"mode": "off"}).status_code == 422
+    assert browser_client.get("/dashboard/narrator/settings").json()["mode"] == "quiet"
+    assert browser_client.put("/dashboard/narrator/settings", json={"mode": "off"}).status_code == 422
 
 
 def test_preferences_require_authentication(client, monkeypatch):
     monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
-    assert client.put("/dashboard/narrator/settings", json={"mode": "detailed"}).status_code == 401
-    assert client.get("/dashboard/narrator/settings").status_code == 401
+    assert client.put("https://testserver/dashboard/narrator/settings", json={"mode": "detailed"},
+                      headers={"Origin": "https://testserver"}).status_code == 401
+    assert client.get("https://testserver/dashboard/narrator/settings").status_code == 401
 
 
 def test_failed_preferences_preserve_bytes_and_active_mode(tmp_path, monkeypatch):

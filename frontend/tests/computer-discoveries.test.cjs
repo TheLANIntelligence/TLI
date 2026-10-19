@@ -37,6 +37,16 @@ test('unknown permission state and inference nodes remain separately visible', (
   assert.deepEqual(ids(rows), ['unknown', 'compute', 'new']);
 });
 
+test('compute discoveries never suppress a full host at the same endpoint', () => {
+  for (const profile of [{peer_profile:'inference_node'}, {connection_state:'inference_only'}]) {
+    const rows = [peer('old-host', '09'), peer('current-host', '10'), peer('compute', '11', profile)];
+    const original = JSON.stringify(rows);
+    assert.deepEqual(ids(rows), ['current-host', 'compute']);
+    assert.deepEqual(ids(rows.slice().reverse()), ['compute', 'current-host']);
+    assert.equal(JSON.stringify(rows), original);
+  }
+});
+
 test('ties and invalid timestamps resolve consistently, using registry identity', () => {
   const rows = [peer('a', '11', {last_seen:'not-a-date', node_id:'z'}), peer('b', '11', {last_seen:null, node_id:'a'})];
   assert.deepEqual(ids(rows), ['b']);

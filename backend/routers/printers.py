@@ -4,19 +4,16 @@
 Endpoints:
 - GET      /api/printers
 - GET      /api/printers/context
-- GET|POST /api/printers/test_print
-- GET|POST /api/printers/open_scan
-
-IMPORTANT:
-- main.py already defines /api/printers/open_add and /api/printers/discover.
-  This router intentionally does NOT define /api/printers/open_add to avoid route collisions.
+- POST /api/printers/test_print, /open_scan, /open_add, /discover
+- Legacy GET controls return 405 without dispatching a host action.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional
+from collections.abc import Callable
 import json
 import platform
 import re
@@ -26,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from process_utils import hidden_process_kwargs
+from browser_authority import browser_control_access
 
 # --- Optional SNMP (for ink/toner) ---
 try:
@@ -62,6 +60,10 @@ def _cfg_get_printer_override(cfg: Dict[str, Any], printer_name: str) -> Dict[st
 printer_router = APIRouter(tags=["printers"])
 router = printer_router
 __all__ = ["printer_router", "router"]
+
+
+def _private_json(content, status_code=200):
+    return JSONResponse(content, status_code=status_code, headers={"Cache-Control": "no-store"})
 
 
 def _ps_json(script: str, timeout_s: int = 12) -> Any:
@@ -303,7 +305,8 @@ def _print_text_windows_default_printer(text: str) -> None:
     with tempfile.TemporaryDirectory(prefix="tli_print_") as td:
         p = Path(td) / "tli_test_page.txt"
         p.write_text(text, encoding="utf-8")
-        ps = f"$fp = '{str(p)}'; Get-Content -Raw -Encoding UTF8 $fp | Out-Printer"
+        literal_path = "'" + str(p).replace("'", "''") + "'"
+        ps = f"$fp = {literal_path}; Get-Content -LiteralPath $fp -Raw -Encoding UTF8 | Out-Printer"
         r = _run_powershell(ps)
         if r.returncode != 0:
             msg = (r.stderr or r.stdout or "").strip() or "Print failed"
@@ -341,12 +344,17 @@ try {
         return {"total": 0, "by_printer": {}}
 
 
-@printer_router.get("/api/printers")
-def get_printers() -> Any:
+def get_printers(check: Optional[Callable[[], None]] = None) -> Any:
+    """Internal inventory service; HTTP callers supply their live access check."""
+    check = check or (lambda: None)
+    check()
     if platform.system() != "Windows":
-        return _cups_list_printers()
+        result = _cups_list_printers()
+        check()
+        return result
 
     cfg = _load_snmp_cfg()
+    check()
     ps = r"""
 $printers = Get-Printer | Select-Object Name,DriverName,PortName,Location,PrinterStatus,Default
 $ports    = Get-PrinterPort | Select-Object Name,PrinterHostAddress,HostName,PortNumber,Description
@@ -360,7 +368,9 @@ $default  = (Get-CimInstance Win32_Printer | Where-Object {$_.Default -eq $true}
     try:
         data = _ps_json(ps) or {}
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        check()
+        return _private_json({"ok": False, "error": str(e)}, status_code=500)
+    check()
 
     printers = data.get("printers") or []
     ports = data.get("ports") or []
@@ -426,14 +436,20 @@ $default  = (Get-CimInstance Win32_Printer | Where-Object {$_.Default -eq $true}
         )
 
     out.sort(key=lambda x: (0 if x.get("is_default") else 1, (x.get("name") or "").lower()))
+    check()
     return out
 
 
+@printer_router.get("/api/printers")
+def api_get_printers(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    return get_printers(check=check)
+
+
 @printer_router.get("/api/printers/context")
-def get_printer_context() -> Any:
-    printers = get_printers()
+def get_printer_context(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    printers = get_printers(check=check)
     if isinstance(printers, dict) and printers.get("ok") is False:
-        return JSONResponse(printers, status_code=500)
+        return _private_json(printers, status_code=500)
 
     arr: List[Dict[str, Any]] = printers if isinstance(printers, list) else []
     default_name: Optional[str] = None
@@ -442,7 +458,9 @@ def get_printer_context() -> Any:
             default_name = p.get("name") or p.get("system_name")
             break
 
+    check()
     jobs = _windows_job_counts() if platform.system() == "Windows" else _cups_job_counts()
+    check()
 
     return {
         "default_printer": default_name,
@@ -453,34 +471,47 @@ def get_printer_context() -> Any:
 
 
 @printer_router.get("/api/printers/open_scan")
+@printer_router.get("/api/printers/open_add")
+@printer_router.get("/api/printers/test_print")
+@printer_router.get("/api/printers/discover")
+def retired_get_control() -> Any:
+    raise HTTPException(405, "Printer actions require POST from the TLI browser.", headers={"Allow": "POST", "Cache-Control": "no-store"})
+
+
 @printer_router.post("/api/printers/open_scan")
-def open_scan() -> Any:
+def open_scan(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    check()
     try:
         if platform.system() == "Windows":
             _open_windows_scan_app()
         else:
             _open_scan_posix()
-        return {"ok": True}
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+        check()
+        return _private_json({"ok": False, "message": str(e)}, status_code=500)
+    check()
+    return {"ok": True}
 
 
-@printer_router.get("/api/printers/open_add")
 @printer_router.post("/api/printers/open_add")
-def open_add_printer() -> Any:
+def open_add_printer(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    check()
     try:
         if platform.system() == "Windows":
             subprocess.Popen(["explorer.exe", "ms-settings:printers"], close_fds=True)
         else:
             _open_add_printer_posix()
-        return {"ok": True}
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+        check()
+        return _private_json({"ok": False, "message": str(e)}, status_code=500)
+    check()
+    return {"ok": True}
 
 
-@printer_router.get("/api/printers/discover")
-def discover_printers() -> Any:
+@printer_router.post("/api/printers/discover")
+def discover_printers(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
     """Trigger printer discovery — returns current printer list after a brief probe."""
+    check()
     if platform.system() == "Windows":
         try:
             # Kick off WSD discovery asynchronously (best-effort, non-blocking)
@@ -493,20 +524,23 @@ def discover_printers() -> Any:
         except Exception:
             pass
     # On macOS/Linux CUPS auto-discovers via Bonjour/Avahi — just return current list
-    return get_printers()
+    check()
+    return get_printers(check=check)
 
 
-@printer_router.get("/api/printers/test_print")
 @printer_router.post("/api/printers/test_print")
-def test_print() -> Any:
+def test_print(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    check()
     try:
         if platform.system() == "Windows":
             _print_text_windows_default_printer(_tli_test_page())
         else:
             _print_text_cups(_tli_test_page())
-        return {"ok": True}
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)}, status_code=500)
+        check()
+        return _private_json({"ok": False, "message": str(e)}, status_code=500)
+    check()
+    return {"ok": True}
 
 
 # =====================================================
@@ -514,11 +548,13 @@ def test_print() -> Any:
 # =====================================================
 
 @printer_router.get("/api/printers/snmp/community")
-def get_snmp_community_cfg() -> Any:
-    return {"ok": True, "cfg": _load_snmp_cfg(), "snmp_available": _SNMP_AVAILABLE}
+def get_snmp_community_cfg(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
+    cfg = _load_snmp_cfg()
+    check()
+    return {"ok": True, "cfg": cfg, "snmp_available": _SNMP_AVAILABLE}
 
 @printer_router.post("/api/printers/snmp/community")
-def set_snmp_community_cfg(payload: Dict[str, Any]) -> Any:
+def set_snmp_community_cfg(payload: Dict[str, Any], check: Callable[[], None] = Depends(browser_control_access)) -> Any:
     cfg = _load_snmp_cfg()
     default = payload.get("default_community")
     if default:
@@ -535,21 +571,25 @@ def set_snmp_community_cfg(payload: Dict[str, Any]) -> Any:
         if payload.get("hostname"):
             cfg["printers"][pname]["hostname"] = str(payload.get("hostname"))
 
+    check()
     _save_snmp_cfg(cfg)
+    check()
     return {"ok": True, "cfg": cfg}
 
 @printer_router.post("/api/printers/ip_override")
-def set_printer_ip_override(payload: Dict[str, Any]) -> Any:
+def set_printer_ip_override(payload: Dict[str, Any], check: Callable[[], None] = Depends(browser_control_access)) -> Any:
     pname = payload.get("printer_name")
     ip = payload.get("ip")
     if not pname or not ip:
-        return JSONResponse({"ok": False, "error": "printer_name and ip required"}, status_code=400)
+        return _private_json({"ok": False, "error": "printer_name and ip required"}, status_code=400)
 
     cfg = _load_snmp_cfg()
     cfg.setdefault("printers", {})
     cfg["printers"][pname] = cfg["printers"].get(pname, {})
     cfg["printers"][pname]["ip"] = str(ip)
+    check()
     _save_snmp_cfg(cfg)
+    check()
     return {"ok": True, "printer_name": pname, "ip": ip}
 
 def _ping(ip: str, timeout_s: int = 3) -> bool:
@@ -562,10 +602,10 @@ def _ping(ip: str, timeout_s: int = 3) -> bool:
         return False
 
 @printer_router.get("/api/printers/health")
-def printers_health() -> Any:
+def printers_health(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
     cfg = _load_snmp_cfg()
     try:
-        plist = get_printers()
+        plist = get_printers(check=check)
         # if get_printers returned JSONResponse, normalize
         if isinstance(plist, dict) and plist.get("ok") is False:
             return {"ok": False, "error": plist.get("error")}
@@ -574,7 +614,9 @@ def printers_health() -> Any:
         for pr in (plist or []):
             name = pr.get("name")
             ip = pr.get("ip") or _cfg_get_printer_override(cfg, name).get("ip")
+            check()
             reachable = _ping(ip) if ip else False
+            check()
             state = "unknown"
             if ip and reachable:
                 state = "ready"
@@ -587,9 +629,13 @@ def printers_health() -> Any:
                 "state": state,
                 "ts": datetime.now(timezone.utc).isoformat()
             })
+        check()
         return {"ok": True, "health": results}
+    except HTTPException:
+        raise
     except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+        check()
+        return _private_json({"ok": False, "error": str(e)}, status_code=500)
 
 # SNMP Printer-MIB supplies
 # OIDs (prtMarkerSuppliesTable):
@@ -625,16 +671,17 @@ def _parse_index(oid_key: str) -> str:
     return oid_key.split(_OID_SUP_DESC + ".")[-1] if _OID_SUP_DESC in oid_key else oid_key.split(".")[-1]
 
 @printer_router.get("/api/printers/supplies")
-def printers_supplies() -> Any:
+def printers_supplies(check: Callable[[], None] = Depends(browser_control_access)) -> Any:
 
     cfg = _load_snmp_cfg()
     now = datetime.now(timezone.utc).timestamp()
 
     # cache key is printer name+ip
-    plist = get_printers()
+    plist = get_printers(check=check)
     results = []
 
     for pr in (plist or []):
+        check()
         name = pr.get("name")
         ip = pr.get("ip") or _cfg_get_printer_override(cfg, name).get("ip")
         if not ip:
@@ -657,9 +704,13 @@ def printers_supplies() -> Any:
             continue
 
         try:
+            check()
             descs = _snmp_walk(ip, community, _OID_SUP_DESC, timeout=1, retries=0)
+            check()
             maxs  = _snmp_walk(ip, community, _OID_SUP_MAX,  timeout=1, retries=0)
+            check()
             lvls  = _snmp_walk(ip, community, _OID_SUP_LVL,  timeout=1, retries=0)
+            check()
 
             items = []
             # Build by index suffix from desc keys
@@ -694,9 +745,13 @@ def printers_supplies() -> Any:
 
             _SUPPLIES_CACHE[cache_key] = {"ts": now, "data": data}
             results.append(data)
+        except HTTPException:
+            raise
         except Exception as e:
+            check()
             data = {"name": name, "ip": ip, "ok": False, "error": str(e)}
             _SUPPLIES_CACHE[cache_key] = {"ts": now, "data": data}
             results.append(data)
 
+    check()
     return {"ok": True, "supplies": results}

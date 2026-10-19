@@ -191,3 +191,54 @@ test('unlocking during a pending dashboard refresh cannot reopen a panel the use
   assert.equal(f.active().length, 0);
   assert.equal(f.intervals.size, 0);
 });
+
+test('dashboard PIN-off unlock after an access failure cannot retry automatically or use legacy fallback', async () => {
+  const f = fixture(dashSource);
+  f.nodes.set('panel-dashboard2', {hidden:false, classList:{contains:() => false}});
+  f.respond(async () => {
+    f.window.emit('tli-session-locked');
+    f.window.emit('tli-session-unlocked');
+    return {ok:false, status:401, json:async () => ({detail:'Expired cookie'})};
+  });
+  f.api.onOpen(); await tick(); await tick();
+  assert.deepEqual(f.calls, ['/dashboard/command-center']);
+  assert.equal(f.active().length, 0);
+  assert.equal(f.intervals.size, 0);
+  f.window.emit('tli-session-unlocked');
+  await f.hide(true); await f.hide(false);
+  assert.deepEqual(f.calls, ['/dashboard/command-center']);
+});
+
+test('dashboard denied access clears polling and waits for a confirmed access event', async () => {
+  const f = fixture(dashSource);
+  f.nodes.set('panel-dashboard2', {hidden:false, classList:{contains:() => false}});
+  f.respond(async () => ({ok:false, status:403, json:async () => ({detail:'Use HTTPS'})}));
+  f.api.onOpen(); await tick();
+  assert.deepEqual(f.calls, ['/dashboard/command-center']);
+  assert.equal(f.intervals.size, 0);
+  assert.equal(f.active().length, 0);
+  let checks = 0;
+  f.window.EventInterpreter = {retry:() => { checks++; }};
+  f.api.refresh();
+  assert.equal(checks, 1);
+  assert.equal(f.calls.length, 1);
+  f.respond(async url => reply(url === '/api/mesh/health' ? {nodes:[]} : {ok:true, devNames:[], devCount:0, activeAlerts:[], recent_receipts:[]}));
+  f.window.emit('tli-private-observation-ready'); await tick();
+  assert.equal(f.calls.filter(url => url === '/dashboard/command-center').length, 2);
+  assert.equal(f.active().length, 1);
+});
+
+test('dashboard ignores a late unauthorized result after a new session check', async () => {
+  const f = fixture(dashSource), pending = deferred();
+  f.nodes.set('panel-dashboard2', {hidden:false, classList:{contains:() => false}});
+  f.respond(() => pending.promise);
+  f.api.onOpen(); await tick();
+  f.window.emit('tli-session-locked');
+  f.window.emit('tli-session-unlocked');
+  f.respond(async url => reply(url === '/api/mesh/health' ? {nodes:[]} : {ok:true, devNames:[], devCount:0, activeAlerts:[], recent_receipts:[]}));
+  f.window.emit('tli-private-observation-ready');
+  pending.resolve({ok:false, status:401, json:async () => ({detail:'Old session'})});
+  await tick(); await tick();
+  assert.equal(f.calls.filter(url => url === '/dashboard/command-center').length, 2);
+  assert.equal(f.active().length, 1);
+});

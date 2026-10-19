@@ -62,7 +62,7 @@ for (const [successes, summary] of [
   assert.equal(f.text().split(summary).length - 1, 2, 'Visible outcome and saved history retain the exact summary');
 });
 test('transport failure or incomplete Run response keeps earlier result and requires a new explicit review',async()=>{const f=fixture();await opened(f);await readyRun(f);await f.click('Run reviewed routine');for(const problem of['network','malformed','conflict']){f.handler(f.defaults);await readyRun(f);f.handler(async()=>{if(problem==='network')throw Error('Lost response');return problem==='conflict'?{http:409,data:{detail:'Targets changed; no steps ran'}}:{ok:true,results:[],summary:'Wrong count',receipt_saved:true}});await f.click('Run reviewed routine');assert.match(f.text(),/Run outcome is unconfirmed/);assert.match(f.text(),/Last received run result/);assert.equal(f.find('Run reviewed routine'),undefined);}assert.equal(f.calls.filter(c=>c.url.includes('/run/')).length,4);});
-test('lock before queued click prevents mutation; late reads and actions cannot reopen private state',async()=>{const f=fixture();await opened(f);await readyRun(f);const pending=f.find('Run reviewed routine').click();f.event('tli-session-locked');await pending;assert.equal(f.calls.some(c=>c.url.includes('/run/')),false);assert.equal(f.text(),'');f.event('tli-session-unlocked');await opened(f);await readyRun(f);let finish;f.handler(()=>new Promise(r=>finish=r));const running=f.find('Run reviewed routine').click();await tick();f.event('tli-session-locked');finish({ok:true,results:[{ok:true}],summary:'Accepted',receipt_saved:true});await running;assert.equal(f.text(),'');});
+test('lock before queued click prevents mutation; late reads and actions cannot reopen private state',async()=>{const f=fixture();await opened(f);await readyRun(f);const pending=f.find('Run reviewed routine').click();f.event('tli-session-locked');await pending;assert.equal(f.calls.some(c=>c.url.includes('/run/')),false);assert.equal(f.text(),'');f.event('tli-session-unlocked'); f.event('tli-private-observation-ready');await opened(f);await readyRun(f);let finish;f.handler(()=>new Promise(r=>finish=r));const running=f.find('Run reviewed routine').click();await tick();f.event('tli-session-locked');finish({ok:true,results:[{ok:true}],summary:'Accepted',receipt_saved:true});await running;assert.equal(f.text(),'');});
 test('close during Run retains global reservation and displays uncertainty on return until settlement',async()=>{const f=fixture();await opened(f);await readyRun(f);let finish;f.handler(()=>new Promise(r=>finish=r));const running=f.find('Run reviewed routine').click();await tick();f.api.onClose();f.api.onOpen();assert.match(f.text(),/earlier request may have completed/);assert.equal(f.find('Refresh saved state').disabled,true);finish({ok:true,results:[{ok:true}],summary:'Accepted',receipt_saved:true});await running;assert.equal(f.find('Refresh saved state').disabled,false);assert.equal(f.calls.filter(c=>c.url.includes('/run/')).length,1);assert.doesNotMatch(f.text(),/Driver-reported completion/);});
 test('failed refresh retains saved list, results and draft and never turns unavailable into empty',async()=>{const f=fixture();await opened(f);await draft(f);f.handler(async()=>({http:503,data:{detail:'Unreadable store'}}));await f.click('Refresh saved state');assert.match(f.text(),/Previous results and your draft are retained/);assert.ok(f.find('Review run: Desk routine'));assert.equal(f.input('Routine name').value,'Evening lights');assert.doesNotMatch(f.text(),/No saved routines yet/);});
 test('new templates guard dirty drafts, and background clears private drafts with explicit reload only',async()=>{const f=fixture();await opened(f);await draft(f);await f.click('Discard draft');await f.click('Keep editing');assert.equal(f.input('Routine name').value,'Evening lights');f.document.hidden=true;for(const fn of f.events.visibilitychange)fn();assert.equal(f.text(),'');f.document.hidden=false;for(const fn of f.events.visibilitychange)fn();assert.match(f.text(),/Private drafts and reviews were cleared/);assert.ok(f.find('Reload saved routines'));assert.equal(f.calls.length,3);});
@@ -72,7 +72,7 @@ test('a stale access rejection from an earlier view cannot lock a freshly author
   const f = fixture(); let rejectOld;
   f.handler((url, opts) => url.endsWith('/list') ? new Promise(resolve => { rejectOld = () => resolve({ http: 401, data: { detail: 'Old session expired' } }); }) : f.defaults(url, opts));
   f.api.onOpen(); await tick(); f.api.onClose();
-  f.event('tli-session-locked'); f.event('tli-session-unlocked');
+  f.event('tli-session-locked'); f.event('tli-session-unlocked'); f.event('tli-private-observation-ready');
   f.handler(f.defaults); await opened(f);
   assert.ok(f.find('Review run: Desk routine'));
   rejectOld(); await tick(); await tick();
@@ -80,4 +80,57 @@ test('a stale access rejection from an earlier view cannot lock a freshly author
   await f.click('Review run: Desk routine');
   assert.ok(f.input('I reviewed every target and effect'));
   assert.equal(f.calls.some(c => c.url.includes('/run/')), false);
+});
+
+for (const status of [401, 403]) test('current routine denial ' + status + ' clears private state and waits for checked recovery', async () => {
+  const f = fixture(); await opened(f); await draft(f);
+  f.handler(async () => ({http: status, data: {detail: 'Synthetic access ended'}}));
+  await f.click('Refresh saved state');
+  assert.equal(f.text(), '');
+  const before = f.calls.length;
+  f.handler(f.defaults);
+  f.event('tli-session-unlocked'); await opened(f);
+  assert.equal(f.calls.length, before, 'Bare unlock does not reopen private reads');
+  assert.equal(f.text(), '');
+  f.event('tli-private-observation-ready'); await tick(); await tick();
+  assert.ok(f.find('Review run: Desk routine'));
+  assert.equal(f.input('Routine name'), undefined, 'Private draft is not silently restored');
+  assert.equal(f.calls.length, before + 3);
+  f.event('tli-private-observation-ready'); await tick();
+  assert.equal(f.calls.length, before + 3, 'Repeated ready does not duplicate refresh');
+  assert.ok(f.calls.every(call => call.options.method === 'GET'));
+});
+
+test('an old Run button cannot dispatch into a newly verified session', async () => {
+  const f = fixture(); await opened(f); await readyRun(f);
+  const old = f.find('Run reviewed routine');
+  f.event('tli-session-locked'); f.event('tli-session-unlocked');
+  f.event('tli-private-observation-ready'); await tick(); await tick();
+  await old.click(); await tick();
+  assert.equal(f.calls.some(call => call.url.includes('/run/')), false);
+  assert.ok(f.find('Review run: Desk routine'));
+});
+
+for (const status of [401, 403]) test('late Run denial ' + status + ' cannot disclose outcomes or replay a physical request', async () => {
+  const f = fixture(); await opened(f); await readyRun(f);
+  let finish;
+  f.handler(() => new Promise(resolve => { finish = resolve; }));
+  const pending = f.find('Run reviewed routine').click(); await tick();
+  finish({http: status, data: {detail: 'Session ended'}}); await pending;
+  assert.equal(f.text(), '');
+  assert.equal(f.calls.filter(call => call.url.includes('/run/')).length, 1);
+  f.handler(f.defaults); f.event('tli-session-unlocked');
+  f.event('tli-private-observation-ready'); await tick(); await tick();
+  assert.equal(f.calls.filter(call => call.url.includes('/run/')).length, 1);
+  assert.match(f.text(), /earlier request may have completed/);
+  assert.equal(f.find('Run reviewed routine'), undefined);
+});
+
+test('leaving the routine panel while locked prevents automatic reopening after verification', async () => {
+  const f = fixture(); await opened(f);
+  f.event('tli-session-locked'); f.api.onClose();
+  const before = f.calls.length;
+  f.event('tli-session-unlocked'); f.event('tli-private-observation-ready');
+  await tick(); await tick();
+  assert.equal(f.text(), ''); assert.equal(f.calls.length, before);
 });

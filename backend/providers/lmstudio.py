@@ -45,7 +45,32 @@ class LMStudioProvider:
         except Exception:
             pass
 
-    def _chat_probe(self, model_id: str) -> Dict[str, Any]:
+    @staticmethod
+    def _checked_model_ids(rows, check, *, allow_name=False):
+        """Bound the schema consumed by private health and setup observations."""
+        from model_probe import ModelProbeError
+        check()
+        if not isinstance(rows, list) or len(rows) > 1000:
+            raise ModelProbeError("invalid_response")
+        ids = []
+        for item in rows:
+            check()
+            if not isinstance(item, dict):
+                raise ModelProbeError("invalid_response")
+            value = item.get("id") or (item.get("name") if allow_name else None)
+            if value is None or value == "":
+                continue
+            if not isinstance(value, str) or len(value) > 1024:
+                raise ModelProbeError("invalid_response")
+            try:
+                value.encode("utf-8")
+            except UnicodeError:
+                raise ModelProbeError("invalid_response") from None
+            ids.append(value)
+        check()
+        return ids
+
+    def _chat_probe(self, model_id: str, *, check=None) -> Dict[str, Any]:
         """
         Lightweight chat readiness probe (max_tokens=1).
         Keeps Brain OK truthful: models can be listed while chat is stalled.
@@ -56,6 +81,25 @@ class LMStudioProvider:
             "max_tokens": 1,
             "temperature": 0,
         }
+
+        if check is not None:
+            from model_probe import ModelProbeError, probe_json
+            check()
+            try:
+                result = probe_json(self.chat_url, check=check, payload=payload,
+                                    timeout=(self.connect_timeout, 8))
+            except ModelProbeError as error:
+                check()
+                return {"ok": False, "latency_ms": None, "error": str(error)}
+            check()
+            status = result["status_code"]
+            data = result["data"]
+            choices = data.get("choices") if isinstance(data, dict) else None
+            ok = status == 200 and isinstance(choices, list) and 0 < len(choices) <= 1000
+            response = {"ok": ok, "latency_ms": result["latency_ms"],
+                        "error": None if ok else f"HTTP {status}" if status != 200 else "No choices in response"}
+            check()
+            return response
 
         t0 = time.time()
         try:
@@ -91,10 +135,16 @@ class LMStudioProvider:
     # -----------------------------
     # health
     # -----------------------------
-    def health_report(self) -> Dict[str, Any]:
+    def health_report(self, *, check=None) -> Dict[str, Any]:
+        if check is not None:
+            check()
         now = time.time()
-        cached = self._report_cache.get("report")
-        if cached and (now - float(self._report_cache.get("ts", 0.0)) < self.report_ttl_seconds):
+        cache_entry = self._report_cache
+        cached = cache_entry.get("report")
+        if (cached and (check is None or cache_entry.get("checked") is True)
+                and now - float(cache_entry.get("ts", 0.0)) < self.report_ttl_seconds):
+            if check is not None:
+                check()
             return cached
 
         report: Dict[str, Any] = {
@@ -117,36 +167,60 @@ class LMStudioProvider:
         ids: List[str] = []
 
         t0 = time.time()
-        try:
-            r = requests.get(self.models_url, timeout=(self.connect_timeout, 4))
-            report["status_code"] = r.status_code
-            report["server_header"] = r.headers.get("server") or r.headers.get("Server")
-            report["latency_ms"] = int((time.time() - t0) * 1000)
-
-            if r.status_code != 200:
-                report["error"] = f"HTTP {r.status_code}"
-            else:
-                data = r.json() if r.content else {}
-                arr = data.get("data")
-
-                if isinstance(arr, list):
-                    for item in arr:
-                        if isinstance(item, dict) and item.get("id"):
-                            ids.append(item["id"])
+        if check is not None:
+            from model_probe import ModelProbeError, probe_json
+            try:
+                result = probe_json(self.models_url, check=check,
+                                    timeout=(self.connect_timeout, 4))
+                check()
+                report["status_code"] = result["status_code"]
+                report["server_header"] = result["server_header"]
+                report["latency_ms"] = result["latency_ms"]
+                if result["status_code"] != 200:
+                    report["error"] = f"HTTP {result['status_code']}"
+                else:
+                    data = result["data"]
+                    rows = data.get("data") if isinstance(data, dict) else None
+                    ids = self._checked_model_ids(rows, check)
                     report["model_count"] = len(ids)
                     report["schema_ok"] = True
                     report["ok"] = True
-                else:
-                    report["error"] = "Unexpected schema (missing 'data' list)"
+            except ModelProbeError as error:
+                check()
+                report["error"] = str(error)
+        else:
+            try:
+                r = requests.get(self.models_url, timeout=(self.connect_timeout, 4))
+                report["status_code"] = r.status_code
+                report["server_header"] = r.headers.get("server") or r.headers.get("Server")
+                report["latency_ms"] = int((time.time() - t0) * 1000)
 
-        except Exception as e:
-            report["latency_ms"] = int((time.time() - t0) * 1000)
-            report["error"] = str(e)
+                if r.status_code != 200:
+                    report["error"] = f"HTTP {r.status_code}"
+                else:
+                    data = r.json() if r.content else {}
+                    arr = data.get("data")
+
+                    if isinstance(arr, list):
+                        for item in arr:
+                            if isinstance(item, dict) and item.get("id"):
+                                ids.append(item["id"])
+                        report["model_count"] = len(ids)
+                        report["schema_ok"] = True
+                        report["ok"] = True
+                    else:
+                        report["error"] = "Unexpected schema (missing 'data' list)"
+
+            except Exception as e:
+                report["latency_ms"] = int((time.time() - t0) * 1000)
+                report["error"] = str(e)
 
         # FIX: chat probe is now properly inside health_report
         # ids is always a list — either populated above or empty
         if ids:
-            probe = self._chat_probe(ids[0])
+            if check is not None:
+                check()
+            probe = self._chat_probe(ids[0], check=check) if check is not None else self._chat_probe(ids[0])
             report["chat_ok"] = bool(probe.get("ok"))
             report["chat_latency_ms"] = probe.get("latency_ms")
             report["chat_error"] = probe.get("error")
@@ -155,10 +229,13 @@ class LMStudioProvider:
             report["chat_latency_ms"] = None
             report["chat_error"] = "No models available or LM Studio not running"
 
-        # Cache + log
-        self._report_cache["ts"] = now
-        self._report_cache["report"] = report
+        # Keep the legacy cache contract; checked observations publish only
+        # after all slow logging and authority checks have completed.
+        if check is None:
+            self._report_cache = {"ts": now, "report": report}
 
+        if check is not None:
+            check()
         self._log(
             "lmstudio",
             "INFO" if report["ok"] else "WARN",
@@ -171,20 +248,47 @@ class LMStudioProvider:
             error=report["error"],
         )
 
+        if check is not None:
+            check()
+            previous = self._report_cache
+            published = {"ts": now, "report": report, "checked": True}
+            self._report_cache = published
+            try:
+                check()
+            except Exception:
+                if self._report_cache is published:
+                    self._report_cache = previous
+                raise
         return report
 
-    def health_check(self) -> bool:
-        rep = self.health_report()
-        return bool(rep.get("ok")) and bool(rep.get("chat_ok"))
+    def health_check(self, *, check=None) -> bool:
+        rep = self.health_report(check=check) if check is not None else self.health_report()
+        result = bool(rep.get("ok")) and bool(rep.get("chat_ok"))
+        if check is not None:
+            check()
+        return result
 
     # -----------------------------
     # models
     # -----------------------------
-    def list_models(self) -> List[Dict[str, str]]:
+    def list_models(self, *, check=None) -> List[Dict[str, str]]:
         """
         Returns provider-normalized list:
           [ {"id": "...", "label": "..."}, ... ]
         """
+        if check is not None:
+            from model_probe import ModelProbeError, probe_json
+            check()
+            result = probe_json(self.models_url, check=check,
+                                timeout=(self.connect_timeout, 10))
+            check()
+            if result["status_code"] != 200:
+                raise ModelProbeError("unavailable")
+            data = result["data"]
+            ids = self._checked_model_ids(data.get("data") if isinstance(data, dict) else None, check)
+            out = [{"id": value, "label": value} for value in ids]
+            check()
+            return out
         r = requests.get(self.models_url, timeout=(self.connect_timeout, 10))
         if r.status_code != 200:
             raise RuntimeError(

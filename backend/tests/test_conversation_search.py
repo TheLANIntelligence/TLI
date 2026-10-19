@@ -146,15 +146,13 @@ def test_dictionary_identity_is_used_instead_of_forged_embedded_id(isolated):
     assert [row["id"] for row in search.search("alice")["items"]]==["owned"]
 
 
-def test_additive_router_is_authenticated_and_no_store(authed_client,client,isolated,monkeypatch):
-    capabilities=authed_client.get("/api/intelligence/conversation-search/capabilities")
+def test_additive_router_is_authenticated_and_no_store(browser_client,app,isolated):
+    capabilities=browser_client.get("/api/intelligence/conversation-search/capabilities")
     assert capabilities.status_code==200 and capabilities.json()=={"ok":True,"protocol":search.PROTOCOL}
     assert capabilities.headers["Cache-Control"]=="no-store"
-    result=authed_client.get("/api/intelligence/conversation-search",params={"q":"test"})
+    result=browser_client.get("/api/intelligence/conversation-search",params={"q":"test"})
     assert result.status_code==200 and result.headers["Cache-Control"]=="no-store"
-    from main import app
-    from unittest.mock import patch
-    with patch.dict(app.dependency_overrides,{},clear=True):
-        monkeypatch.setattr(S,"load_pin_config",lambda:{"enabled":True})
-        assert client.get("/api/intelligence/conversation-search/capabilities").status_code==401
-        assert client.get("/api/intelligence/conversation-search").status_code==401
+    from fastapi.testclient import TestClient
+    with TestClient(app,base_url="https://testserver") as unauthenticated:
+        assert unauthenticated.get("/api/intelligence/conversation-search/capabilities").status_code==401
+        assert unauthenticated.get("/api/intelligence/conversation-search").status_code==401

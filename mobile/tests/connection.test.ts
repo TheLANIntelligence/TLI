@@ -48,7 +48,7 @@ test('AI readiness cannot turn a valid host connection into an offline result', 
 });
 
 test('connection problems distinguish trust, network, credential, permission and incompatible responses', () => {
-  for (const [code, kind] of [['E_TLS_TRUST', 'trust'], ['E_CERTIFICATE', 'trust'], ['E_NETWORK', 'unreachable'], ['E_TIMEOUT', 'unreachable'], ['E_LOCAL_NETWORK_PERMISSION', 'permission'], ['E_CANCELLED', 'cancelled']] as const) assert.equal(connectionIssue({ code }).kind, kind);
+  for (const [code, kind] of [['E_TLS_TRUST', 'trust'], ['E_CERTIFICATE', 'trust'], ['E_IDENTITY', 'trust'], ['E_NETWORK', 'unreachable'], ['E_TIMEOUT', 'unreachable'], ['E_LOCAL_NETWORK_PERMISSION', 'permission'], ['E_CANCELLED', 'cancelled']] as const) assert.equal(connectionIssue({ code }).kind, kind);
   assert.equal(connectionIssue(new ApiError('Revoked', 401)).kind, 'credential');
   assert.equal(connectionIssue(new ApiError('Host check failed', 503)).kind, 'server');
   for (const candidate of [{ ...boot(), api_version: 2 }, { ...boot(), capabilities: {} }]) assert.throws(() => validateBootstrap(candidate, next.node_id), error => connectionIssue(error).kind === 'incompatible');

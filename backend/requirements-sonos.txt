@@ -1,0 +1,4 @@
+# Optional direct LAN music control. Nothing is imported by TLI at startup.
+soco==0.31.5
+# Clip overlays are optional and need Python 3.11+. Python 3.10 keeps music control.
+sonos-websocket==0.2.0; python_version >= '3.11'

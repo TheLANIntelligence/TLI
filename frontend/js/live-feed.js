@@ -39,6 +39,9 @@
 
   // ── Notification bell state ────────────────────────────────────────────
   let _unread = 0;
+  let _locked = document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false', _generation = 0;
+  let _accessReady = !_locked;
+  const _alertActions = new Set();
 
   function _getBell() { return document.getElementById("tli-feed-bell"); }
   function _getBadge() { return document.getElementById("tli-feed-badge"); }
@@ -81,6 +84,7 @@
 
   // ── Feed renderer ──────────────────────────────────────────────────────
   function _renderEvent(ev) {
+    if (_locked || !_accessReady) return;
     try {
       const feed = document.getElementById("nd-feed");
       if (!feed) return;
@@ -126,18 +130,51 @@
         const actions = document.createElement("div");
         actions.className = "lf-actions";
         safeActions.forEach(a => {
+          const generation = _generation;
+          // Resolve the shell lazily: this script registers before the shell.
+          // An event created before coordination exists cannot authorize a write.
+          const coordinator = window.TLIShell?.alertOperations;
+          const context = coordinator?.capture();
+          let pending = null, finished = false;
           const btn = document.createElement("button");
           btn.className = "chip-button lf-action-btn";
           btn.textContent = a.label || "Action";
+          const sync = () => {
+            if (pending || finished) return;
+            btn.disabled = !coordinator || !context || !coordinator.canBegin(context);
+            btn.textContent = btn.disabled ? 'Review Alerts' : (a.label || 'Action');
+          };
+          _alertActions.add(sync);
+          if (_alertActions.size > MAX_FEED_ITEMS * 3) _alertActions.delete(_alertActions.values().next().value);
+          sync();
           btn.addEventListener("click", async () => {
-            if (btn.disabled) return;
+            if (btn.disabled || pending || _locked || !_accessReady || generation !== _generation) return;
+            const request = coordinator?.begin(context);
+            if (!request) return;
+            pending = request;
+            let confirmed = false;
+            const current = () => pending === request && generation === _generation && !_locked && _accessReady && coordinator.current(request);
             btn.disabled = true;
+            btn.textContent = a.label || 'Action';
             try {
               const response = await fetch(a.endpoint, { method: "POST", credentials: "same-origin", signal: AbortSignal.timeout(10000) });
+              if (!current()) return;
+              if (response.status === 401 || response.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+              if (!response.ok) throw new Error('Dismissal not confirmed');
               const result = await response.json();
-              if (!response.ok || result.ok !== true) throw new Error('Action failed');
+              if (!current()) return;
+              const path = new URL(a.endpoint, window.location.origin).pathname;
+              const id = path === '/status/alerts/dismiss-all' ? null : decodeURIComponent(path.split('/')[3]);
+              if (result?.ok !== true || (id === null ? !Number.isInteger(result.dismissed) || result.dismissed < 0 : result.dismissed !== id)) throw new Error('Dismissal not confirmed');
               btn.textContent = "Done";
-            } catch { btn.textContent = "Failed — retry"; btn.disabled = false; }
+              confirmed = true; finished = true;
+            } catch { if (current()) { btn.textContent = 'Not confirmed — review Alerts'; btn.disabled = true; finished = true; } }
+            finally {
+              // A stream pause can retire this button without changing the shell
+              // session. Release only our exact token, retaining uncertainty.
+              if (coordinator.current(request)) await coordinator.settle(request, confirmed && current());
+              if (pending === request) pending = null;
+            }
           });
           actions.appendChild(btn);
         });
@@ -157,9 +194,21 @@
   function _connect() {
     if (!window.EventInterpreter) return;
     window.EventInterpreter.on("classified_event", ev => {
+      if (_locked || !_accessReady) return;
       document.dispatchEvent(new CustomEvent('tli-activity-event', {detail: ev}));
       _renderEvent(ev);
     });
+    window.EventInterpreter.on('access_required', ({message}) => {
+      _accessReady = false; _generation++; _seenIds.clear(); _alertActions.clear(); _clearUnread();
+      const feed = document.getElementById('nd-feed');
+      if (!feed) return;
+      feed.replaceChildren();
+      const status = document.createElement('p'); status.textContent = message;
+      const retry = document.createElement('button'); retry.className = 'chip-button'; retry.textContent = 'Retry live activity';
+      retry.addEventListener('click', () => { if (!_locked) window.EventInterpreter.retry(); });
+      feed.appendChild(status); feed.appendChild(retry);
+    });
+    window.EventInterpreter.on('access_ready', () => { if (!_locked) _accessReady = true; document.getElementById('nd-feed')?.replaceChildren(); });
     window.EventInterpreter.init();
   }
 
@@ -181,4 +230,11 @@
     _watchDashboard();
     document.addEventListener("tli-activity-viewed", _clearUnread);
   });
+  for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed']) window.addEventListener?.(event, () => {
+    _locked = true; _accessReady = false; _generation++; _seenIds.clear(); _alertActions.clear(); _clearUnread();
+    document.getElementById('nd-feed')?.replaceChildren();
+  });
+  window.addEventListener?.('tli-session-unlocked', () => { _locked = false; });
+  window.addEventListener?.('tli-private-observation-ready', () => { if (!_locked) _accessReady = true; });
+  window.addEventListener?.('tli-alert-operation', () => { for (const sync of _alertActions) sync(); });
 })();

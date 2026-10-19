@@ -96,3 +96,23 @@ html[data-experience="premium"] :is(.native-companion-step,.native-companion-ste
 html[data-experience="premium"] .native-companion-step-link { border-radius:16px; padding:18px; }
 html[data-experience="premium"] .native-companion-step-number { background:var(--theme-nav-bg); color:var(--theme-glow); }
 @media(max-width:560px) { html[data-experience="premium"] .native-companion-overview { padding:22px; } }
+
+/* One guided Android flow. Detailed access and network controls stay available
+   without competing with installation and pairing. */
+.native-companion-sections { grid-template-columns:minmax(0,1fr); }
+.native-companion-sections > .native-companion-step { grid-column:1; grid-row:auto; }
+.native-companion[data-embedded="true"] .native-companion-overview,
+.native-companion[data-embedded="true"] .native-companion-steps { display:none; }
+.native-companion-install-layout { display:grid; grid-template-columns:180px minmax(0,1fr); gap:24px; align-items:start; }
+.native-companion-install-layout img { width:180px; max-width:100%; height:auto; background:#fff; border-radius:12px; }
+.native-companion-install-layout a { display:inline-flex; align-items:center; justify-content:center; min-height:44px; box-sizing:border-box; text-decoration:none; white-space:normal; }
+.native-companion-install-layout button { margin-top:8px; }
+.native-companion-address-details { margin-top:16px; border-top:1px solid var(--border-subtle); }
+.native-companion-address-details label { display:grid; gap:8px; font-size:13px; }
+.native-companion-management { border-top:1px solid var(--border-subtle); padding-top:8px; min-width:0; }
+.native-companion-management > summary { font-weight:600; }
+.native-companion-management > section,.native-companion-management > details { margin-top:14px; }
+.connect-device-phone { min-width:0; }
+.connect-device-dialog .peer-pairing-body > section > details { margin:12px 0; }
+.connect-device-dialog .peer-pairing-body > section > details > summary { cursor:pointer; min-height:44px; display:flex; align-items:center; }
+@media(max-width:560px) { .native-companion-install-layout { grid-template-columns:minmax(0,1fr); gap:12px; } .native-companion-install-layout img { width:160px; margin:auto; } .native-companion-install-layout a,.native-companion-install-layout button { width:100%; } }

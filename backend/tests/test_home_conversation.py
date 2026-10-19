@@ -36,7 +36,9 @@ def house(monkeypatch):
     monkeypatch.setattr(device_commands, "_running", set())
     monkeypatch.setattr(device_commands, "_requests", {})
     request = Request({"type": "http", "method": "POST", "path": "/ai/chat", "scheme": "https",
-                       "server": ("testserver", 443), "headers": [(b"cookie", b"tli_session=browser-session")]})
+                       "server": ("testserver", 443), "client": ("192.0.2.20", 1234),
+                       "headers": [(b"host", b"testserver"), (b"origin", b"https://testserver"),
+                                   (b"cookie", b"tli_session=browser-session")]})
     return SimpleNamespace(rows=rows, calls=calls, driver=driver, request=request,
                            ask=lambda text: home.answer(request, text))
 
@@ -160,7 +162,9 @@ def test_lock_during_command_prevents_followup_read(house, monkeypatch):
         monkeypatch.setattr(S, "validate_session_token", lambda token: False)
         return {"raw": {"was_on": False}}
     house.driver.turn_on = change
-    assert "acknowledged" in house.ask("turn on lamp")
+    with pytest.raises(HTTPException) as denied:
+        house.ask("turn on lamp")
+    assert denied.value.status_code == 401
     assert len(house.calls) == 1
 
 
@@ -179,7 +183,9 @@ def test_inventory_is_configured_only_and_does_not_probe(house):
 
 def test_missing_auth_and_license_block_before_device_contact(house, monkeypatch):
     monkeypatch.setattr(S, "validate_session_token", lambda token: False)
-    assert "session required" in house.ask("turn on lamp")
+    with pytest.raises(HTTPException) as denied:
+        house.ask("turn on lamp")
+    assert denied.value.status_code == 401
     monkeypatch.setattr(S, "validate_session_token", lambda token: True)
     monkeypatch.setattr(home, "_license", lambda: (_ for _ in ()).throw(HTTPException(402, {"message": "license"})))
     assert "license" in house.ask("check lamp")
@@ -190,7 +196,9 @@ def test_invalid_explicit_bearer_does_not_fall_back_to_valid_browser(house, monk
     import companion_auth
     monkeypatch.setattr(companion_auth, "credential_owner", lambda token: (_ for _ in ()).throw(HTTPException(401, "Invalid companion credential.")))
     house.request.scope["headers"].append((b"authorization", b"Bearer revoked"))
-    assert "Invalid companion" in house.ask("turn on lamp")
+    with pytest.raises(HTTPException) as denied:
+        house.ask("turn on lamp")
+    assert denied.value.status_code == 403  # Conflicting browser/native authority.
     assert house.calls == []
 
 

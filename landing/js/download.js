@@ -1,6 +1,7 @@
-import { PUBLIC_RELEASE } from './release.js?v=release-1.4.3-20261011';
+import { PUBLIC_RELEASE } from './release.js?v=release-1.4.5-20261012';
+import { COMPANION_RELEASE } from './companion-release.js?v=android-beta14-20261016';
 
-// Verified email precedes access to the selected fresh-install link.
+// Desktop fresh installs use email verification. Android is always public.
 // The underlying public GitHub release is not an authenticated file service.
 ['windows', 'macos'].forEach((platform) => {
   const checksum = document.getElementById(`${platform}-sha256`);
@@ -90,12 +91,37 @@ const submit = document.getElementById('download-submit');
 const ready = document.getElementById('download-ready');
 const downloadFile = document.getElementById('download-file');
 const macInstaller = document.getElementById('mac-installer');
+const companionPanel = document.getElementById('companion-download');
+const companionFile = document.getElementById('companion-file');
+const downloadDescription = document.getElementById('download-description');
+const companionVersion = document.getElementById('companion-version');
+const companionChecksum = document.getElementById('android-sha256');
 const verificationPanel = document.getElementById('email-verification');
 const verifyButton = document.getElementById('verify-email');
 const verifyStatus = document.getElementById('verify-status');
 const challengeStatus = document.getElementById('challenge-status');
-const platformNames = { windows: 'Windows', macos: 'macOS' };
+const platformNames = { windows: 'Windows', macos: 'macOS', android: 'Android' };
+const releaseFor = platform => platform === 'android' ? COMPANION_RELEASE
+  : Object.hasOwn(PUBLIC_RELEASE, platform) && Object.hasOwn(platformNames, platform)
+    ? { ...PUBLIC_RELEASE[platform], version: PUBLIC_RELEASE.version } : null;
 const unavailableMessage = 'Email verification is temporarily unavailable. Please try again later or contact TLI below for help.';
+
+// Android installation and updates must remain available when the home host,
+// registration service or challenge provider is unavailable. The signed APK's
+// verified release metadata is the single source for its link and checksum.
+if (companionPanel && companionFile && companionVersion && companionChecksum) {
+  companionPanel.hidden = false;
+  companionFile.hidden = false;
+  companionFile.href = COMPANION_RELEASE.url;
+  companionVersion.textContent = `${COMPANION_RELEASE.label} · Android ${COMPANION_RELEASE.minimumAndroid}+ · ${Math.round(COMPANION_RELEASE.size_bytes / 1000000)} MB`;
+  companionChecksum.textContent = COMPANION_RELEASE.sha256;
+}
+document.querySelectorAll('[data-android-download]').forEach(link => {
+  link.href = COMPANION_RELEASE.url;
+});
+if (window.location.hash === '#android') {
+  document.getElementById('android')?.scrollIntoView({ block: 'start', behavior: 'instant' });
+}
 
 async function apiRequest(path, body) {
   const controller = new AbortController();
@@ -123,7 +149,7 @@ function errorMessage(error, verifying = false) {
   const messages = {
     invalid_email: 'Enter a valid email address and try again.',
     disposable_email: 'Please use an email address that can receive your verification link; temporary email services are not supported.',
-    invalid_platform: 'Choose Windows or macOS to continue.',
+    invalid_platform: 'Choose Windows or macOS to continue. Android is available above without email verification.',
     challenge_failed: 'Complete the Cloudflare check again, then request your link.',
     rate_limited: 'Too many attempts. Please wait before trying again, or contact TLI below for help.',
     unavailable: unavailableMessage,
@@ -156,7 +182,8 @@ function loadTurnstile() {
 }
 
 if (emailForm && emailInput && platformInput && websiteInput && submit && ready && downloadFile
-  && macInstaller && verificationPanel && verifyButton && verifyStatus && challengeStatus) {
+  && macInstaller && downloadDescription
+  && verificationPanel && verifyButton && verifyStatus && challengeStatus) {
   let serviceEnabled = false;
   let pending = false;
   let formRevision = 0;
@@ -224,8 +251,8 @@ if (emailForm && emailInput && platformInput && websiteInput && submit && ready 
     emailInput.value = emailInput.value.trim();
     if (!emailForm.reportValidity()) return;
     const platform = platformInput.value;
-    if (!Object.hasOwn(platformNames, platform)) {
-      emailStatus.textContent = 'Choose Windows or macOS to continue.';
+    if (!['windows', 'macos'].includes(platform)) {
+      emailStatus.textContent = 'Choose Windows or macOS to continue. Android is available above without email verification.';
       platformInput.focus();
       return;
     }
@@ -269,13 +296,18 @@ if (emailForm && emailInput && platformInput && websiteInput && submit && ready 
     try {
       const { status, data } = await apiRequest('/api/download/verify', { token });
       if (revision !== formRevision || token !== verificationToken) return;
+      const selectedRelease = data && Object.hasOwn(platformNames, data.platform) ? releaseFor(data.platform) : null;
       if (status !== 200 || !data || data.status !== 'verified'
-        || !Object.hasOwn(platformNames, data.platform) || data.version !== PUBLIC_RELEASE.version
-        || data.url !== PUBLIC_RELEASE[data.platform].url) throw new Error('Unrecognized release');
+        || !selectedRelease || data.version !== selectedRelease.version
+        || data.url !== selectedRelease.url) throw new Error('Unrecognized release');
       verificationToken = null;
-      platformInput.value = data.platform;
-      downloadFile.href = PUBLIC_RELEASE[data.platform].url;
-      downloadFile.textContent = `Download TLI ${PUBLIC_RELEASE.version} for ${platformNames[data.platform]}`;
+      platformInput.value = data.platform === 'android' ? '' : data.platform;
+      downloadFile.href = selectedRelease.url;
+      downloadFile.textContent = data.platform === 'android' ? 'Download TLI Companion Beta APK'
+        : `Download TLI ${PUBLIC_RELEASE.version} for ${platformNames[data.platform]}`;
+      downloadDescription.textContent = data.platform === 'android'
+        ? 'Save the APK, then follow the Android setup steps above. Android downloads are now also available without email verification.'
+        : 'Save the ZIP, then follow the setup guide below for your platform.';
       ready.hidden = false;
       macInstaller.hidden = data.platform !== 'macos';
       verificationPanel.hidden = true;

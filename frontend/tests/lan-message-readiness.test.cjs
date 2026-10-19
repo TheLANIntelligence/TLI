@@ -39,18 +39,25 @@ function fixture(peers) {
   const document = events({hidden:false, getElementById:id => nodes.get(id) || null, querySelector:() => null, createElement:tag => new Element(tag), body:new Element()});
   let directory = peers, failDirectory = false, delivery = {ok:true, status:200, data:{delivery:'acknowledged'}};
   const respond = data => ({ok:true, status:200, json:async () => data});
-  const context = vm.createContext({window, document, console,
+  const context = vm.createContext({window, document, console, AbortSignal,
     crypto:{randomUUID:() => '00000000-0000-4000-8000-000000000000'},
     EventSource:class { constructor() { streams.push(this); } close() {} },
     setInterval:() => 1, clearInterval() {}, setTimeout:() => 2, clearTimeout() {},
     fetch:async (url, options) => {
-      requests.push({url, body:options?.body ? JSON.parse(options.body) : null});
+      requests.push({url, method:options?.method || 'GET', body:options?.body ? JSON.parse(options.body) : null});
       if (url === '/mesh/node') return respond({node_id:'fox', display_name:'FOX'});
       if (url === '/api/lan/peers') return failDirectory ? {ok:false, status:503} : respond({peers:directory});
+      if (url.startsWith('/mesh/directory/') && url.endsWith('/connection')) {
+        assert.equal(options.method,'POST');
+        const nodeId=decodeURIComponent(url.slice('/mesh/directory/'.length,-'/connection'.length));
+        const peer=directory.find(row=>row.id===nodeId);assert.ok(peer,'Connection check uses the selected registry identity');
+        return respond({node_id:peer.id,ready_grants:peer.connection?.ready_grants || [],connection:peer.connection});
+      }
       if (url === '/mesh/chat/send') return {...delivery, json:async () => delivery.data};
       return respond({messages:[]});
     },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/mesh-service.js'),'utf8'), context);
   vm.runInContext(source, context);
   const findButton = (container, text) => {
     if (container.tagName === 'button' && container.textContent === text) return container;
@@ -60,6 +67,7 @@ function fixture(peers) {
   return {nodes, requests, reviews, streams, window, api:window.TLIChat,
     input:nodes.get('tli-chat-input'), send:nodes.get('tli-chat-send-btn'),
     sends:() => requests.filter(r => r.url === '/mesh/chat/send'),
+    checks:() => requests.filter(r => r.url.endsWith('/connection')),
     notice:() => nodes.get('tli-chat-message-readiness'),
     button:(text, container = nodes.get('tli-chat-message-readiness')) => findButton(container, text),
     peers(value) { directory = value; }, failDirectory() { failDirectory = true; }, delivery(value) { delivery = value; },
@@ -68,8 +76,12 @@ function fixture(peers) {
   };
 }
 
-const pending = (id = 'dell-installation-one') => ({id, name:'TheLegatoDell', ip:'192.168.4.135', online:true, status:'pending', trust_state:'review_required', messaging:{available:false, code:'peer_not_allowed', message:'Review text-message permission on both computers before sending.'}});
-const reviewed = (id = 'dell-installation-one') => ({...pending(id), status:'allowed', trust_state:'verified', messaging:{available:true, code:'ready', message:'Permission reviewed here.'}});
+const pending = (id = 'dell-installation-one') => ({id, name:'TheLegatoDell', ip:'192.168.4.135', online:true, discovered_recently:true, status:'pending', trust_state:'review_required',
+  connection:{state:'discovered',fresh:false,ready_grants:[],reason:{code:'peer_not_allowed',message:'Review text-message permission on both computers before sending.'}},
+  messaging:{available:false, code:'peer_not_allowed', message:'Review text-message permission on both computers before sending.'}});
+const reviewed = (id = 'dell-installation-one') => ({...pending(id), status:'allowed', trust_state:'verified',
+  connection:{state:'connected',fresh:true,online:true,checked_at:new Date().toISOString(),expires_at:new Date(Date.now()+90000).toISOString(),ready_grants:['messages']},
+  messaging:{available:true, code:'ready', message:'Permission reviewed here.'}});
 
 test('discovered pending peer has a direct review path and cannot send even through Enter', async () => {
   const f = fixture([pending()]); await f.api.onOpen(); await f.select(0);
@@ -77,7 +89,8 @@ test('discovered pending peer has a direct review path and cannot send even thro
   assert.equal(f.send.disabled, true);
   assert.equal(f.input.disabled, false, 'draft remains editable during review');
   assert.match(f.notice().textContent, /both computers/);
-  assert.match(f.nodes.get('tli-chat-thread-meta').innerHTML, /Seen on LAN/);
+  assert.match(f.nodes.get('tli-chat-thread-meta').innerHTML, /Discovered on LAN · connection not checked/);
+  assert.equal(f.checks().length,0,'Unreviewed discovery must not check a connection');
   await f.input.emit('keydown', {key:'Enter', preventDefault() {}});
   await f.button('Review computer trust').emit('click');
   assert.equal(f.input.value, 'Hello from FOX'); assert.equal(f.sends().length, 0);
@@ -94,8 +107,34 @@ test('review completion enables a deliberate send without automatically sending 
   assert.match(f.nodes.get('tli-chat-thread-output').textContent, /Delivered to reviewed computer/);
 });
 
+test('selecting a reviewed peer checks its exact identity before a deliberate send', async () => {
+  const peer=reviewed('installation / one'),f=fixture([peer]);await f.api.onOpen();
+  assert.equal(f.checks().length,0,'Opening the panel only reads saved observations');
+  await f.select(0);
+  assert.deepEqual(f.checks().map(({url,method,body})=>({url,method,body})),[
+    {url:'/mesh/directory/installation%20%2F%20one/connection',method:'POST',body:null},
+  ]);
+  assert.equal(f.send.disabled,false);assert.equal(f.sends().length,0);
+  f.input.value='Intentional send';await f.send.emit('click');
+  assert.equal(f.sends().length,1);assert.equal(f.sends()[0].body.to_id,peer.id);
+});
+
+test('saved permissions and discovery cannot enable sending without a current connection receipt', async () => {
+  for(const connection of [undefined,{...reviewed().connection,expires_at:'2000-01-01T00:00:00Z'},
+    {...reviewed().connection,expires_at:'2026-10-17T12:00:00'},
+    {...reviewed().connection,ready_grants:['observe']}]) {
+    const f=fixture([{...reviewed(),connection}]);await f.api.onOpen();await f.select(0);
+    f.input.value='Keep this draft';await f.send.emit('click');
+    assert.equal(f.send.disabled,true);assert.equal(f.input.value,'Keep this draft');assert.equal(f.sends().length,0);
+    assert.equal(f.checks().length,1);assert.doesNotMatch(f.nodes.get('tli-chat-thread-meta').innerHTML,/title="Online"/);
+  }
+});
+
 test('blocked and missing-permission peers retain drafts and disable Send', async () => {
-  for (const peer of [{...pending(), status:'blocked', messaging:null}, {...reviewed(), messaging:{available:false, code:'capability_required', message:'Text-message permission has not been reviewed here.'}}]) {
+  for (const peer of [
+    {...pending(), status:'blocked', messaging:null,connection:{state:'review_required',fresh:false,ready_grants:[],reason:{code:'peer_not_allowed',message:'Access to this computer is blocked here.'}}},
+    {...reviewed(), connection:{...reviewed().connection,ready_grants:[],reason:{code:'capability_required',message:'Text-message permission has not been reviewed here.'}}, messaging:{available:false, code:'capability_required', message:'Text-message permission has not been reviewed here.'}},
+  ]) {
     const f = fixture([peer]); await f.api.onOpen(); await f.select(0); f.input.value = 'Keep this';
     await f.send.emit('click');
     assert.equal(f.sends().length, 0); assert.equal(f.input.value, 'Keep this'); assert.equal(f.send.disabled, true);
@@ -141,7 +180,7 @@ test('previous discoveries stay collapsed while their exact conversation and dra
   const previous = list.children[1];
   assert.equal(previous.tagName, 'details'); assert.equal(previous.open, false);
   assert.match(previous.children[0].textContent, /Previous discoveries \(1\)/);
-  assert.equal(f.nodes.get('tli-chat-buddies-meta').textContent, '1/1');
+  assert.equal(f.nodes.get('tli-chat-buddies-meta').textContent, '0/1','Discovery alone is not a connected computer');
   await previous.children[1].emit('click'); await tick(); f.input.value = 'Old identity draft';
   assert.match(f.notice().textContent, /older discovery record/);
   assert.equal(f.send.disabled, true);

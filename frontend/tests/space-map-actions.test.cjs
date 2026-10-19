@@ -74,9 +74,11 @@ test('keyboard context menu, focus navigation and Escape return focus to the ori
   await invoker.emit('keydown',{key:'ContextMenu'});assert.ok(menu(f));noHostActions(f);
 });
 
-test('visible Actions buttons give touch users the same menu and keyboard works through a list child',async()=>{
+test('visible action-menu buttons have an accessible name and support touch and keyboard',async()=>{
   const f=await loaded(), list=row(f,'film.mp4');
-  const more=action(list,'Actions');await more.click();assert.match(menu(f).textContent,/film\.mp4/);
+  const more=list.querySelectorAll('button').find(button=>button.getAttribute('aria-label')==='Actions for film.mp4');
+  assert.ok(more);assert.equal(more.textContent,'⋯');assert.equal(more.getAttribute('aria-haspopup'),'dialog');
+  await more.click();assert.match(menu(f).textContent,/film\.mp4/);
   await action(menu(f),'Close actions').click();assert.equal(f.document.activeElement,more);
   await action(list,'film.mp4').emit('keydown',{key:'ContextMenu'});assert.match(menu(f).textContent,/film\.mp4/);
   noHostActions(f);

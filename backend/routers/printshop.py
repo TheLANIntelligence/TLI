@@ -25,20 +25,90 @@ import subprocess
 import tempfile
 import threading
 import uuid
+from dataclasses import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
 from process_utils import hidden_process_kwargs
+from browser_authority import browser_control_access
+import tli_state as S
 
 PLATFORM = platform.system()   # "Windows" | "Darwin" | "Linux"
 printshop_router = APIRouter(tags=["printshop"])
 
-# ── scan temp-store  (token → (abs_path, mime)) ───────────────────────────────
-_scan_store: Dict[str, tuple] = {}
+# Legacy unowned tuples are deliberately retained but never granted an owner.
+@dataclass(frozen=True)
+class _ScanRecord:
+    path: str
+    mime: str
+    owner: str
+
+
+_scan_store: Dict[str, Any] = {}
 _scan_lock  = threading.Lock()
+
+
+def _private_json(content, status_code=200):
+    return JSONResponse(content, status_code=status_code, headers={"Cache-Control": "no-store"})
+
+
+def _scan_owner(request: Request, check: Callable[[], None]) -> str:
+    check()
+    token = request.cookies.get("tli_session")
+    owner = S.get_session_user_id(token) if token else "local"
+    check()
+    return owner
+
+
+def _owned_scan(token: str, owner: str, check: Callable[[], None]) -> _ScanRecord:
+    check()
+    with _scan_lock:
+        entry = _scan_store.get(token)
+    check()
+    if not isinstance(entry, _ScanRecord) or entry.owner != owner:
+        raise HTTPException(404, "Scan token not found for this owner")
+    return entry
+
+
+def _remove_new_scan(path: str) -> None:
+    """Remove only this operation's known temporary files, never legacy files."""
+    target = Path(path)
+    for candidate in (target, target.with_suffix(".bmp")):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+    try:
+        target.parent.rmdir()
+    except OSError:
+        pass  # Never remove an unexpected file or recursively delete a directory.
+
+
+class _AuthorizedScanResponse(FileResponse):
+    """Recheck before headers and each chunk; revocation terminates a transfer."""
+    def __init__(self, *args, check: Callable[[], None], **kwargs):
+        super().__init__(*args, **kwargs)
+        self._check = check
+
+    async def __call__(self, scope, receive, send):
+        self._check()
+        # A server's zero-copy path-send extension would bypass chunk checks.
+        scope = {**scope, "extensions": {key: value for key, value in scope.get("extensions", {}).items()
+                                         if key != "http.response.pathsend"}}
+
+        async def checked_send(message):
+            self._check()
+            await send(message)
+
+        try:
+            await super().__call__(scope, receive, checked_send)
+        except Exception:
+            self._check()
+            raise
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -249,6 +319,11 @@ _QUALITY_CUPS = {
 }
 
 
+def _ps_literal(value: str) -> str:
+    """Single-quoted PowerShell data; no interpolation or escape evaluation."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _print_windows(
     path: str,
     printer: str,
@@ -267,11 +342,11 @@ def _print_windows(
     ps_color   = "$true" if color else "$false"
     ps_orient  = "1" if orientation == "portrait" else "2"   # DEVMODE: 1=portrait, 2=landscape
     ps_copies  = max(1, copies)
-    safe_path  = path.replace("\\", "\\\\").replace('"', '\\"')
-    safe_printer = printer.replace('"', '\\"')
+    safe_path = _ps_literal(path)
+    safe_printer = _ps_literal(printer)
 
     script = f"""
-$pn = "{safe_printer}"
+$pn = {safe_printer}
 try {{
     $cfg = Get-PrintConfiguration -PrinterName $pn -ErrorAction Stop
     $cfg.DuplexingMode = "{ps_duplex}"
@@ -281,7 +356,7 @@ try {{
 }} catch {{
     # Printer may not support Set-PrintConfiguration — continue anyway
 }}
-Start-Process -FilePath "{safe_path}" -Verb PrintTo -ArgumentList $pn -WindowStyle Hidden -Wait
+Start-Process -FilePath {safe_path} -Verb PrintTo -ArgumentList $pn -WindowStyle Hidden -Wait
 """
     r = subprocess.run(
         ["powershell", "-NoProfile", "-Command", script],
@@ -344,22 +419,24 @@ def _scan_wia(
     # Use BMP GUID — supported by every WIA driver, unlike PNG which some skip
     BMP_GUID = "{B96B3CAB-0728-11D3-9D7B-0000F81EF32E}"  # actually PNG; use BMP as primary
     BMP_GUID = "{B96B3CAE-0728-11D3-9D7B-0000F81EF32E}"  # BMP
-    bmp_path = out_path.replace(".png", ".bmp")
-    ps_bmp   = bmp_path.replace("\\", "\\\\")
-    ps_png   = out_path.replace("\\", "\\\\")
-    safe_id  = scanner_id.replace("'", "''")
+    bmp_path = str(Path(out_path).with_suffix(".bmp"))
+    ps_bmp = _ps_literal(bmp_path)
+    ps_png = _ps_literal(out_path)
+    safe_id = _ps_literal(scanner_id)
 
     script = f"""
 $ErrorActionPreference = 'Stop'
 try {{
     $wia   = New-Object -ComObject WIA.DeviceManager
     $found = $null
+    $requestedId = {safe_id}
 
-    # Try exact device ID first, then first available scanner
+    # An explicit target must never silently become a different scanner.
     foreach ($d in $wia.DeviceInfos) {{
-        if ($d.DeviceID -eq '{safe_id}') {{ $found = $d; break }}
+        if ($d.Type -eq 1 -and $d.DeviceID -eq $requestedId) {{ $found = $d; break }}
     }}
-    if (-not $found) {{
+    if ($requestedId -and -not $found) {{ throw 'The selected scanner is unavailable. Select an available scanner and try again.' }}
+    if (-not $requestedId) {{
         foreach ($d in $wia.DeviceInfos) {{
             if ($d.Type -eq 1) {{ $found = $d; break }}
         }}
@@ -385,14 +462,14 @@ try {{
 
     # Transfer to BMP (universally supported) then convert to PNG via .NET
     $img = $item.Transfer('{BMP_GUID}')
-    $img.SaveFile('{ps_bmp}')
+    $img.SaveFile({ps_bmp})
 
     # Convert BMP → PNG using .NET System.Drawing
     Add-Type -AssemblyName System.Drawing
-    $bmp = [System.Drawing.Image]::FromFile('{ps_bmp}')
-    $bmp.Save('{ps_png}', [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp = [System.Drawing.Image]::FromFile({ps_bmp})
+    $bmp.Save({ps_png}, [System.Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
-    Remove-Item '{ps_bmp}' -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath {ps_bmp} -ErrorAction SilentlyContinue
 }} catch {{
     throw $_.Exception.Message
 }}
@@ -440,10 +517,12 @@ def _scan_sane(
 # ══════════════════════════════════════════════════════════════════════════════
 
 @printshop_router.get("/printshop/printers")
-def ep_list_printers():
+def ep_list_printers(check: Callable[[], None] = Depends(browser_control_access)):
     """List all printers available on this TLI node."""
+    check()
     printers = _list_printers()
-    return JSONResponse({
+    check()
+    return _private_json({
         "printers": printers,
         "platform": PLATFORM,
         "count":    len(printers),
@@ -451,10 +530,12 @@ def ep_list_printers():
 
 
 @printshop_router.get("/printshop/scanners")
-def ep_list_scanners():
+def ep_list_scanners(check: Callable[[], None] = Depends(browser_control_access)):
     """List all scanners available on this TLI node."""
+    check()
     scanners = _list_scanners()
-    return JSONResponse({
+    check()
+    return _private_json({
         "scanners": scanners,
         "platform": PLATFORM,
         "count":    len(scanners),
@@ -472,6 +553,7 @@ async def ep_print_file(
     scale:       int        = Form(100),       # 25–200 %
     orientation: str        = Form("portrait"), # portrait | landscape
     quality:     str        = Form("normal"),  # draft | normal | high
+    check: Callable[[], None] = Depends(browser_control_access),
 ):
     """Send a file to the specified printer with full options."""
     if not printer:
@@ -485,16 +567,21 @@ async def ep_print_file(
 
     suffix = Path(file.filename or "document.pdf").suffix or ".pdf"
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
-        tmp_path = tmp.name
-
+    check()
+    contents = await file.read()
+    check()
+    tmp_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+            tmp.write(contents)
+        check()
         if PLATFORM == "Windows":
             _print_windows(tmp_path, printer, copies, color, duplex, scale, orientation, quality)
         else:
             _print_cups(tmp_path, printer, copies, color, paper_size, duplex, scale, orientation, quality)
-        return JSONResponse({
+        check()
+        return _private_json({
             "status":      "sent",
             "printer":     printer,
             "copies":      copies,
@@ -504,20 +591,27 @@ async def ep_print_file(
             "orientation": orientation,
             "quality":     quality,
         })
+    except HTTPException:
+        check()
+        raise
     except Exception as exc:
+        check()
         raise HTTPException(500, f"Print failed: {exc}")
     finally:
         try:
-            os.unlink(tmp_path)
+            if tmp_path is not None:
+                os.unlink(tmp_path)
         except Exception:
             pass
 
 
 @printshop_router.post("/printshop/scan")
 async def ep_scan_document(
+    request: Request,
     scanner_id:  str = Form(...),
     resolution:  int = Form(300),
     color_mode:  str = Form("color"),   # color | gray | bw
+    check: Callable[[], None] = Depends(browser_control_access),
 ):
     """Acquire a scan from the specified scanner."""
     if resolution not in (75, 150, 300, 600):
@@ -525,55 +619,82 @@ async def ep_scan_document(
     if color_mode not in ("color", "gray", "bw"):
         color_mode = "color"
 
-    out_path = tempfile.mktemp(suffix=".png")
+    owner = _scan_owner(request, check)
+    out_path = str(Path(tempfile.mkdtemp(prefix="tli-scan-")) / "scan.png")
+    token = None
     try:
+        check()
         if PLATFORM == "Windows":
             _scan_wia(scanner_id, out_path, resolution, color_mode)
         else:
             _scan_sane(scanner_id, out_path, resolution, color_mode)
 
+        check()
         token = uuid.uuid4().hex
         with _scan_lock:
-            _scan_store[token] = (out_path, "image/png")
+            check()
+            _scan_store[token] = _ScanRecord(out_path, "image/png", owner)
 
-        return JSONResponse({
+        check()
+        return _private_json({
             "status":  "ok",
             "token":   token,
             "format":  "png",
         })
     except Exception as exc:
+        if token:
+            with _scan_lock:
+                _scan_store.pop(token, None)
         try:
-            os.unlink(out_path)
-        except Exception:
+            _remove_new_scan(out_path)
+        except OSError:
             pass
+        check()
+        if isinstance(exc, HTTPException):
+            raise
         raise HTTPException(500, f"Scan failed: {exc}")
 
 
 @printshop_router.get("/printshop/scan/{token}")
-def ep_download_scan(token: str):
+def ep_download_scan(token: str, request: Request,
+                     check: Callable[[], None] = Depends(browser_control_access)):
     """Download a completed scan by token."""
-    with _scan_lock:
-        entry = _scan_store.get(token)
-    if not entry:
-        raise HTTPException(404, "Scan token not found or already downloaded")
-    path, mime = entry
-    if not Path(path).exists():
+    owner = _scan_owner(request, check)
+    entry = _owned_scan(token, owner, check)
+    exists = Path(entry.path).exists()
+    check()
+    if not exists:
         raise HTTPException(410, "Scan file no longer available")
-    return FileResponse(
-        path,
-        media_type=mime,
+
+    def transfer_check():
+        if _owned_scan(token, owner, check) is not entry:
+            raise HTTPException(404, "Scan token is no longer available")
+
+    transfer_check()
+    return _AuthorizedScanResponse(
+        entry.path,
+        media_type=entry.mime,
         filename=f"tli-scan-{token[:8]}.png",
+        headers={"Cache-Control": "no-store"},
+        check=transfer_check,
     )
 
 
 @printshop_router.delete("/printshop/scan/{token}")
-def ep_delete_scan(token: str):
+def ep_delete_scan(token: str, request: Request,
+                   check: Callable[[], None] = Depends(browser_control_access)):
     """Clean up a scan temp file."""
+    owner = _scan_owner(request, check)
+    entry = _owned_scan(token, owner, check)
     with _scan_lock:
-        entry = _scan_store.pop(token, None)
-    if entry:
+        check()
+        if _scan_store.get(token) is not entry:
+            raise HTTPException(404, "Scan token is no longer available")
         try:
-            os.unlink(entry[0])
-        except Exception:
-            pass
-    return JSONResponse({"status": "deleted"})
+            _remove_new_scan(entry.path)
+        except OSError:
+            check()
+            raise HTTPException(500, "The scan file could not be removed; its record was retained.") from None
+        _scan_store.pop(token, None)
+    check()
+    return _private_json({"status": "deleted"})

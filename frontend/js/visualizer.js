@@ -44,6 +44,44 @@
       keys.every(key=>JSON.stringify(a.filters[key])===JSON.stringify(b.filters[key])) &&
       !a.accounting?.identity_unknown && !b.accounting?.identity_unknown;
   }
+  const validRelativePath=value=>typeof value==='string'&&value.length>0&&value.length<=4096&&!/[\x00-\x1f:]/.test(value)&&!value.replace(/\\/g,'/').startsWith('/')&&value.replace(/\\/g,'/').split('/').every(part=>part&&part!=='.'&&part!=='..');
+  function identityHistoryRow(row){
+    if(!row||!validRelativePath(row.path)||!integer(row.before_bytes)||!integer(row.after_bytes)||!Number.isSafeInteger(row.delta_bytes)||row.delta_bytes!==row.after_bytes-row.before_bytes)return false;
+    if(row.status==='different_identity_at_path')return true;
+    if(row.status!=='same_identity_different_path'||row.identity_matched!==true||!validRelativePath(row.before_path)||!validRelativePath(row.after_path))return false;
+    const normalized=value=>value.replace(/\\/g,'/');return normalized(row.path)===normalized(row.after_path)&&normalized(row.before_path)!==normalized(row.after_path);
+  }
+  function describeIdentityHistoryRow(row){
+    const measured=`${bytes(row.before_bytes)} → ${bytes(row.after_bytes)} (${delta(row.delta_bytes)})`;
+    return (row.status==='same_identity_different_path'?`Recorded filesystem identity at a different path: ${row.before_path} → ${row.after_path}. Logical size ${measured}. This does not prove a rename; identifiers may be reused.`:`Different filesystem identity at ${row.path}. Recorded path size ${measured}; this is not measured growth of one file.`)+(row.hardlink_duplicate?' Hard-link alias; do not add these bytes to counted totals.':'');
+  }
+  function indexedComparison(data){
+    const result=data.indexed_comparison;
+    if(result?.available!==true||result.schema_version!==1||typeof result.complete!=='boolean'||typeof result.comparable!=='boolean'||result.folder_deltas_supported!==false||result.atomic_snapshot!==false||!Array.isArray(result.changes)||result.changes.length>100||!Array.isArray(result.reasons)||result.reasons.length>30||result.reasons.some(reason=>typeof reason!=='string')||!compatibleSelection(data))return null;
+    const windows=/^[a-z]:[\\/]|^\\\\/i.test(data.current.root),normalize=value=>windows?value.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase():value.replace(/\/+$/,'')||'/',root=normalize(data.current.root);
+    const validPath=value=>typeof value==='string'&&value.length<=4096&&!/[\x00-\x1f]/.test(value)&&normalize(value).startsWith(root.replace(/\/$/,'')+'/')&&!value.replace(/\\/g,'/').split('/').some(part=>part==='.'||part==='..');
+    const identities=new Set();
+    for(const row of result.changes){
+      if(!row||!validPath(row.path)||!validPath(row.previous_path)||typeof row.file_identity!=='string'||!row.file_identity||row.file_identity.length>512||identities.has(row.file_identity)||row.observation!=='same_filesystem_identity'||!integer(row.logical_size)||!integer(row.previous_logical_size)||!Number.isSafeInteger(row.logical_delta)||row.logical_delta!==row.logical_size-row.previous_logical_size||!['observed_growth','observed_reduction','path_changed'].includes(row.status)||row.status==='observed_growth'&&row.logical_delta<=0||row.status==='observed_reduction'&&row.logical_delta>=0||row.status==='path_changed'&&(row.logical_delta!==0||normalize(row.path)===normalize(row.previous_path)))return null;
+      identities.add(row.file_identity);
+    }
+    return result;
+  }
+  function describeIndexedRow(row){
+    return `${row.previous_path} → ${row.path} · Recorded logical size ${bytes(row.previous_logical_size)} → ${bytes(row.logical_size)} (${delta(row.logical_delta)}).`;
+  }
+  function showIndexedComparison(data,box){
+    if(!data.indexed_comparison)return 0;
+    if(data.indexed_comparison.available!==true){if(typeof data.indexed_comparison.reason==='string')box.append(node('p',data.indexed_comparison.reason));return 0;}
+    const evidence=indexedComparison(data);if(!evidence){box.append(node('p','Indexed comparison could not be validated. No indexed changes are shown.'));return 0;}
+    const section=node('details');section.append(node('summary','Changes in indexed file identities'));
+    section.append(node('p',evidence.complete?'Matching filesystem identities in both recorded inventories.':'Incomplete comparison: only matching, observed filesystem identities are shown. Missing paths are not evidence of creation or deletion.'));
+    if(typeof evidence.reason==='string')section.append(node('p',evidence.reason));
+    const list=node('ol');for(const row of evidence.changes)list.append(node('li',describeIndexedRow(row)));section.append(list);
+    if(!evidence.changes.length)section.append(node('p','No supported indexed change rows were returned. This does not establish that the whole scan is unchanged.'));
+    if(evidence.results_limited)section.append(node('p','Only a bounded set of indexed changes is shown.'));
+    section.append(node('p','Live observations can overlap file changes and filesystem identifiers can be reused. A changed path does not prove a rename. These file rows do not authorize cleanup or support folder deltas.'));box.append(section);return evidence.changes.length;
+  }
   function renderSelection() {
     const box=$('storage-history-selection');if(!box)return;box.replaceChildren();if(!selectedPath)return;
     box.append(node('h4','Selected path changes'),node('p',selectedPath));
@@ -63,6 +101,11 @@
       return;
     }
     if(!path.startsWith(root+'/')) {unavailable('The selection is outside the compared root.');return;}
+    const indexed=indexedComparison(data);
+    if(indexed){
+      const matches=indexed.changes.filter(row=>normalize(row.path)===path||normalize(row.previous_path)===path);
+      if(matches.length===1){box.append(node('p',describeIndexedRow(matches[0])),node('p',`${indexed.complete?'Recorded identity match.':'Incomplete comparison; only this observed identity match is supported.'} Filesystem identifiers may be reused; changed paths do not prove a rename. Folder deltas and cleanup are not supported by this evidence.`));return;}
+    }
     const relative=path.slice(root.length+1);
     const safeRelative=value=>typeof value==='string' && value.length>0 && value.length<=4096 && !value.includes('\0') && !value.includes(':') &&
       !value.replace(/\\/g,'/').startsWith('/') && value.replace(/\\/g,'/').split('/').every(part=>part && part!=='.' && part!=='..');
@@ -74,6 +117,7 @@
     if(data.file_comparison?.available===true && Array.isArray(data.files) && data.files.length<=1000) {
       const matches=data.files.filter(item=>safeRelative(item?.path) && normalize(item.path)===relative);
       const candidate=matches.length===1?matches[0]:null;
+      if(identityHistoryRow(candidate)&&(data.comparable||data.file_comparison.complete===false)){row=candidate;kind='Recorded file identity';}
       if(validRow(candidate) && (data.comparable || data.file_comparison.complete===false && ['grew','shrank'].includes(candidate.status)) &&
         (!['added','removed'].includes(candidate.status) || data.file_comparison.complete===true)) {row=candidate;kind='Recorded file path';}
     }
@@ -87,7 +131,8 @@
         (data.folder_comparison?.available===false && typeof data.folder_comparison.reason==='string'?' '+data.folder_comparison.reason:''));
       return;
     }
-    if(['grew','shrank'].includes(row.status))measured(kind+' logical size',row);
+    if(identityHistoryRow(row))box.append(node('p',describeIdentityHistoryRow(row)));
+    else if(['grew','shrank'].includes(row.status))measured(kind+' logical size',row);
     else box.append(node('p',`${kind}: ${row.after_bytes===null?'not observed in the later scan; previously '+bytes(row.before_bytes):'newly observed at '+bytes(row.after_bytes)}. No measured before-and-after size delta is available; this does not establish creation or deletion.`));
     if(!data.comparable)box.append(node('p','Partial coverage: only this retained path’s recorded logical sizes are compared. Whole-scan growth is unavailable; replacement or movement may explain the path change.'));
     if(row.hardlink_duplicate)box.append(node('p','Hard-link alias: these logical bytes must not be added to counted totals.'));
@@ -247,7 +292,8 @@
       if(typeof data.message==='string')box.append(node('p',data.message));
       showCapacityComparison(data,box);
       const measuredFiles=showFileComparison(data,box);
-      status(data.comparable ? "Comparison ready." : measuredFiles ? "Partial comparison ready. Individual measured file changes are shown; whole-scan growth is unavailable." : "Comparison unavailable; no growth or shrinkage is claimed.");
+      const measuredIndexed=showIndexedComparison(data,box);
+      status(data.comparable ? "Comparison ready." : measuredFiles||measuredIndexed ? "Partial comparison ready. Individual measured file changes are shown; whole-scan growth is unavailable." : "Comparison unavailable; no growth or shrinkage is claimed.");
     });
   }
   function showCapacityComparison(data,box){
@@ -267,6 +313,7 @@
     if(typeof data.file_comparison.reason==='string')section.append(node('p',data.file_comparison.reason));
     const rows=node('ol');
     for(const row of data.files.slice(0,100)){
+      if(identityHistoryRow(row)&&compatibleSelection(data)){rows.append(node('li',describeIdentityHistoryRow(row)));continue;}
       if(typeof row.path!=='string'||row.path.length>4096||!['grew','shrank','newly_observed','not_observed','added','removed'].includes(row.status)||(row.before_bytes!==null&&!integer(row.before_bytes))||(row.after_bytes!==null&&!integer(row.after_bytes)))continue;
       const measured=row.before_bytes!==null&&row.after_bytes!==null;
       if(measured&&(!Number.isSafeInteger(row.delta_bytes)||row.delta_bytes!==row.after_bytes-row.before_bytes))continue;
@@ -386,7 +433,7 @@ function visCoverage(meta) {
   if (meta.entry_limited) reasons.push("entry limit reached");
   if (meta.time_limited) reasons.push("time limit reached");
   if (meta.cancelled) reasons.push("stopped before all entries were inspected");
-  const representation = meta.representation_limited ? " The returned tree is limited; some inspected paths are grouped or omitted. Select a smaller location and scan explicitly to inspect them." : "";
+  const representation = meta.representation_limited ? " The returned tree is limited; some inspected paths are grouped or omitted. " + (meta.inventory?.version === 1 && meta.inventory.available === true ? "Browse indexed inventory to inspect recorded paths beyond this tree." : "Select a smaller location and scan explicitly to inspect them.") : "";
   return (meta.partial
     ? `Partial scan: ${reasons.join("; ") || "some entries were not inspected"}. Scan a specific folder for more detail.`
     : "Scan finished within its limits. File sizes can differ from space used on disk.") + representation;
@@ -525,8 +572,9 @@ function getParentFolderPath(fullPath) {
   const state = {initialized:false, locked:false, paused:false, panelActive:true, epoch:0, sequence:0, drives:[], drivesLoaded:false, driveBusy:false,
     job:null, pendingStart:null, busy:false, timer:null, requests:new Set(), observation:null, tools:{}, tab:'explore',
     focus:'', mode:'map', surface:'list', mapGroup:null, mapView:null, mapExcluded:new Set(), metric:'size', sort:'size', direction:-1, selected:null, handoff:null, investigationBusy:false, investigationRevision:0,
-    expanded:new Set(), filterExpanded:new Set(), treeRows:[], treeActiveKey:null, extensionFilter:null, treeRatio:60, typePage:0};
-  let mapObserver = null, workbenchObserver = null, mapMarks = [], tableMarks = [], entryMenu = null, revealPending = null, renderedList = null;
+    expanded:new Set(), filterExpanded:new Set(), treeRows:[], treeActiveKey:null, extensionFilter:null, treeRatio:60, typePage:0,
+    inventory:null, inventoryRevision:0, inventoryTimer:null, browserView:'tree'};
+  let mapObserver = null, workbenchObserver = null, mapMarks = [], tableMarks = [], entryMenu = null, revealPending = null, renderedList = null, inventoryAbort = null;
   const $ = id => document.getElementById(id);
   const make = (tag, text, className) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (className) n.className = className; return n; };
   const button = (text, fn, className = 'fs-button') => { const n = make('button', text, className); n.type = 'button'; n.addEventListener('click', fn); return n; };
@@ -549,8 +597,8 @@ function getParentFolderPath(fullPath) {
   const hostName = () => window.__tli_node_name || window.__tli_hostname || 'TLI host';
   const category = name => { const ext=(name.match(/\.([^.]*)$/)?.[1]||'').toLowerCase(); for(const [name,exts] of Object.entries({'System files':['sys','dll','drv'],'Disk images':['iso','vhd','vhdx','vmdk','qcow2','img'],Images:['jpg','jpeg','png','webp','gif','heic','svg'],Video:['mp4','mov','mkv','avi','webm'],Audio:['mp3','flac','wav','m4a'],Documents:['pdf','doc','docx','txt','md','xlsx','csv','pptx'],Archives:['zip','7z','rar','tar','gz'],Installers:['exe','msi','dmg','pkg','deb','apk'],Models:['gguf','safetensors','onnx','pt']})) if(exts.includes(ext))return name; return 'Other'; };
   function requestId() { const c=window.crypto; if(c?.randomUUID)return c.randomUUID(); if(!c?.getRandomValues)throw Error('Secure request identifiers are unavailable in this browser.'); const b=new Uint8Array(16); c.getRandomValues(b); return Array.from(b,n=>n.toString(16).padStart(2,'0')).join(''); }
-  async function api(url, payload, epoch=state.epoch, method) {
-    const abort = new AbortController(); state.requests.add(abort); const timeout=setTimeout(()=>abort.abort(),20000);
+  async function api(url, payload, epoch=state.epoch, method, suppliedAbort=null) {
+    const abort = suppliedAbort || new AbortController(); state.requests.add(abort); const timeout=setTimeout(()=>abort.abort(),20000);
     try {
       const response=await fetch(url,{method:method||(payload?'POST':'GET'),credentials:'same-origin',cache:'no-store',signal:abort.signal,...(payload?{headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{})});
       if(!current(epoch))throw Error('View changed.');
@@ -599,9 +647,11 @@ function getParentFolderPath(fullPath) {
     $('fs-job-stop').disabled=state.busy||state.paused||!waiting||state.job?.status==='cancelling';
     $('fs-job-stop').hidden=!waiting;
     $('fs-job-check').disabled=state.busy;
-    $('fs-job').hidden=(!state.job&&!state.pendingStart)||(state.job&&['completed','partial'].includes(state.job.status)&&$('fs-job-check').hidden);
+    $('fs-job').hidden=!!((!state.job&&!state.pendingStart)||(state.job&&['completed','partial'].includes(state.job.status)&&$('fs-job-check').hidden));
     const path=selectedPath(), scanActive=(state.pendingStart?.operation==='scan'?state.pendingStart:waiting&&state.job.operation==='scan'?state.job:null);
-    text('visualizerScanBtn',scanActive?`Scanning ${scanActive.path}…`:visibleObservation()?'Scan again':path?`Scan ${path}`:'Scan location');
+    text('visualizerScanBtn',scanActive?'Scanning…':visibleObservation()?'Scan again':'Scan');
+    $('visualizerScanBtn').setAttribute('aria-label',scanActive?`Scanning ${scanActive.path}`:path?`Scan ${path}`:'Scan a location');
+    $('fs-empty').hidden=!!visibleObservation()||!!scanActive;
     if(!visibleObservation()){
       const scanning=scanActive&&samePath(scanActive.path,path);
       text('fs-empty-title',scanning?`Scanning ${path}…`:path?`Scan ${path} to see what uses space`:'Choose a drive or folder');
@@ -609,17 +659,22 @@ function getParentFolderPath(fullPath) {
     }
     $('fs-ask-chat').disabled=!visibleObservation()||state.locked;
     if($('fs-investigate'))$('fs-investigate').disabled=state.investigationBusy||!visibleObservation()||blocked;
-    if($('fs-selected-explain'))$('fs-selected-explain').disabled=state.investigationBusy||blocked||!visibleObservation()||!state.selected?.path||state.selected.synthetic===true||state.selected.aggregate===true;
-    if($('fs-selected-reveal'))$('fs-selected-reveal').disabled=state.locked||state.paused||!visibleObservation()||!state.selected?.path||state.selected.synthetic===true;
+    if($('fs-selected-explain'))$('fs-selected-explain').disabled=state.investigationBusy||blocked||!visibleObservation()||!state.selected?.path||state.selected.synthetic===true||state.selected.aggregate===true||!!state.selected?.inventoryJob&&!['file','directory'].includes(state.selected.kind);
+    if($('fs-selected-reveal'))$('fs-selected-reveal').disabled=state.locked||state.paused||!visibleObservation()||!state.selected?.path||state.selected.synthetic===true||!!state.selected?.inventoryJob&&!['file','directory'].includes(state.selected.kind);
+    inventoryControls();
   }
   function showJob(job) {
-    text('fs-job-title',`${labels[job.operation]} · ${job.status}`);
+    const active=!terminal.has(job.status);
+    text('fs-job-title',job.operation==='scan'&&active?`${job.status==='cancelling'?'Stopping scan of':'Scanning'} ${job.path}`:`${labels[job.operation]} · ${job.status}`);
+    if(active)status('');
     const p=job.progress||{}, parts=[];
-    for(const [key,label] of [['entries_seen','entries inspected'],['files','files inspected'],['found','matches found'],['files_hashed','files checked in full']])if(finite(p[key]))parts.push(p[key].toLocaleString()+' '+label);
-    const phases={queued:'Waiting to start',starting:'Starting',scanning:'Inspecting entries',enumerating:'Inspecting entries',hashing:'Checking file contents',finishing:'Preparing result',completed:'Finished',cancelled:'Stopped'};
+    for(const [key,label] of [['entries_seen','entries inspected'],['files','files inspected'],['found','matches found'],['files_hashed','files checked in full'],['records_examined','native records examined']])if(finite(p[key]))parts.push(p[key].toLocaleString()+' '+label);
+    if(finite(p.bytes_read))parts.push(bytes(p.bytes_read)+' native data read');
+    const phases={queued:'Waiting to start',starting:'Starting',scanning:'Inspecting entries',enumerating:'Inspecting entries',hashing:'Checking file contents',indexing:'Indexing acquired entries',finishing:'Preparing result',completed:'Finished',cancelled:'Stopped'};
     const startTime=new Date(typeof job.started_at==='number'?job.started_at*1000:job.started_at).getTime();
-    if(Number.isFinite(startTime))parts.push(Math.max(0,Math.floor((Date.now()-startTime)/1000))+'s since start');
-    text('fs-job-progress',`${job.operation==='common_folders'?'Common folders on the TLI host':job.path} · ${job.profile} · ${phases[p.phase]||'Waiting for host progress'}. `+(parts.join(' · ') || (job.status==='cancelling'?'Stop requested; waiting for host confirmation.':'No progress counters received yet.')));
+    const elapsed=finite(job.elapsed_s)?job.elapsed_s:finite(job.elapsed_seconds)?job.elapsed_seconds:Number.isFinite(startTime)?(Date.now()-startTime)/1000:null;
+    if(elapsed!==null)parts.push(Math.max(0,Math.floor(elapsed))+'s elapsed');
+    text('fs-job-progress',`${job.operation==='scan'&&active?'':job.operation==='common_folders'?'Common folders · ':job.path+' · '}${job.profile==='deep'?'Deep':'Quick'} scan · ${phases[p.phase]||'Waiting for host progress'}. `+(parts.join(' · ') || (job.status==='cancelling'?'Stop requested; waiting for host confirmation.':'No progress counters received yet.')));
     controls();
   }
   function schedule(epoch) {clearTimeout(state.timer);if(current(epoch)&&state.job&&!terminal.has(state.job.status))state.timer=setTimeout(()=>poll(),1000);}
@@ -641,9 +696,9 @@ function getParentFolderPath(fullPath) {
     let request_id;try{request_id=requestId();}catch(e){status(e.message);return false;}
     const payload={operation,profile,path:operation==='common_folders'?undefined:path,include_excluded:profile==='deep'&&$('fs-include-excluded').checked===true,request_id};
     if(operation==='large_files'){const mb=Number($('vis4-largefiles-minmb').value);if(!Number.isFinite(mb)||mb<1||mb>50000){status('Choose a minimum from 1 to 50,000 MiB.');return false;}payload.min_mb=mb;payload.limit=500;}
-    closeEntryMenu();state.pendingStart=payload;state.job=null;if(operation==='scan'){setTab('explore');window.TLIStorageHistory?.beginScan(true);}return submitStart();
+    closeEntryMenu();$('fs-locations').open=false;if($('fs-scan-options'))$('fs-scan-options').open=false;status('');state.pendingStart=payload;state.job=null;if(operation==='scan'){setTab('explore');window.TLIStorageHistory?.beginScan(true);}return submitStart();
   }
-  async function submitStart(){if(state.busy||!state.pendingStart)return false;const epoch=state.epoch,payload=state.pendingStart;state.busy=true;controls();text('fs-job-title','Starting '+labels[payload.operation].toLowerCase());text('fs-job-progress','The prior observation stays available while this request is checked.');$('fs-job-check').hidden=true;
+  async function submitStart(){if(state.busy||!state.pendingStart)return false;const epoch=state.epoch,payload=state.pendingStart;state.busy=true;status('');controls();text('fs-job-title','Starting '+labels[payload.operation].toLowerCase()+(payload.path?' · '+payload.path:''));text('fs-job-progress','Waiting for the host…');$('fs-job-check').hidden=true;
     try{if(window.TLIRelease)await window.TLIRelease.requireCapability('storage_jobs_v1');if(!current(epoch))return false;const data=await api('/visualizer/jobs',payload,epoch);const job=validateJob(data,payload);if(!current(epoch))return false;state.job=job;state.pendingStart=null;showJob(job);if(terminal.has(job.status))await finish(job,epoch);else schedule(epoch);return true;}
     catch(e){if(current(epoch)){if(e.status){state.pendingStart=null;status(e.code==='host_version_not_ready'?`Restart TLI to load the update, then refresh and scan ${payload.path||'again'}.`:e.message+' The request was rejected. Previous observations are unchanged; nothing retries automatically.');window.TLIStorageHistory?.scanFailed();}else{status(e.message+' Start was not confirmed. An explicit retry uses the same request ID, but can start the job if the first request never arrived.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Retry this start request';}}}
     finally{if(current(epoch)){state.busy=false;controls();}}
@@ -659,12 +714,12 @@ function getParentFolderPath(fullPath) {
     catch(e){if(current(epoch)){status(e.message+' Cancellation was not confirmed. The host may still be scanning; check status before starting again.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Check status';}}
     finally{if(current(epoch)){state.busy=false;controls();}}
   }
-  function prepare(path){setup();if(state.locked||!pathOK(path))return false;$('visualizerPathInput').value=path;locationChanged();status(visibleObservation()?'Showing the last scan of this location. No new scan has run.':'Location selected; no scan has run.');return true;}
-  function renderSelectedCapacity(){const drive=state.drives.find(d=>samePath(d.mountpoint,selectedPath()));text('fs-location-capacity',drive?`${bytes(drive.free)} free of ${bytes(drive.total)}`:'Select a drive or enter a folder on the TLI host.');}
+  function prepare(path){setup();if(state.locked||!pathOK(path))return false;const picker=$('fs-locations'),fromPicker=picker.contains?.(document.activeElement);$('visualizerPathInput').value=path;picker.open=false;locationChanged();status('');if(fromPicker)$('visualizerPathInput').focus();return true;}
+  function renderSelectedCapacity(){const path=selectedPath(),drive=state.drives.find(d=>samePath(d.mountpoint,path));text('fs-location-capacity',drive?`${bytes(drive.free)} free of ${bytes(drive.total)}`:path?'Folder on this TLI host':'Choose a drive or enter a folder path.');text('fs-location-summary-hint',state.drivesLoaded?`${state.drives.length} drives`:'');}
   function locationChanged(){
     closeEntryMenu();closeHandoff();clearInvestigation();const path=selectedPath();
     window.TLIStorageCleanup?.setLocation?.(path);
-    text('fs-location-title',path||'Choose where to look');text('fs-location-summary-hint',path||'Choose a drive or folder');
+    text('fs-location-title','Scan a location');
     renderSelectedCapacity();
     for(const n of $('vis4-drives').querySelectorAll('button'))n.setAttribute('aria-pressed',String(samePath(n.dataset.mount,path)));
     state.displayRevision=(state.displayRevision||0)+1;state.selected=null;state.treeRows=[];state.treeActiveKey=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;for(const id of ['fs-selected-cleanup','visualizerDetailsName','visualizerDetailsPath','visualizerDetailsSize'])$(id).replaceChildren();
@@ -678,23 +733,233 @@ function getParentFolderPath(fullPath) {
     finally{if(current(epoch)){state.driveBusy=false;$('fs-drives-refresh').disabled=false;}}
   }
   function renderDrives(){const query=$('fs-drive-search').value.toLowerCase(),sort=$('fs-drive-sort').value,rows=state.drives.filter(d=>(String(d.label||'')+' '+d.mountpoint).toLowerCase().includes(query)).sort((a,b)=>sort==='free'?(finite(a.free)?a.free:Infinity)-(finite(b.free)?b.free:Infinity):sort==='used'?(finite(b.percent_used)?b.percent_used:-1)-(finite(a.percent_used)?a.percent_used:-1):String(a.label||a.mountpoint).localeCompare(String(b.label||b.mountpoint)));const list=$('vis4-drives');list.replaceChildren();
-    for(const d of rows){const b=button('',()=>prepare(d.mountpoint),'fs-drive');b.dataset.mount=d.mountpoint;b.setAttribute('aria-pressed',String(samePath($('visualizerPathInput').value,d.mountpoint)));const top=make('span',undefined,'fs-drive-top');top.append(make('strong',d.label||d.mountpoint),make('span',finite(d.percent_used)&&d.percent_used<=100?Math.round(d.percent_used)+'% used':'Usage unknown','fs-help'));b.append(top,make('span',d.mountpoint,'fs-path'));const meter=make('span',undefined,'fs-meter'),fill=make('span');fill.style.width=(finite(d.percent_used)&&d.percent_used<=100?d.percent_used:0)+'%';meter.append(fill);b.append(meter,make('span',`${bytes(d.free)} free / ${bytes(d.total)}`,'fs-help'));if(d.availability&&d.availability!=='available'){b.append(make('span',({offline:'Offline',unavailable:'Capacity unavailable',unknown:'Capacity unknown'}[d.availability]||'Capacity unavailable')+(typeof d.detail==='string'?' · '+d.detail.slice(0,240):''),'fs-drive-availability'));}list.append(b);}if(!rows.length)list.append(make('p',state.drives.length?'No drives match your search.':'No drives returned. Enter a folder to continue.','fs-help'));}
+    for(const d of rows){
+      const b=button('',()=>{if(prepare(d.mountpoint))$('visualizerPathInput').focus();},'fs-drive');
+      b.dataset.mount=d.mountpoint;b.setAttribute('aria-pressed',String(samePath($('visualizerPathInput').value,d.mountpoint)));
+      const top=make('span',undefined,'fs-drive-top'),label=d.label&&!samePath(d.label,d.mountpoint)?`${d.label} (${d.mountpoint})`:d.mountpoint;
+      top.append(make('strong',label),make('span',finite(d.percent_used)&&d.percent_used<=100?Math.round(d.percent_used)+'% used':'Usage unknown','fs-help'));
+      const meter=make('span',undefined,'fs-meter'),fill=make('span');fill.style.width=(finite(d.percent_used)&&d.percent_used<=100?d.percent_used:0)+'%';meter.append(fill);
+      b.append(top,meter,make('span',`${bytes(d.free)} free / ${bytes(d.total)}`,'fs-help'));
+      if(d.availability&&d.availability!=='available')b.append(make('span',({offline:'Offline',unavailable:'Capacity unavailable',unknown:'Capacity unknown'}[d.availability]||'Capacity unavailable')+(typeof d.detail==='string'?' · '+d.detail.slice(0,240):''),'fs-drive-availability'));
+      list.append(b);
+    }
+    if(!rows.length)list.append(make('p',state.drives.length?'No drives match your search.':'No drives returned. Enter a folder to continue.','fs-help'));
+  }
   function applyScope(observation){if(observation)window.TLIStorageCleanup?.setScope?.({observationId:observation.job.id,root:observation.root||'common_folders',host:observation.host||{name:hostName(),id:null}});}
-  function setTab(tab,focusResults=false){if(!['explore','large_files','duplicates','common_folders','history'].includes(tab))return;const changed=state.tab!==tab;closeEntryMenu();state.tab=tab;if(tab!=='explore'&&$('fs-more-tools'))$('fs-more-tools').open=true;for(const b of document.querySelectorAll('[data-fs-tab]')){const active=b.dataset.fsTab===tab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$('fs-view-'+b.dataset.fsTab).hidden=!active;}if(changed){if(tab==='explore'){if(visibleObservation())applyScope(state.observation);renderObservation();}else if(operations.includes(tab)){if(matchesLocation(state.tools[tab]))applyScope(state.tools[tab]);renderTool(tab);}}if(tab==='explore'&&focusResults){const target=visibleObservation()?$('vis4-summary').querySelector('strong'):$('fs-empty-title');target?.setAttribute('tabindex','-1');target?.focus();target?.scrollIntoView?.({block:'start',behavior:'instant'});}}
+  function setTab(tab,focusResults=false){if(!['explore','large_files','duplicates','common_folders','history'].includes(tab))return;const changed=state.tab!==tab;if(changed){const pending=state.inventory?.busy||state.inventoryTimer!==null;clearTimeout(state.inventoryTimer);state.inventoryTimer=null;inventoryAbort?.abort();inventoryAbort=null;state.inventoryRevision++;if(state.inventory){if(pending){state.inventory.page=null;$('fs-inventory-rows')?.replaceChildren();text('fs-inventory-status','File browsing paused. Search or choose a view to continue.');}state.inventory.busy=false;}}closeEntryMenu();state.tab=tab;if(tab!=='explore'&&$('fs-more-tools'))$('fs-more-tools').open=true;for(const b of document.querySelectorAll('[data-fs-tab]')){const active=b.dataset.fsTab===tab;b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;$('fs-view-'+b.dataset.fsTab).hidden=!active;}if(changed){if(tab==='explore'){if(visibleObservation())applyScope(state.observation);renderObservation();}else if(operations.includes(tab)){if(matchesLocation(state.tools[tab]))applyScope(state.tools[tab]);renderTool(tab);}}if(tab==='explore'&&focusResults){const target=visibleObservation()?$('vis4-summary').querySelector('strong'):!$('fs-job').hidden?$('fs-job-title'):$('fs-empty-title');target?.setAttribute('tabindex','-1');target?.focus();target?.scrollIntoView?.({block:'start',behavior:'instant'});}}
   function renderObservation(){const o=visibleObservation(),path=selectedPath();$('fs-empty').hidden=!!o;$('storage-results').hidden=!o;$('panel-visualizer').classList.toggle('fs-has-observation',!!o);window.visualizerV4=o?{scanPath:o.root,meta:o.raw.meta,root:o.raw.tree}:null;
-    if(!o){renderedList=null;mapObserver?.disconnect();mapObserver=null;mapMarks=[];tableMarks=[];state.mapView=null;text('fs-empty-title',path?`Scan ${path} to see what uses space`:'Choose a drive or folder');text('fs-empty-description',path?'Choose Scan to view the files and folders here.':'Select a drive above, or enter a folder path.');for(const id of ['vis4-summary','visualizerTableBody','visualizerTypeBars','vis4-treemap-container','fs-map-breadcrumbs','fs-map-folders','fs-map-hidden'])$(id).replaceChildren();return;}
+    if(!o){resetInventory();renderedList=null;mapObserver?.disconnect();mapObserver=null;mapMarks=[];tableMarks=[];state.mapView=null;text('fs-empty-title',path?`Scan ${path} to see what uses space`:'Choose a drive or folder');text('fs-empty-description',path?'Choose Scan to view the files and folders here.':'Select a drive above, or enter a folder path.');for(const id of ['vis4-summary','visualizerTableBody','visualizerTypeBars','vis4-treemap-container','fs-map-breadcrumbs','fs-map-folders','fs-map-hidden'])$(id).replaceChildren();return;}
     const summary=$('vis4-summary');summary.replaceChildren();const heading=make('div',undefined,'fs-heading');heading.append(make('strong',o.root));if(o.raw.meta.partial||o.raw.tree.size_partial||o.job.status!=='completed')heading.append(make('span','Partial scan','fs-badge'));summary.append(heading,make('p',`${itemBytes(o.index.get(o.root))} inspected · ${date(o.recordedAt)} · ${o.host.name}`,'fs-help'));
     const details=make('details',undefined,'fs-policy');details.append(make('summary','Recorded scope & limits'),make('p',o.root,'fs-path'),make('p',visCoverage(o.raw.meta)));details.append(make('p',`Host ID: ${o.host.id||'unavailable'} · Job: ${o.job.id} · ${o.job.profile} profile. This is a saved observation, not a current capacity reading.`));const filters=o.raw.meta.scan_filters||o.raw.meta.saved_scan?.summary?.filters;if(filters){const excluded=Array.isArray(filters.excluded_names)?filters.excluded_names.filter(n=>typeof n==='string').slice(0,100):null;details.append(make('p',`Limits: ${finite(filters.max_seconds)?filters.max_seconds+' seconds':'time unavailable'}, ${finite(filters.max_entries)?filters.max_entries.toLocaleString()+' entries':'entry limit unavailable'}, ${finite(filters.max_depth)?filters.max_depth+' folder levels':'depth unavailable'}. Excluded names: ${excluded?excluded.join(', ')||'none':'not recorded'}.`));}else details.append(make('p','The returned observation did not record a scan-policy breakdown.'));summary.append(details);
     if(o.raw.meta.scanner)details.append(make('p',`Scanner: ${o.raw.meta.scanner.engine || 'filesystem traversal'}${o.raw.meta.scanner.mft===false?' · MFT acceleration unavailable':''}. ${Array.isArray(o.raw.meta.scanner.limitations)?o.raw.meta.scanner.limitations.join(' '):''}`));
+    if(typeof o.raw.meta.scanner?.fallback_reason==='string')details.append(make('p','Scanner fallback: '+o.raw.meta.scanner.fallback_reason));
     const cats=$('visualizerCategoryFilter'),selected=cats.value;cats.replaceChildren();for(const c of ['all',...new Set(o.files.map(f=>f.category))].sort((a,b)=>a==='all'?-1:b==='all'?1:a.localeCompare(b))){const option=make('option',c==='all'?'All types':c);option.value=c;cats.append(option);}cats.value=Array.from(cats.options).some(x=>x.value===selected)?selected:'all';renderConsumers(o);expandFilterMatches();renderExplorer();}
+  // The disk index is a separate, paged evidence source. Its rows never extend
+  // the retained cleanup tree or the map's byte accounting.
+  const inventoryAvailable=o=>o?.raw.meta.inventory?.version===1&&o.raw.meta.inventory.available===true;
+  function resetInventory(){
+    state.inventoryRevision++;inventoryAbort?.abort();inventoryAbort=null;clearTimeout(state.inventoryTimer);state.inventoryTimer=null;state.inventory=null;state.browserView='tree';
+    const box=$('fs-inventory');if(box){box.hidden=true;box.open=false;}
+    for(const id of ['fs-inventory-rows','fs-inventory-status','fs-inventory-coverage','fs-inventory-path','fs-inventory-breadcrumbs','fs-inventory-warning'])$(id)?.replaceChildren();
+    for(const id of ['fs-inventory-query','fs-inventory-extension'])if($(id))$(id).value='';
+    browserPresentation();
+  }
+  function browserPresentation(){
+    const available=inventoryAvailable(visibleObservation()),indexed=available&&state.browserView!=='tree';
+    if($('fs-browser-views'))$('fs-browser-views').hidden=!available;
+    for(const view of ['files','largest','tree'])$('fs-browser-'+view)?.setAttribute('aria-pressed',String(state.browserView===view));
+    for(const id of ['fs-tree-controls','fs-tree-toolbar','fs-table-wrap'])if($(id))$(id).hidden=indexed;
+    if($('fs-inventory'))$('fs-inventory').hidden=!indexed;
+    if($('fs-map-workbench'))$('fs-map-workbench').dataset.browser=indexed?'indexed':'tree';
+    if($('fs-map-breadcrumbs'))$('fs-map-breadcrumbs').hidden=indexed;
+    if($('visualizerBackBtn'))$('visualizerBackBtn').hidden=indexed;
+    if($('visualizerStatusLine'))$('visualizerStatusLine').hidden=indexed;
+    text('visualizerCenterTitle',indexed?(state.browserView==='largest'?'Largest recorded files':'Files & folders'):'Map & tree');
+    text('visualizerCenterSubtitle',indexed?'Browse this scan without scanning again.':state.focus);
+    text('fs-mobile-list',indexed?'Files':'Tree');
+  }
+  function setBrowserView(view){
+    if(!['files','largest','tree'].includes(view)||!inspectable(visibleObservation()))return;
+    clearTimeout(state.inventoryTimer);state.inventoryTimer=null;inventoryAbort?.abort();inventoryAbort=null;
+    state.inventoryRevision++;if(state.inventory)state.inventory.busy=false;
+    state.browserView=view;browserPresentation();closeEntryMenu();
+    if(view==='tree'){renderExplorer();return;}
+    $('fs-inventory-query').value='';$('fs-inventory-extension').value='';
+    if(view==='largest'){$('fs-inventory-sort').value='size';$('fs-inventory-order').value='desc';}
+    return loadInventory(view==='largest'?'largest':'children',view==='largest'?visibleObservation().root:state.inventory?.folder||state.focus);
+  }
+  function inventoryCoverage(meta){
+    const count=Number.isSafeInteger(meta?.indexed_count)?meta.indexed_count.toLocaleString()+' indexed paths':'Indexed count unavailable';
+    const inspectedCount=meta?.inspected_entries??meta?.inspected_count,omitted=meta?.omitted_records??meta?.omitted_count;
+    const inspected=Number.isSafeInteger(inspectedCount)?' · '+inspectedCount.toLocaleString()+' entries inspected':'';
+    const missing=Number.isSafeInteger(omitted)&&omitted>0?' · '+omitted.toLocaleString()+' omitted records':'';
+    const unreadable=Number.isSafeInteger(meta?.unreadable_entries)&&meta.unreadable_entries>0?' · '+meta.unreadable_entries.toLocaleString()+' unreadable entries':'';
+    return count+inspected+missing+unreadable+' · '+(meta?.acquisition_complete===true?'Acquisition complete within the recorded policy.':'Partial or unconfirmed acquisition; missing paths do not establish absence.')+' Live observation; files may change during acquisition.';
+  }
+  function setupInventory(){
+    if($('fs-inventory')||!$('fs-map-list-panel'))return;
+    const box=make('section',undefined,'fs-inventory');box.id='fs-inventory';box.hidden=true;box.setAttribute('aria-label','Recorded file browser');
+    const identified=(tag,id,textValue,className)=>{const n=make(tag,textValue,className);n.id=id;return n;};
+    const views=$('fs-browser-views');if(views)for(const [view,label] of [['files','Files & folders'],['largest','Largest files'],['tree','Map & tree']]){const b=button(label,()=>setBrowserView(view),'fs-button fs-small');b.id='fs-browser-'+view;b.dataset.browserView=view;views.append(b);}
+    const toolbar=identified('div','fs-inventory-toolbar',undefined,'fs-inventory-toolbar');
+    const searchLabel=make('label','Search this scan','fs-field'),query=identified('input','fs-inventory-query');query.type='search';query.maxLength=256;query.placeholder='Find a name or path in this scan';searchLabel.append(query);toolbar.append(searchLabel);
+    const search=button('Search',()=>runInventorySearch());search.id='fs-inventory-search';
+    const clear=button('Clear',()=>{clearTimeout(state.inventoryTimer);query.value='';$('fs-inventory-extension').value='';return loadInventory('children',state.inventory?.folder||visibleObservation()?.root);});clear.id='fs-inventory-clear';toolbar.append(search,clear);box.append(toolbar);
+    const options=identified('details','fs-inventory-options',undefined,'fs-inventory-options');options.append(make('summary','Sort & filters'));
+    const fields=make('div',undefined,'fs-inventory-fields');
+    const field=(label,id,tag='input')=>{const wrapper=make('label',label,'fs-field'),input=identified(tag,id);wrapper.append(input);fields.append(wrapper);return input;};
+    const extension=field('Extension','fs-inventory-extension');extension.type='search';extension.maxLength=40;extension.placeholder='.gguf';
+    const sort=field('Sort','fs-inventory-sort','select');for(const [value,label] of [['size','Logical size'],['name','Name'],['allocated_size','On disk'],['modified_at','Modified']]){const option=make('option',label);option.value=value;sort.append(option);}sort.value='size';
+    const order=field('Order','fs-inventory-order','select');for(const [value,label] of [['desc','Descending'],['asc','Ascending']]){const option=make('option',label);option.value=value;order.append(option);}order.value='desc';options.append(fields);
+    const actions=make('div',undefined,'fs-actions');
+    for(const [id,label,mode] of [['browse','Browse current folder','children'],['filter','Apply extension','extension'],['largest','Largest files','largest']]){
+      const control=button(label,()=>loadInventory(mode,mode==='children'?state.inventory?.folder||state.focus:visibleObservation()?.root));control.id='fs-inventory-'+id;actions.append(control);if(id!=='filter')control.hidden=true;
+    }
+    options.append(actions);
+    const nav=make('div',undefined,'fs-inventory-navigation');const up=button('Up',()=>{const inv=state.inventory,o=visibleObservation();if(inv&&o&&below(inv.path,o.root)&&!samePath(inv.path,o.root))return loadInventory('children',getParentFolderPath(inv.path));});up.id='fs-inventory-up';up.setAttribute('aria-label','Up one recorded folder');
+    const crumbs=identified('nav','fs-inventory-breadcrumbs');crumbs.setAttribute('aria-label','Recorded folder');nav.append(up,crumbs);const locationbar=make('div',undefined,'fs-inventory-locationbar');locationbar.append(nav,options);box.append(locationbar,identified('p','fs-inventory-path',undefined,'fs-help'));
+    const warning=identified('p','fs-inventory-warning',undefined,'fs-coverage-warning');warning.setAttribute('role','status');warning.hidden=true;box.append(warning);
+    const statusLine=identified('p','fs-inventory-status',undefined,'fs-help');statusLine.setAttribute('role','status');box.append(statusLine);
+    const rows=identified('div','fs-inventory-rows',undefined,'fs-inventory-rows');rows.setAttribute('aria-label','Recorded entries');box.append(rows);
+    const paging=make('div',undefined,'fs-actions');
+    for(const [id,label,delta] of [['previous','Previous page',-1],['next','Next page',1]]){const control=button(label,()=>{const inv=state.inventory;if(inv?.page&&!inv.busy)return loadInventory(inv.mode,inv.path,delta>0?inv.offset+inv.page.items.length:inv.previousOffsets?.at(-1)||0,inv.query);});control.id='fs-inventory-'+id;paging.append(control);}box.append(paging);
+    const coverage=make('details',undefined,'fs-inventory-coverage');coverage.append(make('summary','Scan coverage'),identified('p','fs-inventory-coverage',undefined,'fs-help'),make('p','The space map summarizes retained paths. Indexed folder totals may assign shared hard-link bytes differently. Indexed entries do not authorize cleanup.','fs-help'));box.append(coverage);
+    for(const input of [sort,order])input.addEventListener('change',()=>{const inv=state.inventory;if(inv?.page)return loadInventory(inv.mode,inv.path,0,{...inv.query,sort:sort.value,order:order.value});});
+    query.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();clearTimeout(state.inventoryTimer);return runInventorySearch();}if(event.key==='Escape'){event.preventDefault();return clear.click();}});
+    query.addEventListener('input',()=>{clearTimeout(state.inventoryTimer);inventoryAbort?.abort();inventoryAbort=null;state.inventoryRevision++;if(state.inventory)state.inventory.busy=false;state.inventoryTimer=setTimeout(()=>{state.inventoryTimer=null;runInventorySearch();},250);clearInvestigation();state.selected=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup').replaceChildren();highlightSelection();inventoryControls();controls();});
+    extension.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();return loadInventory('extension',visibleObservation()?.root);}});
+    $('fs-map-list-panel').append(box);
+  }
+  function runInventorySearch(){
+    clearTimeout(state.inventoryTimer);state.inventoryTimer=null;
+    return loadInventory($('fs-inventory-query').value.trim()?'search':'children',$('fs-inventory-query').value.trim()?visibleObservation()?.root:state.inventory?.folder||visibleObservation()?.root);
+  }
+  function syncInventory(){
+    const o=visibleObservation(),box=$('fs-inventory');if(!box)return;
+    if(!inventoryAvailable(o)){resetInventory();return;}
+    const fresh=state.inventory?.observation!==o;
+    if(fresh){resetInventory();state.inventory={observation:o,path:o.root,folder:o.root,mode:'children',offset:0,page:null,busy:false,query:null};state.browserView='files';}
+    text('fs-inventory-coverage',inventoryCoverage(o.raw.meta.inventory));if(state.inventory.page&&!state.inventory.busy&&state.inventory.renderRevision!==state.inventoryRevision)renderInventory(state.inventory);browserPresentation();inventoryControls();
+    if(fresh&&inspectable(o))void loadInventory('children',o.root);
+  }
+  function inventoryControls(){
+    const inv=state.inventory,ready=inspectable(inv?.observation)&&inventoryAvailable(inv?.observation),busy=inv?.busy===true||state.inventoryTimer!==null;
+    for(const id of ['browse','search','filter','largest','sort','order'])if($('fs-inventory-'+id))$('fs-inventory-'+id).disabled=!ready||busy;
+    if($('fs-inventory-clear'))$('fs-inventory-clear').hidden=!$('fs-inventory-query').value&&!$('fs-inventory-extension').value&&!['search','extension'].includes(inv?.mode);
+    if($('fs-inventory-rows'))$('fs-inventory-rows').setAttribute('aria-busy',String(busy));
+    if($('fs-inventory-up'))$('fs-inventory-up').disabled=!ready||busy||!inv?.page||inv.mode!=='children'||samePath(inv.path,inv.observation.root);
+    if($('fs-inventory-previous'))$('fs-inventory-previous').disabled=!ready||busy||!inv?.page||inv.offset===0;
+    if($('fs-inventory-next'))$('fs-inventory-next').disabled=!ready||busy||inv?.page?.has_more!==true;
+  }
+  function validateInventory(data,o,query){
+    const integer=value=>Number.isSafeInteger(value)&&value>=0;
+    if(data?.version!==1||data.job_id!==o.job.id||!samePath(data.root,o.root)||!Array.isArray(data.items)||data.items.length>100||!integer(data.total)||data.offset!==query.offset||data.limit!==100||typeof data.has_more!=='boolean'||data.items.length>data.total||data.offset>data.total&&data.items.length||data.has_more!==(data.offset+data.items.length<data.total)||data.has_more&&data.items.length===0||!data.meta||typeof data.meta!=='object')throw Error('The host did not confirm a bounded inventory page for this scan.');
+    const seen=new Set(),items=[];
+    for(const node of data.items){
+      if(!node||!pathOK(node.path)||!below(node.path,o.root)||node.path.replace(/\\/g,'/').split('/').some(part=>part==='.'||part==='..')||typeof node.name!=='string'||node.name.length>4096||node.synthetic===true||node.kind==='aggregate'||!['file','directory','link','unknown'].includes(node.kind)||seen.has(normalized(node.path))||[node.size,node.logical_size,node.allocated_size,node.allocated_known_bytes].some(value=>value!=null&&!finite(value))||node.modified_at!=null&&(typeof node.modified_at!=='string'||!Number.isFinite(Date.parse(node.modified_at)))||node.child_count!=null&&!integer(node.child_count)||query.mode==='children'&&!samePath(getParentFolderPath(node.path),query.path))throw Error('The indexed page contains invalid or out-of-scope entries.');
+      seen.add(normalized(node.path));const isDir=node.kind==='directory';
+      items.push({...node,parentPath:getParentFolderPath(node.path),isDir,category:isDir?'Folder':node.kind==='link'?'Skipped link':node.kind==='unknown'?'Unreadable entry':category(node.name),size_reason:typeof node.coverage_reason==='string'?node.coverage_reason.slice(0,2000):null,children:[],size:node.size_known===false||node.size_unavailable===true?null:finite(node.size)?node.size:null,allocated_size:node.allocated_partial===true?null:node.allocated_size??null,allocated_known_bytes:node.allocated_known_bytes??(node.allocated_partial===true?node.allocated_size:null),protected:node.protected===true||isProtectedSystemPathClient(node.path),synthetic:false,actionable:false,inventoryJob:o.job.id});
+    }
+    return {...data,items};
+  }
+  async function loadInventory(mode,path,offset=0,savedQuery=null){
+    const o=visibleObservation();if(!inspectable(o)||!inventoryAvailable(o)||!['children','search','extension','largest'].includes(mode)||!pathOK(path)||!below(path,o.root)||!Number.isSafeInteger(offset)||offset<0)return;
+    syncInventory();const inv=state.inventory,query={mode,path,offset,limit:100,q:($('fs-inventory-query').value||'').trim(),extension:($('fs-inventory-extension').value||'').trim().toLowerCase(),sort:$('fs-inventory-sort').value,order:$('fs-inventory-order').value,...savedQuery};query.mode=mode;query.path=path;query.offset=offset;
+    if(!['size','name','allocated_size','modified_at'].includes(query.sort)||!['asc','desc'].includes(query.order))return;
+    if(mode==='search'&&!query.q){text('fs-inventory-status','Enter a name or path to search.');return;}
+    if(mode==='extension'&&!query.extension){text('fs-inventory-status','Enter an extension to filter.');return;}
+    if(query.extension&&!query.extension.startsWith('.'))query.extension='.'+query.extension;
+    clearTimeout(state.inventoryTimer);state.inventoryTimer=null;closeEntryMenu();
+    // Each mode has an explicit scope. Never leave an apparently active filter
+    // on screen when that filter is absent from the request.
+    if(mode!=='search')$('fs-inventory-query').value='';
+    if(mode!=='extension')$('fs-inventory-extension').value='';
+    if(mode==='children')inv.folder=path;
+    state.browserView=mode==='largest'?'largest':'files';browserPresentation();
+    clearInvestigation();state.selected=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup').replaceChildren();highlightSelection();
+    inventoryAbort?.abort();const abort=new AbortController();inventoryAbort=abort;
+    const epoch=state.epoch,revision=++state.inventoryRevision;inv.busy=true;inventoryControls();$('fs-inventory-rows').replaceChildren();text('fs-inventory-status','Loading recorded files…');
+    const valid=()=>current(epoch)&&inspectable(o)&&state.inventory===inv&&state.inventoryRevision===revision;
+    try{
+      const params=Object.entries(query).filter(([key,value])=>!['q','extension'].includes(key)||key==='q'&&mode==='search'||key==='extension'&&mode==='extension').map(([key,value])=>encodeURIComponent(key)+'='+encodeURIComponent(value)).join('&');
+      const raw=await api(`/visualizer/jobs/${encodeURIComponent(o.job.id)}/inventory?${params}`,null,epoch,'GET',abort);if(!valid())return;
+      const page=validateInventory(raw,o,query),previousOffsets=offset===0?[]:offset>inv.offset?[...(inv.previousOffsets||[]),inv.offset]:(inv.previousOffsets||[]).filter(value=>value<offset);Object.assign(inv,{mode,path,offset,page,query,previousOffsets});
+      let mapPath=mode==='children'?path:o.root;
+      while(!o.index.get(mapPath)?.isDir&&!samePath(mapPath,o.root)){const parent=getParentFolderPath(mapPath);if(!below(parent,o.root)||samePath(parent,mapPath)){mapPath=o.root;break;}mapPath=parent;}
+      state.focus=mapPath;state.mapGroup=null;renderExplorer();
+      renderInventory(inv);
+    }catch(error){if(valid()){inv.page=null;text('fs-inventory-status','Indexed paths unavailable: '+error.message+' Use Map & tree to inspect retained results.');const retry=button('Try again',()=>{if(valid())return loadInventory(mode,path,offset,query);});$('fs-inventory-rows').append(retry);}}
+    finally{if(inventoryAbort===abort)inventoryAbort=null;if(valid()){inv.busy=false;inventoryControls();}}
+  }
+  function inventoryFolderNote(item,o){
+    if(!item.isDir)return '';
+    if(item.child_count===0&&item.children_complete===true)return 'No child entries observed within the scan policy';
+    if(Number.isSafeInteger(item.child_count))return item.child_count.toLocaleString()+' indexed children · not loaded here'+(item.children_complete===false?' · incomplete coverage':'');
+    return 'Children not loaded here; empty status unconfirmed';
+  }
+  function renderInventory(inv){
+    const {page,observation:o}=inv,box=$('fs-inventory-rows'),revision=state.inventoryRevision;inv.renderRevision=revision;box.replaceChildren();
+    text('fs-inventory-path',inv.mode==='children'?'':inv.mode==='search'?'Search “'+inv.query.q+'” · entire scanned location':inv.mode==='extension'?'Extension '+inv.query.extension+' · entire scanned location':'Largest files · entire scanned location');
+    $('fs-inventory-options').querySelector('summary').textContent=({size:'Size',name:'Name',allocated_size:'On disk',modified_at:'Modified'}[inv.query.sort]||'Size')+(inv.query.order==='asc'?' ↑':' ↓')+' · Sort & filters';
+    const crumbs=$('fs-inventory-breadcrumbs');crumbs.replaceChildren();
+    const trail=[inv.mode==='children'?inv.path:inv.folder||o.root];
+    while(!samePath(trail[0],o.root)&&trail.length<64){const parent=getParentFolderPath(trail[0]);if(!pathOK(parent)||samePath(parent,trail[0])||!below(parent,o.root))break;trail.unshift(parent);}
+    if(!samePath(trail[0],o.root))trail.unshift(o.root);
+    for(const folder of trail){const label=samePath(folder,o.root)?o.root:folder.replace(/[\\/]+$/,'').split(/[\\/]/).pop(),crumb=button(label,()=>{if(valid())return loadInventory('children',folder);},'fs-button fs-small');if(samePath(folder,inv.path)&&inv.mode==='children')crumb.setAttribute('aria-current','location');crumbs.append(crumb);}
+    text('fs-inventory-coverage',inventoryCoverage({...o.raw.meta.inventory,...page.meta}));
+    const warning=$('fs-inventory-warning'),partial=o.raw.meta.partial===true||o.raw.tree.size_partial===true||page.meta.acquisition_complete!==true;
+    warning.hidden=!partial;
+    const limit=o.raw.meta.time_limited?'The scan reached its time limit. ':o.raw.meta.entry_limited?'The scan reached its entry limit. ':o.raw.meta.cancelled?'The scan was stopped early. ':'';
+    warning.textContent=partial?'Partial scan — '+(inv.mode==='largest'?'larger files may be missing. ':'some files and folders were not inspected. ')+limit+'These results cover only recorded files. Use a Deep scan or scan a smaller folder for more coverage.':'';
+    const start=page.items.length?inv.offset+1:0,end=inv.offset+page.items.length;
+    text('fs-inventory-status',`${start.toLocaleString()}–${end.toLocaleString()} of ${page.total.toLocaleString()} ${inv.mode==='children'?'items':'matches'}${page.meta.response_limited===true?' · Page limited by response size':''}${!page.items.length?(inv.mode==='children'?' · No indexed children returned. Check acquisition coverage before treating this folder as empty.':' · No recorded paths match this query. Clear the search or try a different name.'):''}`);
+    const valid=()=>inspectable(o)&&state.inventory===inv&&state.inventoryRevision===revision;
+    const marks=[];
+    for(const item of page.items){
+      const row=make('div',undefined,'fs-inventory-row');row.dataset.inventoryPath=item.path;row.setAttribute('role','row');row.setAttribute('aria-selected',String(samePath(state.selected?.path,item.path)));row.tabIndex=marks.length===0?0:-1;
+      const name=make('div',undefined,'fs-inventory-name'),size=make('div',undefined,'fs-inventory-size'),actions=make('div',undefined,'fs-inventory-row-actions');
+      name.setAttribute('role','cell');size.setAttribute('role','cell');actions.setAttribute('role','cell');
+      const select=button(item.name,()=>{if(valid())choose(item,o);},'fs-file-name storage-file-action');select.title=item.path;select.tabIndex=-1;name.append(select);
+      if(inv.mode!=='children')name.append(make('small',item.path,'fs-path fs-inventory-path'));
+      if(item.isDir)name.append(make('small',inventoryFolderNote(item,o),'fs-help'));
+      else if(item.hardlink_duplicate)name.append(make('small','Hard-link alias · counted elsewhere','fs-help'));
+      if(item.kind==='link'||item.kind==='unknown')name.append(make('small',item.category+' · '+(item.size_reason||'Coverage unavailable')+' · evidence only','fs-help'));
+      size.append(make('span',itemBytes(item)),make('small',allocatedBytes(item)+' on disk','fs-help'));
+      const open=()=>{if(valid()&&item.isDir)return loadInventory('children',item.path);};
+      if(item.isDir){const b=button('Open',open,'fs-button fs-small');b.setAttribute('aria-label','Browse folder '+item.name);actions.append(b);row.addEventListener('dblclick',event=>{if(event.target?.closest?.('.fs-inventory-row-actions'))return;open();});}
+      if(['file','directory'].includes(item.kind)){const more=button('⋯',()=>{if(valid())showEntryMenu(item,o,state.displayRevision,more);},'fs-button fs-small');more.setAttribute('aria-label','Actions for '+item.name);more.setAttribute('aria-haspopup','dialog');actions.append(more);}
+      row.addEventListener('click',event=>{if(event.target?.closest?.('button,input'))return;if(valid()){choose(item,o);row.focus?.({preventScroll:true});}});
+      row.addEventListener('contextmenu',event=>{if(!valid())return;event.preventDefault();showEntryMenu(item,o,state.displayRevision,row,event);});
+      row.addEventListener('keydown',event=>{
+        if(!valid()||event.target?.tagName==='INPUT')return;
+        const index=marks.indexOf(row);let next=null;
+        if(event.key==='ArrowDown')next=index+1;else if(event.key==='ArrowUp')next=index-1;else if(event.key==='Home')next=0;else if(event.key==='End')next=marks.length-1;
+        if(next!==null){event.preventDefault();next=Math.max(0,Math.min(marks.length-1,next));choose(page.items[next],o);marks.forEach((n,i)=>n.tabIndex=i===next?0:-1);marks[next].focus?.({preventScroll:true});marks[next].scrollIntoView?.({block:'nearest'});}
+        else if(event.target===row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();if(event.key==='Enter'&&item.isDir)return open();else choose(item,o);}
+        else if(event.key==='ContextMenu'||event.shiftKey&&event.key==='F10'){event.preventDefault();showEntryMenu(item,o,state.displayRevision,row);}
+      });
+      row.append(name,size,actions);marks.push(row);box.append(row);
+    }
+    box.setAttribute('role','grid');box.setAttribute('aria-rowcount',page.items.length);box.setAttribute('aria-colcount','3');highlightSelection();
+  }
   function filteredView(ignoreExtension=false) {
     const o=visibleObservation();if(!o)return [];
-    const query=$('visualizerSearchInput').value.trim().toLowerCase(),cat=$('visualizerCategoryFilter').value,min=Number($('visualizerMinSize').value)||0,input=($('fs-extension-filter')?.value||'').trim().toLowerCase(),extension=state.extensionFilter!==null?state.extensionFilter:input?input.replace(/^\.?/,'.'):null;
+    const tree=state.browserView==='tree',query=tree?$('visualizerSearchInput').value.trim().toLowerCase():'',cat=tree?$('visualizerCategoryFilter').value:'all',min=tree?Number($('visualizerMinSize').value)||0:0,input=tree?($('fs-extension-filter')?.value||'').trim().toLowerCase():'',extension=tree&&state.extensionFilter!==null?state.extensionFilter:input?input.replace(/^\.?/,'.'):null;
     const matches=f=>(!query||(f.name+' '+(f.path||f.parentPath)).toLowerCase().includes(query))&&(ignoreExtension||extension===null||!f.aggregate&&f.extension===extension)&&(cat==='all'||f.category===cat)&&(min===0||finite(f[state.metric])&&f[state.metric]>=min);
     return window.TLIStorageMap.view(o.map,state.focus,matches,state.mapGroup,state.mapExcluded,state.metric);
   }
   function matching(){state.mapView=filteredView();return state.mapView?.rows||[];}
   function filtersActive(){return !!$('visualizerSearchInput').value.trim()||$('visualizerCategoryFilter').value!=='all'||Number($('visualizerMinSize').value)>0||state.extensionFilter!==null||!!$('fs-extension-filter')?.value.trim();}
+  function renderFilterChips(){
+    let box=$('fs-active-filters');if(!box&&$('fs-tree-controls')){box=make('div',undefined,'fs-active-filters');box.id='fs-active-filters';$('fs-tree-controls').append(box);}if(!box)return;box.replaceChildren();
+    const add=(label,clear)=>{const b=button(label+' ×',()=>{clear();expandFilterMatches();$('fs-table-wrap').scrollTop=0;renderExplorer();},'fs-button fs-small');b.setAttribute('aria-label','Clear '+label);box.append(b);};
+    const query=$('visualizerSearchInput').value.trim(),category=$('visualizerCategoryFilter').value,extension=state.extensionFilter??$('fs-extension-filter').value.trim(),minimum=Number($('visualizerMinSize').value);
+    if(query)add('Search: '+query,()=>{$('visualizerSearchInput').value='';});
+    if(category!=='all')add('Type: '+category,()=>{$('visualizerCategoryFilter').value='all';});
+    if(extension!==null&&extension!=='')add('Extension: '+extension,()=>{state.extensionFilter=null;$('fs-extension-filter').value='';});
+    if(minimum)add('At least '+bytes(minimum),()=>{$('visualizerMinSize').value='0';});
+    box.hidden=!box.childElementCount;
+  }
   function expandFilterMatches(){state.filterExpanded.clear();if(!visibleObservation()||!filtersActive())return;for(const item of filteredView().rows)for(const path of item.ancestors||[])state.filterExpanded.add(path);}
   const itemKey=item=>item?.key||item?.path;
   function renderConsumers(o){
@@ -710,7 +975,7 @@ function getParentFolderPath(fullPath) {
   }
   function clearInvestigation(){state.investigationRevision++;state.investigationBusy=false;$('fs-investigation-result')?.replaceChildren();text('fs-investigation-status','');}
   async function investigate(selected=false){
-    const o=visibleObservation(),item=selected?state.selected:null;if(!inspectable(o)||state.investigationBusy||selected&&(!item?.path||item.synthetic||item.aggregate||!o.index.has(item.path)))return;const epoch=state.epoch,revision=state.investigationRevision,targetPath=item?.path||null;state.investigationBusy=true;controls();
+    const o=visibleObservation(),item=selected?state.selected:null;if(!inspectable(o)||state.investigationBusy||selected&&(!item?.path||item.synthetic||item.aggregate||item.inventoryJob&&!['file','directory'].includes(item.kind)||!o.index.has(item.path)&&item.inventoryJob!==o.job.id))return;const epoch=state.epoch,revision=state.investigationRevision,targetPath=item?.path||null;state.investigationBusy=true;controls();
     if(selected){const section=$('fs-investigation-result')?.closest?.('details');if(section)section.open=true;}
     text('fs-investigation-status','Reviewing recorded evidence on this host…');$('fs-investigation-result').replaceChildren();
     try{
@@ -765,6 +1030,7 @@ function getParentFolderPath(fullPath) {
   function highlightSelection(){
     const key=itemKey(state.selected);
     for(const {node,item} of [...mapMarks,...tableMarks]){const active=key===itemKey(item)||!!item.members?.includes(key)||!!state.selected?.members?.includes(itemKey(item));node.classList.toggle('fs-is-selected',active);node.setAttribute(node.tagName==='BUTTON'?'aria-pressed':node.tagName==='TR'?'aria-selected':'aria-current',String(active));}
+    for(const node of $('fs-inventory-rows')?.querySelectorAll('.fs-inventory-row')||[]){const active=samePath(node.dataset.inventoryPath,state.selected?.path);node.classList.toggle('fs-is-selected',active);node.setAttribute('aria-selected',String(active));if(active){for(const other of $('fs-inventory-rows').querySelectorAll('.fs-inventory-row'))other.tabIndex=other===node?0:-1;}}
   }
   function revealSelectedRow(){
     const wrap=$('fs-table-wrap'),key=itemKey(state.selected),position=state.treeRows.findIndex(row=>row.key===key||state.selected?.members?.includes(row.key));
@@ -781,14 +1047,19 @@ function getParentFolderPath(fullPath) {
     if(expanded.size!==state.expanded.size){state.expanded=expanded;renderExplorer();}
     $('visualizerDetailsBar').hidden=false;text('visualizerDetailsName',item.name);
     text('visualizerDetailsPath',item.path||`Grouped under ${item.parentPath||state.focus} · no individual file path`);
+    text('fs-selected-metrics',`${itemBytes(item)} · ${allocatedBytes(item)} on disk${item.inventoryJob&&!o.index.has(item.path)?' · Outside map detail':''}`);
     const coverage=item.size_partial||o.raw.meta.partial||o.job.status!=='completed'?'Partial scan coverage; missing entries may change totals.':'Recorded scan coverage; filesystem changes since this scan are not reflected.';
     text('visualizerDetailsSize',`${itemBytes(item)}${item.hardlink_duplicate?'':' logical'} · ${allocatedBytes(item)} allocated · ${item.aggregate?'Grouped indexed bytes; not an actionable file':item.isDir?'Folder in this observation':item.category}${item.protected?' · Protected location':''}${item.hardlink_duplicate?' · Additional hard-link name; its bytes are counted once elsewhere':''} · Modified ${item.modified_at?date(item.modified_at):'unknown'} · Observed ${date(o.recordedAt)}${!item.aggregate&&Number.isSafeInteger(item.files)?' · '+item.files.toLocaleString()+' recorded file'+(item.files===1?'':'s'):''}${item.isDir?' · '+(item.children?.length||0)+' child rows retained':''}${item.omitted_entries?' · '+item.omitted_entries.toLocaleString()+' entries omitted from retained paths':''}${item.omitted_bytes?' · '+bytes(item.omitted_bytes)+' omitted-path bytes':''}${item.collapsed_entries?' · '+item.collapsed_entries.toLocaleString()+' entries grouped without individual paths':''}${item.unknown_entries?' · '+item.unknown_entries.toLocaleString()+' unknown-size entries':''} · ${coverage}${item.size_reason?' · '+item.size_reason:''}${item.reason?' · '+item.reason:''}`);
+    if(item.inventoryJob)text('visualizerDetailsSize',$('visualizerDetailsSize').textContent+' · Indexed evidence'+(item.isDir?' · '+inventoryFolderNote(item,o):' · Cleanup requires a separately reviewed retained file entry.'));
     $('visualizerCopyPathBtn').disabled=!item.path||item.synthetic;
     $('visualizerSendToFilesBtn').disabled=!item.path||item.synthetic;
     const actions=$('fs-selected-cleanup');actions.replaceChildren();
     if(item.members){actions.append(button('Show grouped entries',()=>{if(!inspectable(o))return;state.mapGroup=new Set(item.members);clearInvestigation();state.selected=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;renderExplorer();},'fs-button fs-small'));}
     else if(item.isDir&&!item.synthetic&&item.children?.length)actions.append(button('Open recorded folder',()=>drill(item.path,o),'fs-button fs-small'));
     else if(item.actionable!==false&&!item.isDir&&!item.synthetic){const selectedRevision=state.displayRevision,choice=guardChoice(window.TLIStorageCleanup?.choice?.(item),()=>inspectable(o,selectedRevision)),input=choice?.querySelector('input');if(input?.dataset.cleanupBlocked==='false'){const label=choice.querySelector('span');if(label)label.textContent='Add to review';input.setAttribute('aria-label','Add '+item.path+' to cleanup review');}actions.append(choice||make('span','Cleanup unavailable'));}
+    if(item.isDir&&!item.synthetic&&inventoryAvailable(o))actions.append(button('Browse indexed folder',()=>{if(inspectable(o))return loadInventory('children',item.path);},'fs-button fs-small'));
+    const retained=item.inventoryJob?o.index.get(item.path):null;
+    if(retained&&!retained.isDir&&retained.actionable!==false&&!retained.synthetic)actions.append(button('Review recorded file',()=>{if(!inspectable(o))return;setBrowserView('tree');choose(retained,o,undefined,true);},'fs-button fs-small'));
     highlightSelection();revealSelectedRow();controls();if(reveal)$('visualizerDetailsBar').scrollIntoView?.({block:'nearest',behavior:'instant'});
   }
   function closeEntryMenu(restoreFocus=false){
@@ -814,7 +1085,7 @@ function getParentFolderPath(fullPath) {
   const fileManager = () => _tliIsWindows() ? 'File Explorer' : _tliIsMac() ? 'Finder' : 'file manager';
   const revealLabel = item => item.isDir && !_tliIsMac() ? `Open folder in ${fileManager()}` : `Show in ${fileManager()}`;
   async function revealOnHost(item,o,revision){
-    if(!inspectable(o,revision)||!item?.path||item.synthetic)return;
+    if(!inspectable(o,revision)||!item?.path||item.synthetic||item.inventoryJob&&!['file','directory'].includes(item.kind))return;
     if(revealPending){status('A request to the host file manager is already in progress.');return;}
     const pending={};revealPending=pending;
     status(`Asking ${fileManager()} on the TLI host (${o.host.name}) to show ${item.path}…`);
@@ -834,7 +1105,7 @@ function getParentFolderPath(fullPath) {
     if(!inspectable(o,revision))return;
     // The popup is its own inspector. Revealing a second inspector here moves
     // the map under the pointer and triggers scroll anchoring during right-click.
-    closeEntryMenu();if(itemKey(state.selected)!==itemKey(item))clearInvestigation();state.selected=item;window.TLIStorageHistory?.selectPath?.(item.path&&!item.synthetic?item.path:null);highlightSelection();controls();
+    closeEntryMenu();if(!$('visualizerDetailsBar').hidden)choose(item,o,revision);else{if(itemKey(state.selected)!==itemKey(item))clearInvestigation();state.selected=item;window.TLIStorageHistory?.selectPath?.(item.path&&!item.synthetic?item.path:null);highlightSelection();controls();}
     const selectedRevision=state.displayRevision,box=make('div',undefined,'fs-entry-menu');box.id='fs-entry-menu';box.setAttribute('role','dialog');box.setAttribute('aria-labelledby','fs-menu-title');
     const opened={box,invoker};entryMenu=opened;
     const valid=()=>entryMenu===opened&&inspectable(o,selectedRevision);
@@ -844,14 +1115,15 @@ function getParentFolderPath(fullPath) {
     if(item.members)add('Show grouped entries',()=>{state.mapGroup=new Set(item.members);clearInvestigation();state.selected=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;renderExplorer();});
     const folder=item.isDir&&!item.synthetic?item.path:item.parentPath;
     if(item.path&&!item.synthetic){
-      add(revealLabel(item),()=>revealOnHost(item,o,selectedRevision)).disabled=!!revealPending;
+      add(revealLabel(item),()=>revealOnHost(item,o,selectedRevision)).disabled=!!revealPending||!!item.inventoryJob&&!['file','directory'].includes(item.kind);
       box.append(make('p',`Opens on the TLI host (${o.host.name}).`,'fs-help'));
       if(o.index.get(folder)?.isDir)add(item.isDir?'Open recorded folder':'Show parent folder in map',()=>drill(folder,o));
       add('Copy path',()=>copyPath(item,o,selectedRevision));
       add('Review folder in Files',()=>reviewHandoff('files'));
     }
+    if(item.isDir&&!item.synthetic&&inventoryAvailable(o))add('Browse indexed folder',()=>loadInventory('children',item.path));
     if(folder&&o.index.get(folder)?.isDir)add('Prepare folder scan',()=>{prepare(folder);$('visualizerPathInput').focus();});
-    if(!item.isDir)add('Hide from this view',()=>hideFromView([item],o,selectedRevision));
+    if(!item.isDir&&!item.inventoryJob)add('Hide from this view',()=>hideFromView([item],o,selectedRevision));
     if(item.actionable!==false&&!item.isDir&&!item.synthetic){
       const choice=window.TLIStorageCleanup?.choice?.(item);
       if(choice){
@@ -881,6 +1153,7 @@ function getParentFolderPath(fullPath) {
   }
   function drill(path,o=state.observation){
     if(!inspectable(o))return;const item=o.index.get(path);if(!item?.isDir||item.synthetic)return;
+    if(state.browserView!=='tree'){state.inventoryRevision++;if(state.inventory)state.inventory.busy=false;state.browserView='tree';browserPresentation();}
     clearInvestigation();state.focus=path;state.mapGroup=null;state.selected=null;state.treeActiveKey=null;window.TLIStorageHistory?.selectPath?.(null);renderedList=null;$('fs-table-wrap').scrollTop=0;expandFilterMatches();$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup').replaceChildren();renderExplorer();controls();$('visualizerCenterTitle').focus();
   }
   function renderBreadcrumbs(o){
@@ -929,6 +1202,7 @@ function getParentFolderPath(fullPath) {
   }
   function renderTreeWindow(){
     const o=visibleObservation();if(!inspectable(o))return;const revision=state.displayRevision,rows=state.treeRows,wrap=$('fs-table-wrap'),body=$('visualizerTableBody');
+    wrap.style.setProperty?.('--fs-visible-rows',String(Math.max(1,Math.min(12,rows.length))));
     const maxScroll=Math.max(0,rows.length*TREE_ROW_HEIGHT-Math.max(TREE_ROW_HEIGHT,(wrap.clientHeight||528)-TREE_ROW_HEIGHT));
     if((wrap.scrollTop||0)>maxScroll)wrap.scrollTop=maxScroll;
     const start=Math.max(0,Math.floor((wrap.scrollTop||0)/TREE_ROW_HEIGHT)-TREE_OVERSCAN),end=Math.min(rows.length,start+Math.ceil((wrap.clientHeight||528)/TREE_ROW_HEIGHT)+TREE_OVERSCAN*2);
@@ -947,8 +1221,8 @@ function getParentFolderPath(fullPath) {
       if(item.isDir&&!item.synthetic)action.addEventListener('dblclick',()=>{if(inspectable(o,revision))drill(item.path,o);});
       const review=make('td');
       if(item.actionable!==false&&!item.isDir&&!item.synthetic)review.append(guardChoice(window.TLIStorageCleanup?.choice?.(item),()=>inspectable(o,revision))||make('span','Cleanup unavailable'));
-      else review.append(make('span',item.hardlink_duplicate?'Hard-link alias · cleanup unavailable':item.aggregate?'Grouped · review only':item.isDir?'Recorded folder':item.size===null?'Size unknown':'No file action','fs-help'));
-      const more=button('Actions',()=>showEntryMenu(item,o,revision,more),'fs-button fs-small fs-entry-actions');more.setAttribute('aria-label','Actions for '+item.name);more.setAttribute('aria-haspopup','dialog');review.append(more);bindEntryActions(tr,item,o,revision);tr.addEventListener('keydown',event=>treeKey(event,row,o));
+      else if(!item.isDir)review.append(make('span',item.hardlink_duplicate?'Hard-link alias · cleanup unavailable':item.aggregate?'Grouped':item.size===null?'Unknown':'—','fs-help'));
+      const more=button('⋯',()=>showEntryMenu(item,o,revision,more),'fs-button fs-small fs-entry-actions');more.setAttribute('aria-label','Actions for '+item.name);more.setAttribute('aria-haspopup','dialog');review.append(more);bindEntryActions(tr,item,o,revision);tr.addEventListener('keydown',event=>treeKey(event,row,o));
       const parent=o.index.get(item.parentPath),parentBytes=parent?.[state.metric],percentValue=finite(item[state.metric])&&finite(parentBytes)&&parentBytes>0?item[state.metric]/parentBytes*100:null,percent=percentValue!==null?percentValue.toLocaleString(undefined,{maximumFractionDigits:2})+'%':'—',share=make('td',percent,'fs-parent-share');if(percentValue!==null)share.style.setProperty?.('--fs-parent-percent',Math.max(0,Math.min(100,percentValue))+'%');
       tr.append(name,make('td',item.aggregate?'Grouped':item.category),make('td',itemBytes(item)),make('td',allocatedBytes(item)),share,make('td',!item.aggregate&&Number.isSafeInteger(item.files)?item.files.toLocaleString():'—'),make('td',item.modified_at?date(item.modified_at):'Unknown'),review);body.append(tr);tableMarks.push({node:tr,item,revision});
     }
@@ -961,7 +1235,7 @@ function getParentFolderPath(fullPath) {
   function renderExplorer(){
     closeEntryMenu();const o=visibleObservation();if(!o)return;state.displayRevision=(state.displayRevision||0)+1;const revision=state.displayRevision;
     for(const th of document.querySelectorAll('#panel-visualizer th[data-sort]'))th.setAttribute('aria-sort',th.dataset.sort===state.sort?(state.direction===1?'ascending':'descending'):'none');
-    const rows=matching();state.treeRows=window.TLIStorageMap.tree(state.mapView,{expanded:new Set([...state.expanded,...state.filterExpanded]),sort:state.sort,direction:state.direction}).rows;if(!state.treeRows.some(row=>row.key===state.treeActiveKey))state.treeActiveKey=state.treeRows[0]?.key||null;
+    renderFilterChips();const rows=matching();state.treeRows=window.TLIStorageMap.tree(state.mapView,{expanded:new Set([...state.expanded,...state.filterExpanded]),sort:state.sort,direction:state.direction}).rows;if(!state.treeRows.some(row=>row.key===state.treeActiveKey))state.treeActiveKey=state.treeRows[0]?.key||null;
     renderMapNavigation(o,revision);
     text('visualizerCenterSubtitle',state.focus);$('visualizerBackBtn').disabled=samePath(state.focus,o.root);renderBreadcrumbs(o);
     text('visualizerStatusLine',`${rows.length.toLocaleString()} retained entries${filtersActive()?' matching filters':''} · display navigation reads only this scan`);
@@ -970,13 +1244,18 @@ function getParentFolderPath(fullPath) {
     $('fs-map-workbench').classList.remove('fs-list-only','fs-map-expanded');if($('fs-paging'))$('fs-paging').hidden=true;
     renderTreeWindow();
     mapObserver?.disconnect();mapObserver=null;
-    renderMap(state.mapView,o,revision);renderTypes(filteredView(true));setSurface(state.surface);highlightSelection();updateCleanup();
+    renderMap(state.mapView,o,revision);renderTypes(filteredView(true));setSurface(state.surface);highlightSelection();updateCleanup();syncInventory();
+  }
+  function chooseMapItem(item,o,revision,reveal=false){
+    if(!inspectable(o,revision))return;
+    if(state.browserView!=='tree'){setBrowserView('tree');choose(item,o,undefined,reveal);}
+    else choose(item,o,revision,reveal);
   }
   function renderMap(view,o,revision){
     closeEntryMenu();const box=$('vis4-treemap-container');box.replaceChildren();mapMarks=[];
     const representation=window.TLIStorageMap.hierarchy(view);
     const header=make('div',undefined,'fs-map-heading');header.append(make('strong','Space map'),make('span',`${bytes(view.total)} ${state.metric==='allocated_size'?'known allocated':'logical'} bytes`,'fs-map-total'));box.append(header);
-    box.append(make('p','Larger blocks use more space. Right-click a file or folder for actions.','fs-help'));
+    box.append(make('p',state.browserView==='tree'?'Larger blocks use more space. Select to inspect; double-click to open the recorded folder.':'Map preview · '+state.focus+' · retained paths only','fs-help'));
     const areaDetails=make('details',undefined,'fs-map-accounting');areaDetails.append(make('summary','About this map'),make('p',`${bytes(view.scopeTotal)} known indexed bytes in this recorded folder scope. The map uses ${bytes(view.total)} matching known bytes; display filters do not change saved totals. Folder and child bytes are never added twice. Unknown sizes are excluded from area, not treated as empty.`));
     if(view.aggregateBytes){const note=make('div',undefined,'fs-map-coverage');note.append(make('span',`${bytes(view.aggregateBytes)} is grouped because individual file paths were not saved.`, 'fs-help'),button('Hide grouped bytes',()=>hideFromView(view.rows.filter(n=>n.aggregate),o,revision),'fs-button fs-small'));areaDetails.append(note);}
     areaDetails.append(make('p',`${view.unknown} retained unknown-size${view.groupedUnknown?' · '+view.groupedUnknown+' additional unknown sizes inside groups':''} · ${view.zero} zero-byte entries outside map. Recorded bytes, not drive capacity.`));
@@ -989,19 +1268,19 @@ function getParentFolderPath(fullPath) {
     for(const leaf of layout.leaves()){
       const item=leaf.data.item,w=leaf.x1-leaf.x0,h=leaf.y1-leaf.y0,large=w>=36&&h>=28;
       const category=item.aggregate?'Grouped':item.category,key=String(category).toLowerCase().replace(/[^a-z]/g,'');colors.add(category);
-      const mark=large?button('',event=>choose(item,o,revision,event.detail===0),'fs-map-item'):make('div',undefined,'fs-map-item fs-map-tiny');
+      const mark=large?button('',event=>chooseMapItem(item,o,revision,event.detail===0),'fs-map-item'):make('div',undefined,'fs-map-item fs-map-tiny');
       mark.classList.add('fs-map-type-'+key);mark.dataset.mapKey=itemKey(item);
       if(large)mark.setAttribute('aria-label',`${item.name} · ${metricBytes(item)} · ${item.path||'non-actionable grouped entries'}`);else mark.setAttribute('aria-hidden','true');
       mark.title=`${item.name}\n${itemBytes(item)}${item.hardlink_duplicate?'':' logical'} · ${allocatedBytes(item)} allocated · ${category}\n${item.path||item.reason}`;bindEntryActions(mark,item,o,revision);
-      if(!large)mark.addEventListener('click',()=>choose(item,o,revision));
+      if(!large)mark.addEventListener('click',()=>chooseMapItem(item,o,revision));
       if(!item.aggregate&&o.index.get(item.parentPath)?.isDir)mark.addEventListener('dblclick',()=>{if(inspectable(o,revision))drill(item.parentPath,o);});
       Object.assign(mark.style,{left:leaf.x0/width*100+'%',top:leaf.y0/height*100+'%',width:w/width*100+'%',height:h/height*100+'%'});
-      if(w>=80&&h>=54){const label=make('span',undefined,'fs-map-tile-label');label.append(make('span',item.name),make('small',`${bytes(leaf.value)} · ${(leaf.value/view.total*100).toLocaleString(undefined,{maximumFractionDigits:1})}%`));if(w>=140&&h>=110)label.append(make('small',item.members?'Retained entries grouped for display':item.aggregate?'Paths not retained':`${category}${item.protected?' · Protected':''}`,'fs-map-tile-type'));mark.append(label);}
+      if(w>=115&&h>=64){const label=make('span',undefined,'fs-map-tile-label');label.append(make('span',item.name),make('small',`${bytes(leaf.value)} · ${(leaf.value/view.total*100).toLocaleString(undefined,{maximumFractionDigits:1})}%`));if(w>=180&&h>=140)label.append(make('small',item.members?'Retained entries grouped for display':item.aggregate?'Paths not retained':`${category}${item.protected?' · Protected':''}`,'fs-map-tile-type'));mark.append(label);}
       canvas.append(mark);mapMarks.push({node:mark,item});
     }
     for(const folder of layout.descendants().filter(n=>n.depth===1&&n.children)){
       const w=folder.x1-folder.x0,h=folder.y1-folder.y0,frame=make('div',undefined,'fs-map-folder-boundary');frame.setAttribute('aria-hidden','true');Object.assign(frame.style,{left:folder.x0/width*100+'%',top:folder.y0/height*100+'%',width:w/width*100+'%',height:h/height*100+'%'});canvas.append(frame);
-      if(w>=100&&h>=90){const b=button(folder.data.name,()=>{if(inspectable(o,revision))choose(o.index.get(folder.data.path),o,revision);},'fs-map-folder-label');b.setAttribute('aria-label',`Select recorded folder ${folder.data.path} · ${bytes(folder.value)} in this map region`);b.addEventListener('dblclick',()=>{if(inspectable(o,revision))drill(folder.data.path,o);});Object.assign(b.style,{left:folder.x0/width*100+'%',top:folder.y1/height*100+'%',maxWidth:w/width*100+'%'});bindEntryActions(b,o.index.get(folder.data.path),o,revision);canvas.append(b);}
+      if(w>=100&&h>=90){const b=button(folder.data.name,()=>{if(inspectable(o,revision))chooseMapItem(o.index.get(folder.data.path),o,revision);},'fs-map-folder-label');b.setAttribute('aria-label',`Select recorded folder ${folder.data.path} · ${bytes(folder.value)} in this map region`);b.addEventListener('dblclick',()=>{if(inspectable(o,revision))drill(folder.data.path,o);});Object.assign(b.style,{left:folder.x0/width*100+'%',top:folder.y1/height*100+'%',maxWidth:w/width*100+'%'});bindEntryActions(b,o.index.get(folder.data.path),o,revision);canvas.append(b);}
     }
     const legend=make('div',undefined,'fs-map-legend');legend.setAttribute('aria-label','File type colors');
     for(const category of [...colors].sort()){const item=make('span'),swatch=make('i',undefined,'fs-map-swatch fs-map-type-'+category.toLowerCase().replace(/[^a-z]/g,''));swatch.setAttribute('aria-hidden','true');item.append(swatch,make('span',category));legend.append(item);}areaDetails.append(make('p','Double-click a file to focus on its recorded folder. Use Actions in the list for small tiles, touch or keyboard. Colors describe file types, not cleanup safety.'));box.append(legend,areaDetails);
@@ -1015,7 +1294,7 @@ function getParentFolderPath(fullPath) {
     if(active!==null)box.append(button('Clear extension filter',()=>{if(!inspectable(o,revision))return;state.extensionFilter=null;$('fs-extension-filter').value='';expandFilterMatches();$('fs-table-wrap').scrollTop=0;renderExplorer();},'fs-button fs-small'));
     const pageSize=80,maxPage=Math.max(0,Math.ceil(distribution.rows.length/pageSize)-1);state.typePage=Math.min(state.typePage,maxPage);
     for(const entry of distribution.rows.slice(state.typePage*pageSize,(state.typePage+1)*pageSize)){
-      const select=()=>{if(!inspectable(o,revision))return;state.extensionFilter=active===entry.extension?null:entry.extension;$('fs-extension-filter').value=state.extensionFilter||'';expandFilterMatches();$('fs-table-wrap').scrollTop=0;renderExplorer();};
+      const select=()=>{if(!inspectable(o,revision))return;state.browserView='tree';state.inventoryRevision++;if(state.inventory)state.inventory.busy=false;state.extensionFilter=active===entry.extension?null:entry.extension;$('fs-extension-filter').value=state.extensionFilter||'';expandFilterMatches();$('fs-table-wrap').scrollTop=0;renderExplorer();};
       const row=entry.extension===null?make('div',undefined,'fs-extension-row'):button('',select,'fs-extension-row');
       if(entry.extension!==null){row.dataset.extension=entry.extension;row.setAttribute('aria-pressed',String(active===entry.extension));}
       row.append(make('strong',entry.name),make('span',`${bytes(entry.total)}${entry.unknown?' known':''} · ${entry.extension===null?'individual file count unavailable':entry.files.toLocaleString()+' retained file paths'}${entry.unknown?' · '+entry.unknown+' unknown sizes':''}${entry.hardlinkAliases?' · '+entry.hardlinkAliases+' hard-link aliases (counted elsewhere)':''}`));
@@ -1039,17 +1318,17 @@ function getParentFolderPath(fullPath) {
       for(const group of data.groups){const details=make('details',undefined,'fs-dupe');details.append(make('summary',`${group.paths.length} copies · ${bytes(group.size)} each · ${bytes(group.wasted_bytes)} in extra copies`));let mounted=false;details.addEventListener('toggle',()=>{if(!details.open||mounted||!details.isConnected||!allowed())return;mounted=true;if(data.meta.verification==='full_sha256'&&window.TLIStorageCleanup?.duplicateControls)details.append(guardChoice(window.TLIStorageCleanup.duplicateControls(group),allowed));else{for(const path of group.paths.slice(0,100))details.append(make('p',path,'fs-path'));if(group.paths.length>100)details.append(make('p','Only the first 100 unverified paths are displayed. No cleanup selection is available without full-content verification.'));}});box.append(details);}if(!data.groups.length)box.append(make('p','No duplicate groups returned from the files checked.'));
     }else{for(const target of data.targets){const row=make('div',undefined,'fs-tool-row');row.append(make('strong',target.label),make('p',target.path,'fs-path'),make('span',target.size_partial?'At least '+bytes(target.size_bytes):bytes(target.size_bytes)),make('p',visCleanupCoverage(target),'fs-help'),button('Select this folder',()=>{if(allowed()&&row.isConnected)prepare(target.path);}));box.append(row);}if(!data.targets.length)box.append(make('p','No supported common folders were returned. You can still scan a selected location.'));}updateCleanup();
   }
-  function openCleanup(){if(window.TLIStorageCleanup?.openReview){window.TLIStorageCleanup.openReview();return true;}const box=$('storage-cleanup-review');if(!box)return false;box.open=true;box.scrollIntoView({block:'nearest'});box.querySelector('summary').focus();return true;}
-  function updateCleanup(){const summary=$('storage-cleanup-review')?.querySelector('summary');if(summary)summary.textContent='Cleanup review · '+($('cleanup-count')?.textContent||'no files selected');}
+  function openCleanup(){const box=$('storage-cleanup-review');if(box)box.hidden=false;if(window.TLIStorageCleanup?.openReview){window.TLIStorageCleanup.openReview();return true;}if(!box)return false;box.open=true;box.scrollIntoView({block:'nearest'});box.querySelector('summary').focus();return true;}
+  function updateCleanup(){const box=$('storage-cleanup-review'),summary=box?.querySelector('summary'),selection=window.TLIStorageCleanup?.getSelectionState?.();if(summary)summary.textContent='Cleanup review · '+($('cleanup-count')?.textContent||'no files selected');if(selection){const useful=selection.count>0||selection.busy||selection.unresolved;if(box)box.hidden=!useful&&!box.open;if($('fs-open-cleanup')){$('fs-open-cleanup').hidden=!useful;text('fs-open-cleanup',selection.count?'Review '+selection.count+' selected file'+(selection.count===1?'':'s'):'Review cleanup activity');}}}
   function closeHandoff(){state.handoff=null;$('fs-handoff')?.close();text('fs-handoff-text','');text('fs-handoff-status','');}
   function reviewHandoff(kind){const o=visibleObservation(),item=state.selected;if(!inspectable(o)||(kind==='files'&&!item))return;const content=kind==='files'?(item.isDir?item.path:getParentFolderPath(item.path)):`Recorded storage observation on ${o.host.name}, ${date(o.recordedAt)}. Root: ${o.root}. Inspected file bytes: ${itemBytes(o.index.get(o.root))}. ${visCoverage(o.raw.meta)}\nLargest recorded files:\n${[...o.files].sort((a,b)=>(b.size||0)-(a.size||0)).slice(0,5).map(f=>`${f.path} — ${itemBytes(f)}`).join('\n')}\nPlease help me interpret this historical scan and suggest what I should review. Do not assume any file is safe to delete or that disk space has been freed.`;
     state.handoff={kind,content,epoch:state.epoch,hostId:o.host.id,candidatePaths:kind==='files'&&!item.isDir&&item.actionable!==false&&!item.synthetic?[item.path]:[],observation:{id:o.job.id,recordedAt:o.recordedAt,coverage:visCoverage(o.raw.meta)}};text('fs-handoff-title',kind==='files'?'Review this folder in Files':'Review the scan summary for Chat');text('fs-handoff-text',content);text('fs-handoff-help',kind==='files'?'Prepare this folder in Organize. A selected file is offered for your plan after its folder is scanned. Existing drafts are preserved until you choose a replacement. No scan, plan or move runs here.':'This prepares plain reference text in an empty Chat draft. It does not send a message, attach a verified report or change any existing context.');text('fs-handoff-confirm',kind==='files'?'Open Files with this location':'Use in an empty Chat draft');text('fs-handoff-status','');$('fs-handoff').showModal();}
   function confirmHandoff(){const h=state.handoff;if(!h||!current(h.epoch))return;if(h.kind==='files'){if(window.TLIStorageWorkspace?.prepare){const result=window.TLIStorageWorkspace.prepare({view:'organize',root:h.content,hostId:h.hostId,candidatePaths:h.candidatePaths,observation:h.observation,source:'space'});if(result.status==='unavailable'){text('fs-handoff-status','The folder could not be prepared. Finish active file work or verify the connected host.');return;}closeHandoff();return;}const input=$('filesRootInput');if(!input){text('fs-handoff-status','Files is unavailable.');return;}if(input.value.trim()&&!samePath(input.value.trim(),h.content)){text('fs-handoff-status','Files already has a different folder draft. It was preserved. Copy this path and review the existing Files draft first.');return;}input.value=h.content;input.dispatchEvent(new Event('input',{bubbles:true}));closeHandoff();if(typeof switchPanel==='function')switchPanel('panel-files');input.focus();}
     else {const input=$('chat-input');const context=[window.TLIIntelligence,window.TLIDocuments,window.TLINotebook,window.TLICaseContext].flatMap(m=>m?.describeContext?.()||[]);if(!input||input.value.trim()||$('chat-send-btn')?.disabled||context.length){text('fs-handoff-status','Chat has a draft, an active reply or selected context. Those are preserved. Finish or clear them explicitly in Chat before using this summary.');return;}input.value=h.content;input.dispatchEvent(new Event('input',{bubbles:true}));closeHandoff();if(typeof switchPanel==='function')switchPanel('panel-main');input.focus();}}
-  function clearPrivate(){state.expanded.clear();state.filterExpanded.clear();state.treeRows=[];state.treeActiveKey=null;state.extensionFilter=null;state.typePage=0;window.TLIStorageHistory?.selectPath?.(null);text('fs-tree-summary','');if($('fs-table-wrap'))$('fs-table-wrap').scrollTop=0;$('fs-monitor-readings')?.replaceChildren();text('fs-monitor-status','Monitoring details cleared. Load settings after unlocking.');for(const key of ['enabled','schedule_enabled'])if($('fs-monitor-'+key))$('fs-monitor-'+key).checked=false;clearInvestigation();text('fs-investigation-question','');if($('fs-investigation-question'))$('fs-investigation-question').value='';renderedList=null;closeEntryMenu();state.mapExcluded.clear();mapObserver?.disconnect();mapObserver=null;mapMarks=[];tableMarks=[];state.mapView=null;state.mapGroup=null;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.job=null;state.pendingStart=null;state.busy=false;state.driveBusy=false;state.drives=[];state.drivesLoaded=false;state.observation=null;state.tools={};state.selected=null;state.focus='';window.visualizerV4=null;if(!state.initialized)return;closeHandoff();for(const id of ['fs-largest-consumers','fs-map-breadcrumbs','fs-map-hidden','fs-map-folders','fs-selected-cleanup','vis4-drives','vis4-summary','visualizerTableBody','visualizerTypeBars','vis4-treemap-container','visualizerDetailsPath','visualizerDetailsName','visualizerDetailsSize','fs-large_files-results','fs-duplicates-results','fs-common_folders-results','visualizerPathSuggestions','fs-job-title','fs-job-progress','visualizerCenterSubtitle'])$(id)?.replaceChildren();for(const id of ['visualizerPathInput','visualizerSearchInput','fs-extension-filter','fs-drive-search'])$(id).value='';$('visualizerDetailsBar').hidden=true;$('fs-drives-refresh').disabled=false;for(const op of operations.slice(1))text('fs-'+op+'-status','No observation loaded.');text('fs-drives-status','Refresh to read drive capacity.');status('Private observations cleared. Watching stopped; any host scan may continue within its limits. No cleanup or retry ran.');locationChanged();renderObservation();controls();}
+  function clearPrivate(){resetInventory();state.expanded.clear();state.filterExpanded.clear();state.treeRows=[];state.treeActiveKey=null;state.extensionFilter=null;state.typePage=0;window.TLIStorageHistory?.selectPath?.(null);text('fs-tree-summary','');if($('fs-table-wrap'))$('fs-table-wrap').scrollTop=0;$('fs-monitor-readings')?.replaceChildren();text('fs-monitor-status','Monitoring details cleared. Load settings after unlocking.');for(const key of ['enabled','schedule_enabled'])if($('fs-monitor-'+key))$('fs-monitor-'+key).checked=false;clearInvestigation();text('fs-investigation-question','');if($('fs-investigation-question'))$('fs-investigation-question').value='';renderedList=null;closeEntryMenu();state.mapExcluded.clear();mapObserver?.disconnect();mapObserver=null;mapMarks=[];tableMarks=[];state.mapView=null;state.mapGroup=null;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.job=null;state.pendingStart=null;state.busy=false;state.driveBusy=false;state.drives=[];state.drivesLoaded=false;state.observation=null;state.tools={};state.selected=null;state.focus='';window.visualizerV4=null;if(!state.initialized)return;closeHandoff();for(const id of ['fs-selected-metrics','fs-active-filters','fs-largest-consumers','fs-map-breadcrumbs','fs-map-hidden','fs-map-folders','fs-selected-cleanup','vis4-drives','vis4-summary','visualizerTableBody','visualizerTypeBars','vis4-treemap-container','visualizerDetailsPath','visualizerDetailsName','visualizerDetailsSize','fs-large_files-results','fs-duplicates-results','fs-common_folders-results','visualizerPathSuggestions','fs-job-title','fs-job-progress','visualizerCenterSubtitle'])$(id)?.replaceChildren();for(const id of ['visualizerPathInput','visualizerSearchInput','fs-extension-filter','fs-drive-search'])$(id).value='';$('visualizerDetailsBar').hidden=true;$('fs-drives-refresh').disabled=false;for(const op of operations.slice(1))text('fs-'+op+'-status','No observation loaded.');text('fs-drives-status','Refresh to read drive capacity.');status('Private observations cleared. Watching stopped; any host scan may continue within its limits. No cleanup or retry ran.');locationChanged();renderObservation();controls();}
   function setup(){if(state.initialized||!$('panel-visualizer'))return;state.initialized=true;
     $('fs-more-tools')?.addEventListener('toggle',()=>{if(!$('fs-more-tools').open&&state.tab!=='explore')setTab('explore');});
-    $('visualizerScanBtn').addEventListener('click',()=>start('scan'));$('visualizerPathInput').addEventListener('input',locationChanged);$('fs-drives-refresh').addEventListener('click',()=>drives(true));$('fs-drive-search').addEventListener('input',renderDrives);$('fs-drive-sort').addEventListener('change',renderDrives);
+    $('visualizerScanBtn').addEventListener('click',()=>start('scan'));$('visualizerPathInput').addEventListener('input',locationChanged);$('visualizerPathInput').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();start('scan');}});$('fs-drives-refresh').addEventListener('click',()=>drives(true));$('fs-drive-search').addEventListener('input',renderDrives);$('fs-drive-sort').addEventListener('change',renderDrives);
     for(const b of document.querySelectorAll('[data-vis-preset]'))b.addEventListener('click',()=>{const path=window.TLI_PATHS?.common?.[b.dataset.visPreset]||(b.dataset.visPreset==='home'?window.TLI_PATHS?.home:null);if(path)prepare(path);else status('The host has not supplied this folder path. Enter its absolute path or refresh TLI.');});
     for(const b of document.querySelectorAll('[data-fs-tab]')){b.addEventListener('click',()=>setTab(b.dataset.fsTab,b.dataset.fsTab==='explore'));b.addEventListener('keydown',e=>{const tabs=[...document.querySelectorAll('[data-fs-tab]')],i=tabs.indexOf(b);let next;if(e.key==='ArrowRight')next=(i+1)%tabs.length;if(e.key==='ArrowLeft')next=(i+tabs.length-1)%tabs.length;if(e.key==='Home')next=0;if(e.key==='End')next=tabs.length-1;if(next!==undefined){e.preventDefault();setTab(tabs[next].dataset.fsTab);tabs[next].focus();}});}
     $('fs-profile').addEventListener('change',()=>{const deep=$('fs-profile').value==='deep';$('fs-include-excluded').disabled=!deep;if(!deep)$('fs-include-excluded').checked=false;});
@@ -1060,6 +1339,7 @@ function getParentFolderPath(fullPath) {
     $('fs-investigate')?.addEventListener('click',()=>investigate());$('fs-selected-explain')?.addEventListener('click',()=>investigate(true));
     for(const th of document.querySelectorAll('#panel-visualizer th[data-sort]'))th.querySelector('button').addEventListener('click',()=>{state.direction=state.sort===th.dataset.sort?-state.direction:['size','allocated_size','files','modified_at'].includes(th.dataset.sort)?-1:1;state.sort=th.dataset.sort;for(const t of document.querySelectorAll('#panel-visualizer th[data-sort]'))t.setAttribute('aria-sort',t===th?(state.direction===1?'ascending':'descending'):'none');renderExplorer();});
     $('fs-table-wrap').addEventListener('scroll',renderTreeWindow,{passive:true});
+    $('fs-tree-columns')?.addEventListener('click',()=>{const details=$('fs-table-wrap').dataset.columns!=='details';$('fs-table-wrap').dataset.columns=details?'details':'essential';$('fs-tree-columns').setAttribute('aria-pressed',String(details));text('fs-tree-columns',details?'Fewer columns':'More columns');});
     $('fs-tree-collapse')?.addEventListener('click',()=>{state.expanded.clear();state.filterExpanded.clear();$('fs-table-wrap').scrollTop=0;renderExplorer();});
     $('fs-tree-expand')?.addEventListener('click',()=>{const o=visibleObservation();if(!inspectable(o))return;for(const item of o.folders)state.expanded.add(item.path);renderExplorer();});
     $('fs-show-changes')?.addEventListener('click',()=>{window.TLIStorageHistory?.selectPath?.(state.selected?.path&&!state.selected.synthetic?state.selected.path:null);setTab('history');$('storage-history')?.scrollIntoView?.({block:'nearest'});});
@@ -1069,19 +1349,22 @@ function getParentFolderPath(fullPath) {
     $('visualizerCopyPathBtn').addEventListener('click',()=>copyPath(state.selected,state.observation,state.displayRevision));
     $('fs-selected-actions').addEventListener('click',()=>{if(state.selected)showEntryMenu(state.selected,state.observation,state.displayRevision,$('fs-selected-actions'));});
     $('fs-selected-reveal')?.addEventListener('click',()=>revealOnHost(state.selected,state.observation,state.displayRevision));
+    const dismissSelection=()=>{const selectedRow=Array.from($('fs-inventory-rows')?.querySelectorAll('.fs-inventory-row')||[]).find(row=>samePath(row.dataset.inventoryPath,state.selected?.path))||tableMarks.find(mark=>itemKey(mark.item)===itemKey(state.selected))?.node;closeEntryMenu();clearInvestigation();state.selected=null;window.TLIStorageHistory?.selectPath?.(null);$('visualizerDetailsBar').hidden=true;$('fs-selected-cleanup').replaceChildren();highlightSelection();controls();selectedRow?.focus?.({preventScroll:true});};
+    $('fs-selected-close')?.addEventListener('click',dismissSelection);
+    $('visualizerDetailsBar')?.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();dismissSelection();}});
     document.addEventListener('pointerdown',e=>{if(entryMenu&&!entryMenu.box.contains(e.target))closeEntryMenu();});
     window.addEventListener('resize',()=>closeEntryMenu());
     // Dismiss for deliberate background scrolling, not delayed scroll anchoring
     // from focusing a control. Scrollbar/touch interactions also hit pointerdown.
     document.addEventListener('wheel',e=>{if(entryMenu&&!entryMenu.box.contains(e.target))closeEntryMenu();},{capture:true,passive:true});
     $('visualizerSendToFilesBtn').addEventListener('click',()=>reviewHandoff('files'));$('fs-ask-chat').addEventListener('click',()=>reviewHandoff('chat'));$('fs-handoff-close').addEventListener('click',closeHandoff);$('fs-handoff').addEventListener('cancel',e=>{e.preventDefault();closeHandoff();});$('fs-handoff-confirm').addEventListener('click',confirmHandoff);$('fs-open-cleanup').addEventListener('click',openCleanup);
-    window.TLIStorageHistory?.setup();setupMonitor();setupWorkbench();window.addEventListener('tli:cleanup-selection-change',updateCleanup);controls();
+    window.TLIStorageHistory?.setup();setupMonitor();setupWorkbench();setupInventory();window.addEventListener('tli:cleanup-selection-change',updateCleanup);controls();
   }
   window.TLIFreeSpace={setup,prepare,startScan:({path}={})=>start('scan',path),start,stop,poll,loadDrives:drives,clearPrivate,openCleanup,updateCleanup,
     // Read-only validators also exercised by isolated controller tests.
-    validateJob,validateResult,bytes,getState:()=>({busy:state.busy,job:state.job,observation:state.observation,tab:state.tab,epoch:state.epoch,mode:state.mode,focus:state.focus,selected:state.selected,mapView:state.mapView,treeRows:state.treeRows.slice(),expanded:new Set(state.expanded),surface:state.surface})};
+    validateJob,validateResult,bytes,getState:()=>({busy:state.busy,job:state.job,observation:state.observation,tab:state.tab,epoch:state.epoch,mode:state.mode,focus:state.focus,selected:state.selected,mapView:state.mapView,treeRows:state.treeRows.slice(),expanded:new Set(state.expanded),surface:state.surface,browserView:state.browserView,inventory:state.inventory?{mode:state.inventory.mode,path:state.inventory.path,offset:state.inventory.offset,busy:state.inventory.busy,total:state.inventory.page?.total,rows:state.inventory.page?.items.slice()||[]}:null})};
   window.TLIVisualizer={scanPath:prepare,startScan:({path}={})=>start('scan',path)};
-  function pause(){clearInvestigation();closeEntryMenu();mapObserver?.disconnect();mapObserver=null;state.paused=true;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.busy=false;state.driveBusy=false;closeHandoff();controls();}
+  function pause(){const pending=state.inventory?.busy||state.inventoryTimer!==null;clearTimeout(state.inventoryTimer);state.inventoryTimer=null;state.inventoryRevision++;if(state.inventory){if(pending){state.inventory.page=null;$('fs-inventory-rows')?.replaceChildren();text('fs-inventory-status','File browsing paused. Search or choose a view to continue.');}state.inventory.busy=false;}clearInvestigation();closeEntryMenu();mapObserver?.disconnect();mapObserver=null;state.paused=true;state.epoch++;clearTimeout(state.timer);for(const a of state.requests)a.abort();state.requests.clear();state.busy=false;state.driveBusy=false;closeHandoff();controls();}
   function resume(){if(!state.paused||state.locked||document.hidden||!state.panelActive)return;state.paused=false;for(const id of ['fs-monitor-load','fs-monitor-save'])if($(id))$(id).disabled=false;if(state.initialized)$('fs-drives-refresh').disabled=false;controls();if(state.observation&&state.tab==='explore')renderExplorer();if(state.job&&!terminal.has(state.job.status))poll();else if(state.pendingStart){status('Start response was interrupted. Retry this start request explicitly using its same request ID.');$('fs-job-check').hidden=false;$('fs-job-check').textContent='Retry this start request';}}
   window.addEventListener('tli-session-locked',()=>{
     const job=state.job;state.locked=true;clearPrivate();

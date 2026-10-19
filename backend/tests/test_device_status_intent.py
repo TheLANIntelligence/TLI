@@ -39,7 +39,9 @@ def route(monkeypatch):
     monkeypatch.setattr(intent_engine.requests, "post", lambda *a, **kw: pytest.fail("No network in intent test"))
     token = S.create_session_token("alice")
     request = Request({"type": "http", "method": "POST", "path": "/api/ai/chat", "scheme": "https",
-                       "server": ("tli.invalid", 443), "headers": [(b"cookie", ("tli_session=" + token).encode())]})
+                       "server": ("tli.invalid", 443), "client": ("192.0.2.20", 1234),
+                       "headers": [(b"host", b"tli.invalid"), (b"origin", b"https://tli.invalid"),
+                                   (b"cookie", ("tli_session=" + token).encode())]})
     def invoke(question):
         return ai_routes._route_action_intent(request, question)
     return SimpleNamespace(invoke=invoke, registry=registry, calls=calls)

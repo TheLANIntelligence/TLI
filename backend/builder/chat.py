@@ -6,14 +6,14 @@ from typing import Any
 import tli_state as S
 
 from .receipts import BUILDER_DIR
+from . import chat_store
 
 
 CHAT_PATH = BUILDER_DIR / "chat.json"
 
 
 def load_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
-    BUILDER_DIR.mkdir(parents=True, exist_ok=True)
-    items = S.load_json_file(CHAT_PATH, []) or []
+    items = chat_store.read(CHAT_PATH)
     return list(reversed(items[-limit:]))
 
 
@@ -21,7 +21,7 @@ def find_chat(chat_id: str) -> dict[str, Any] | None:
     """Locate a chat message by id. Returns None when not found."""
     if not chat_id:
         return None
-    items = S.load_json_file(CHAT_PATH, []) or []
+    items = chat_store.read(CHAT_PATH)
     for item in items:
         if item.get("id") == chat_id:
             return item
@@ -53,7 +53,4 @@ def add_chat_message(
         "thread_id": thread_id,
         "parent_id": parent_id or "",
     }
-    items = S.load_json_file(CHAT_PATH, []) or []
-    items.append(item)
-    S.save_json_file(CHAT_PATH, items[-200:])
-    return item
+    return chat_store.append(CHAT_PATH, item)

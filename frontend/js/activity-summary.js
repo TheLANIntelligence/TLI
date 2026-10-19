@@ -4,6 +4,8 @@
   if (window.TLIActivitySummary) return;
   const el = id => document.getElementById(id);
   let data = null, busy = false, failed = false, initialized = false, epoch = 0;
+  let locked = false, accessRefreshPending = false;
+  const privateViews = [];
 
   function node(tag, text, className) {
     const item = document.createElement(tag);
@@ -18,8 +20,8 @@
   }
   function controls() {
     const complete = ['complete', 'retained'].includes(data?.coverage);
-    el('activity-refresh').disabled = busy;
-    el('activity-review').disabled = busy || failed || !data || (!data.total && complete);
+    el('activity-refresh').disabled = busy || locked;
+    el('activity-review').disabled = busy || locked || failed || !data || (!data.total && complete);
     el('activity-review').textContent = data?.total ? 'Mark summary reviewed' : complete ? 'Up to date' : 'Start from here';
     el('activity-catchup').setAttribute('aria-busy', String(busy));
     el('activity-catchup').dataset.state = busy ? 'loading' : failed ? (data ? 'stale' : 'unavailable') : data ? 'ready' : 'loading';
@@ -76,16 +78,17 @@
     el('activity-new').hidden = true;
   }
   async function request(url, options = {}) {
+    if (locked) throw new Error('Unlock TLI before reading activity.');
     const generation = epoch;
     const response = await fetch(url, {credentials: 'same-origin', cache: 'no-store',
       signal: AbortSignal.timeout(10000), ...options});
-    if (response.status === 401 && generation === epoch) clearPrivate();
     const body = await response.json();
+    if ((response.status === 401 || response.status === 403) && generation === epoch) clearPrivate(typeof body?.detail === 'string' ? body.detail : undefined);
     if (!response.ok || body.ok !== true) throw new Error(typeof body.detail === 'string' ? body.detail : 'Activity could not be updated. Please retry.');
     return body;
   }
   async function refresh() {
-    if (busy) return;
+    if (busy || locked) return;
     busy = true;
     const generation = epoch;
     controls();
@@ -113,18 +116,20 @@
       if (generation === epoch) { busy = false; controls(); }
     }
   }
-  function clearPrivate() {
+  function clearPrivate(message) {
+    accessRefreshPending = false;
     epoch++; data = null; busy = false; failed = true;
+    privateViews.forEach(clear => clear(message));
     ['activity-groups', 'activity-history'].forEach(id => el(id).replaceChildren());
     ['activity-count', 'activity-coverage', 'activity-reviewed-at', 'activity-more', 'activity-checked-at', 'activity-coverage-summary'].forEach(id => { if (el(id)) el(id).textContent = ''; });
-    el('activity-error').textContent = 'Unlock TLI, then refresh activity.';
+    el('activity-error').textContent = typeof message === 'string' ? message : 'Unlock TLI, then refresh activity.';
     el('activity-history-title').textContent = 'View recorded events';
     el('activity-history-details').hidden = true; el('activity-history-details').open = false;
     if (el('activity-coverage-details')) el('activity-coverage-details').open = false;
     el('activity-new').hidden = true; controls();
   }
   async function review() {
-    if (busy || failed || !data) return;
+    if (busy || locked || failed || !data) return;
     const cursor = {...data.cursor, ...(data.history_cursor ? {history_cursor: {...data.history_cursor}} : {})};
     const generation = epoch;
     busy = true;
@@ -162,7 +167,7 @@
     details.append(label, save, reload, status, reasons); host.append(details);
     let pending = false, knownMode = null;
     const explain = narrator => {
-      if (!details.open) return;
+      if (locked || !details.open) return;
       reasons.replaceChildren();
       const rows = Array.isArray(narrator?.explanations) ? narrator.explanations.slice(0, 12) : [];
       reasons.append(node('strong', 'Why this warning appears / what clears it'));
@@ -170,7 +175,7 @@
       rows.forEach(row => { if (typeof row.why === 'string' && typeof row.clears_when === 'string') reasons.append(node('p', row.why), node('p', 'Clears when: ' + row.clears_when)); });
     };
     async function load(mode) {
-      if (pending) return;
+      if (pending || locked) return;
       const generation = epoch;
       pending = true; save.disabled = select.disabled = reload.disabled = true;
       status.textContent = mode ? 'Saving Narrator mode…' : 'Loading saved Narrator mode…';
@@ -191,10 +196,15 @@
     save.addEventListener('click', () => load(select.value)); reload.addEventListener('click', () => load());
     details.addEventListener('toggle', () => { if (details.open) load(); });
     window.EventInterpreter?.on('narrator_update', explain);
-    window.addEventListener?.('tli-session-locked', () => {
+    privateViews.push(message => {
       pending = false; knownMode = null; details.open = false; reasons.replaceChildren(); select.value = '';
-      save.disabled = select.disabled = true; reload.disabled = false; status.textContent = 'Unlock TLI, then refresh these settings.';
+      save.disabled = select.disabled = true; reload.disabled = false; status.textContent = typeof message === 'string' ? message : 'Unlock TLI, then refresh these settings.';
     });
+  }
+  function refreshAfterAccess() {
+    if (!accessRefreshPending || locked || document.hidden) return;
+    accessRefreshPending = false;
+    if (!el('panel-dashboard2')?.hidden) return refresh();
   }
   function init() {
     if (initialized || !el('activity-catchup')) return;
@@ -212,7 +222,14 @@
       }
     });
     if (!el('panel-dashboard2')?.hidden) refresh();
-    window.addEventListener?.('tli-session-locked', clearPrivate);
+    window.addEventListener?.('tli-session-locked', () => { locked = true; clearPrivate(); });
+    window.addEventListener?.('tli-session-unlocked', () => { locked = false; controls(); });
+    window.addEventListener?.('tli-private-observation-ready', () => {
+      if (locked) return;
+      accessRefreshPending = true;
+      return refreshAfterAccess();
+    });
+    document.addEventListener('visibilitychange', refreshAfterAccess);
     window.addEventListener?.('pagehide', clearPrivate);
     controls();
   }

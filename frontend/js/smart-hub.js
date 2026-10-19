@@ -1,20 +1,22 @@
 /* Home is a launchpad. Feature controllers still own every operation and draft. */
 (function (root) {
   'use strict';
+  const hiddenTaskIds = new Set(['homelab']);
   const tasks = [
     {id:'space', panel:'panel-visualizer', icon:'storage', title:'Make room', detail:'See what takes space. Review what can go.', next:'Free Space'},
     {id:'organize', panel:'panel-files', icon:'folder', title:'Put files in order', detail:'Choose a folder, select files, review their new homes.', next:'Files'},
-    {id:'game', panel:'panel-games', icon:'game', title:'Get ready to play', detail:'Get settings advice for your PC and your game.', next:'Game Optimizer'},
+    {id:'game', panel:'panel-games', icon:'game', title:'Get ready to play', detail:'Try a setting and compare your readings. AI advice is optional.', next:'Game Optimizer'},
     {id:'routine', panel:'panel-automations', icon:'flow', title:'Set the scene', detail:'Bring device actions together in a routine.', next:'Routines'},
     {id:'ask', panel:'panel-main', icon:'chat', title:'Think it through', detail:'Ask a question or pick up your conversation.', next:'Ask TLI'},
     {id:'devices', panel:'panel-homeauto', icon:'home', title:'Look after my home', detail:'Find your lights, switches and connected devices.', next:'Smart devices'},
-    {id:'phone', panel:'panel-companion', icon:'phone', title:'Take TLI with me', detail:'Connect your phone and review its access.', next:'Phone Companion'},
+    {id:'phone', panel:'panel-companion', icon:'phone', title:'Take TLI with me', detail:'Keep your conversations and ideas with you.', next:'Connect phone'},
     {id:'print', panel:'panel-printshop', icon:'printer', title:'Print or scan', detail:'Choose a printer or bring a paper document in.', next:'Printers & scanners'},
     {id:'vault', panel:'panel-vault', icon:'lock', title:'Keep something private', detail:'Open your protected files, notes and secrets.', next:'Vault'},
     {id:'computers', panel:'panel-mesh', icon:'network', title:'Connect my computers', detail:'Check a connection, send a message or transfer a file.', next:'Computers'},
+    {id:'homelab', panel:'panel-homelab', icon:'network', title:'Explore my HomeLab', detail:'Bring computers, smart devices and Proxmox inventory together.', next:'HomeLab'},
     {id:'help', panel:'panel-troubleshooting', icon:'tools', title:'Work through a problem', detail:'Keep checks, findings and the fix together.', next:'Troubleshooting'},
     {id:'create', panel:'panel-advanced', icon:'build', title:'Make something', detail:'Explore projects, scripts and installed tools.', next:'Advanced tools'}
-  ];
+  ].filter(task => !hiddenTaskIds.has(task.id));
   const defaults = ['space','organize','game','routine'];
   function normalize(value) {
     if (!Array.isArray(value)) return [...defaults];
@@ -29,14 +31,21 @@
   const node = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
   const button = (text, cls, action) => { const e = node('button', text, cls); e.type = 'button'; e.addEventListener('click', action); return e; };
   const key = 'tli_home_tasks_v1';
-  let locked = false, suspended = false, selected = [...defaults], recent = [], editor, returnFocus;
+  let locked = false, suspended = false, selected = [...defaults], retainedHiddenTasks = [], recent = [], editor, returnFocus;
   function available() { return !locked && !suspended && root.TLIIntelligence?.isCurrent?.() !== false; }
   function open(panel) {
     if (!available()) return false;
     root.switchPanel?.(panel);
     return $(panel)?.hidden === false;
   }
-  function load() { try { selected = normalize(JSON.parse(localStorage.getItem(key) || 'null')); } catch (_) { selected = [...defaults]; } }
+  function load() {
+    retainedHiddenTasks = [];
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) || 'null');
+      if (Array.isArray(saved)) retainedHiddenTasks = [...new Set(saved.filter(id => hiddenTaskIds.has(id)))];
+      selected = normalize(saved);
+    } catch (_) { selected = [...defaults]; }
+  }
   function renderTasks() {
     const list = $('home-task-list'); if (!list) return;
     list.replaceChildren();
@@ -86,7 +95,7 @@
     const save = button('Save shortcuts', 'btn-primary', () => {
       if (!available() || !count() || count() > 6) return;
       const next = normalize(inputs.filter(input => input.checked).map(input => input.value));
-      try { localStorage.setItem(key, JSON.stringify(next)); }
+      try { localStorage.setItem(key, JSON.stringify([...next, ...retainedHiddenTasks])); }
       catch (_) { hint.textContent = 'This browser could not save your shortcuts. Allow local storage and try again.'; return; }
       selected = next; renderTasks(); closeEditor();
     });

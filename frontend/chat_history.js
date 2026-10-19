@@ -89,6 +89,9 @@
   "use strict";
   const protocol = "conversation-search-v1", base = "/api/intelligence/conversation-search";
   let initialized = false, busy = false, epoch = 0, cursor = null, items = [], supported = false, loadedQuery = "";
+  let locked = document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false', ready = !locked;
+  const available = () => !locked && ready;
+  const current = revision => available() && revision === epoch;
   let deletion = null;
   const $ = id => document.getElementById(id);
   const element = (tag, text, id) => { const el = document.createElement(tag); if (text) el.textContent = text; if (id) el.id = id; return el; };
@@ -103,8 +106,8 @@
   function status(text) { if ($("conversation-search-status")) $("conversation-search-status").textContent = text; }
   function controls() {
     if (!initialized) return;
-    $("conversation-search-submit").disabled = busy;
-    $("conversation-search-more").disabled = busy || !cursor;
+    $("conversation-search-submit").disabled = !available() || busy;
+    $("conversation-search-more").disabled = !available() || busy || !cursor;
     $("conversation-search-more").hidden = !cursor;
     $("conversation-search-more").style.display = cursor ? "" : "none";
     $("conversation-search-form").setAttribute("aria-busy", String(busy));
@@ -117,6 +120,7 @@
   }
   async function json(url, options) {
     const response = await fetch(url, options || {cache: "no-store"});
+    if (response.status === 401 || response.status === 403) throw Object.assign(new Error('Unlock TLI and verify access before reading history.'), {status:response.status});
     let data; try { data = await response.json(); } catch {
       const error = new Error("TLI returned unreadable history."); error.status = response.status; throw error;
     }
@@ -141,16 +145,17 @@
     return true;
   }
   function reviewDelete(item) {
-    if (busy || !supported) return;
+    if (!available() || busy || !supported) return;
     if (replyInProgress()) return;
     deletion = item.id;
     const box = $("conversation-search-delete-review");
     box.replaceChildren(element("p", `Delete the retained conversation “${item.title}” (${date(item.last_updated)})? This removes its saved messages. Starting a new chat does not delete history.`));
     const confirm = element("button", "Delete this conversation", "conversation-search-delete-confirm"); confirm.className = "pill-btn ghost";
     const cancel = element("button", "Cancel"); cancel.className = "pill-btn ghost";
-    cancel.addEventListener("click", cancelDelete);
+    const reviewEpoch = epoch;
+    cancel.addEventListener("click", () => { if (current(reviewEpoch)) cancelDelete(); });
     confirm.addEventListener("click", async () => {
-      if (busy || deletion !== item.id) return;
+      if (!current(reviewEpoch) || busy || deletion !== item.id) return;
       if (replyInProgress()) return;
       busy = true; controls(); confirm.disabled = true; const revision = epoch;
       try {
@@ -162,7 +167,7 @@
         status(removed ? "Conversation deleted. Search again to refresh the remaining pages." : "That conversation is already unavailable. Search again to refresh history.");
       } catch (error) {
         if (revision === epoch) {
-          if (error.status === 401 || error.status === 403) clear();
+          if (error.status === 401 || error.status === 403) { denyAccess(); return; }
           status(error.message + " No retry ran automatically.");
         }
       }
@@ -171,6 +176,7 @@
     box.append(confirm, cancel); box.scrollIntoView?.({block: "nearest"});
   }
   function render() {
+    const renderedEpoch = epoch;
     const list = $("chat-history-list"); list.replaceChildren();
     for (const item of items) {
       const row = element("div"); row.className = "conversation-search-row";
@@ -185,7 +191,7 @@
       if (item.truncated) open.append(element("small", "Only part of this conversation's text was inspected."));
       let opening = false;
       open.addEventListener("click", async () => {
-        if (opening || busy || typeof window.loadConversation !== "function") return;
+        if (!current(renderedEpoch) || opening || busy || typeof window.loadConversation !== "function") return;
         opening = true; open.disabled = true; const revision = epoch;
         try {
           const loaded = await window.loadConversation(item.id, item.title);
@@ -194,23 +200,24 @@
         finally { opening = false; open.disabled = false; }
       });
       row.appendChild(open);
-      if (supported) { const remove = element("button", "Delete"); remove.className = "pill-btn ghost"; remove.setAttribute("aria-label", "Delete conversation: " + item.title); remove.addEventListener("click", () => reviewDelete(item)); row.appendChild(remove); }
+      if (supported) { const remove = element("button", "Delete"); remove.className = "pill-btn ghost"; remove.setAttribute("aria-label", "Delete conversation: " + item.title); remove.addEventListener("click", () => { if (current(renderedEpoch)) reviewDelete(item); }); row.appendChild(remove); }
       list.appendChild(row);
     }
   }
   async function run(more = false) {
-    if (busy || (more && !cursor)) return;
+    if (!initialized || !available() || busy || (more && !cursor)) return;
     const query = $("conversation-search-query").value.trim();
     if (query.length > 120) { status("Use at most 120 characters."); return; }
     const revision = ++epoch, pageCursor = more ? cursor : null;
     cancelDelete(); busy = true; controls(); status("Searching retained conversations… Nothing is being sent to AI.");
     try {
-      let capability;
+      let capability, unsupported = false;
       try { capability = await json(base + "/capabilities"); }
-      catch (error) { if (error.status === 401 || error.status === 403) throw error; capability = null; }
-      if (revision !== epoch) return;
-      supported = capability?.ok === true && capability.protocol === protocol;
-      if (!supported) {
+      catch (error) { if (![404,405].includes(error.status)) throw error; unsupported = true; }
+      if (!current(revision)) return;
+      if (!unsupported && (capability?.ok !== true || capability.protocol !== protocol)) throw Error('The history capability response could not be validated.');
+      supported = !unsupported;
+      if (unsupported) {
         const legacy = await json("/api/ai/conversations");
         if (revision !== epoch) return;
         if (!Array.isArray(legacy?.conversations) || !legacy.conversations.every(item => validItem(item, true))) throw new Error("Recent history returned an invalid format.");
@@ -235,14 +242,24 @@
       status(`${items.length} ${query ? "matching" : "retained"} conversations shown. ${coverage.scanned_conversations} of ${coverage.owned_conversations} owned conversations inspected.${cursor ? " Load more to continue searching older history." : ""}${limitation} Nothing was sent to AI.`);
     } catch (error) {
       if (revision === epoch) {
-        if (error.status === 401 || error.status === 403) clear();
-        cursor = null; status(error.message + " Start the search again to refresh history.");
+        if (error.status === 401 || error.status === 403) { denyAccess(); return; }
+        cursor = null; render(); status(error.message + " Start the search again to refresh history.");
       }
     } finally { if (revision === epoch) { busy = false; controls(); } }
   }
   function close() { clear(); $("chat-history-drawer")?.classList.add("hidden"); $("chat-history-btn")?.setAttribute("aria-expanded", "false"); }
+  function suspend() {
+    locked = true; ready = false; close();
+    if ($('conversation-search-query')) $('conversation-search-query').value = '';
+  }
+  function denyAccess() {
+    suspend();
+    window.dispatchEvent(new CustomEvent('tli-session-locked'));
+    status('Unlock TLI and verify access before reading history.');
+  }
   function open() {
     setup(); if (!initialized) return;
+    if (!available()) { status('Unlock TLI and verify access before reading history.'); return; }
     $("chat-history-drawer").classList.remove("hidden"); $("chat-history-btn")?.setAttribute("aria-expanded", "true");
     $("conversation-search-query").focus(); return run();
   }
@@ -262,7 +279,7 @@
     const submit = element("button", "Search", "conversation-search-submit"); submit.type = "submit"; submit.className = "pill-btn primary";
     const message = element("p", "", "conversation-search-status"); message.setAttribute("role", "status"); message.style.overflowWrap = "anywhere";
     form.append(label, submit, message); form.addEventListener("submit", event => { event.preventDefault(); run(); });
-    input.addEventListener("input", () => { clear(); status("Press Search to apply this text. Nothing is sent to AI."); });
+    input.addEventListener("input", () => { if (!available()) return; clear(); status("Press Search to apply this text. Nothing is sent to AI."); });
     $("chat-history-list").before(form);
     const more = element("button", "Load more", "conversation-search-more"); more.className = "pill-btn ghost"; more.style.margin = "12px"; more.addEventListener("click", () => run(true));
     $("chat-history-list").after(more, element("div", "", "conversation-search-delete-review"));
@@ -274,10 +291,11 @@
     const recent = $("recent-chats-list");
     if (recent) { const button = element("button", "Search older chats", "conversation-search-open"); button.className = "pill-btn ghost"; button.addEventListener("click", open); recent.before(button); }
     $("chat-history-drawer").addEventListener("keydown", event => { if (event.key === "Escape") close(); });
-    const clearPrivate = () => { close(); input.value = ""; };
-    window.addEventListener("tli-session-locked", clearPrivate); window.addEventListener("pagehide", clearPrivate);
     controls();
   }
+  for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed','pagehide']) window.addEventListener(event, suspend);
+  window.addEventListener('tli-session-unlocked', () => { locked = false; controls(); });
+  window.addEventListener('tli-private-observation-ready', () => { if (!locked) { ready = true; controls(); } });
   window.TLIConversationSearch = {open, clear, refresh: () => run()};
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", setup); else setup();
 })();

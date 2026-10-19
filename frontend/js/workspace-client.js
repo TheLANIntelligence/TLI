@@ -95,7 +95,7 @@ window.TLIWorkspace = (() => {
     const summary = document.createElement('summary'); summary.textContent = `Saved work · ${runs.filter(value => !terminal.has(value.status)).length} running`; shelf.append(summary);
     for (const value of runs) {
       const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:6px';
-      const label = document.createElement('span'); label.textContent = `${value.kind === 'chat' ? 'Conversation' : 'Builder'} · ${value.status}`; row.append(label);
+      const label = document.createElement('span'); label.textContent = `${value.kind === 'chat' ? 'Conversation' : value.kind === 'agent_task' ? 'Task' : 'Builder'} · ${value.status}`; row.append(label);
       if (value.conversation_id) { const button = document.createElement('button'); button.type = 'button'; button.className = 'chip-button'; button.textContent = 'Open conversation'; button.onclick = () => window.loadConversation?.(value.conversation_id, 'Shared conversation'); row.append(button); }
       if (value.app_id) { const button = document.createElement('button'); button.type = 'button'; button.className = 'chip-button'; button.textContent = 'Open app'; button.onclick = () => window.TLIWebApps?.openProject?.(value.app_id); row.append(button); }
       if (!terminal.has(value.status)) { const button = document.createElement('button'); button.type = 'button'; button.className = 'chip-button'; button.textContent = 'Stop'; button.onclick = () => json(`/api/runs/${encodeURIComponent(value.id)}/cancel`, {method:'POST',body:'{}'}).then(refresh).catch(error => window.showToast?.(error.message,'error')); row.append(button); }

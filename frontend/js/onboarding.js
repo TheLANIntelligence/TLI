@@ -17,6 +17,8 @@
   let overlay, step = 0, epoch = 0, open = false, busy = false, initializing = false, blocked = false;
   let started = false, completed = false, locked = false, timer, previousFocus, previousOverflow;
   let name = '', savedName = '', security = 'pin', pinEnabled = false, pinNeedsVerify = false;
+  let sessionEpoch=0, initialization=null, needsInitialization=false, nameReady=true, nameUnconfirmed=false, nameSaving=false, nextOperation=null, restoreNameDraft=true;
+  let setupUnconfirmed = null, setupCompletionReady = false;
   let selectedModel = '', presets = [], ai = null, download = null, destination = '', aiOperation = false, refreshSerial = 0;
   const isolated = new Map();
   let resume;
@@ -117,13 +119,17 @@
     musicControls();
   }
 
-  async function request(url, body, timeout = 15000) {
+  async function request(url, body, timeout = 15000, guard = null) {
     const controller = new AbortController(), alarm = setTimeout(() => controller.abort(), timeout);
     try {
+      if(guard&&!guard())throw Error('This setup view changed.');
       const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
         credentials: 'same-origin', signal: controller.signal,
         ...(body === undefined ? {} : {headers: {'Content-Type':'application/json'}, body: JSON.stringify(body)}) });
+      if(guard&&!guard())throw Error('This setup view changed.');
+      if(guard&&(response.status===401||response.status===403)){window.dispatchEvent(new CustomEvent('tli-session-locked'));throw Error('Unlock TLI and check the saved setup before continuing.');}
       const data = await response.json().catch(() => null);
+      if(guard&&!guard())throw Error('This setup view changed.');
       if (!response.ok || !data || (body !== undefined && data.ok !== true)) {
         throw new Error(typeof data?.detail === 'string' ? data.detail : typeof data?.error === 'string' ? data.error : `TLI could not confirm this request (${response.status}). Try again.`);
       }
@@ -142,11 +148,17 @@
     write(sessionStorage, DRAFT, JSON.stringify({step, name, security, selectedModel, destination}));
   }
   function current(ticket) { return open && !locked && ticket === epoch; }
+  function validSetupState(state) {
+    return state && typeof state.complete === 'boolean' && typeof state.started === 'boolean' && !(state.complete && state.started);
+  }
   function controls() {
     $('tli-onboard-next').disabled = busy || initializing || locked;
     $('tli-onboard-back').disabled = step === 0 || busy || initializing || locked;
     $('tli-onboard-close').disabled = busy || initializing || locked;
     overlay.setAttribute('aria-busy', String(busy || initializing));
+    if (setupUnconfirmed) $('tli-onboard-next').textContent = 'Check saved setup';
+    else if (setupCompletionReady) $('tli-onboard-next').textContent = 'Open TLI';
+    else if(step===1&&nameUnconfirmed)$('tli-onboard-next').textContent='Check saved name';
     musicControls();
   }
   function isolate(value) {
@@ -166,7 +178,7 @@
     isolate(true);
   }
   function hide() {
-    open = false; epoch++; clearTimeout(timer); remember();
+    open = false; epoch++; clearTimeout(timer); if(nameReady&&!setupUnconfirmed)remember();
     pauseMusic();
     overlay.classList.add('hidden'); overlay.setAttribute('aria-hidden', 'true');
     delete document.documentElement.dataset.tliOnboard; isolate(false);
@@ -187,7 +199,7 @@
     }
   }
   function render(persist = true) {
-    epoch++; clearTimeout(timer); if (persist) remember();
+    epoch++; clearTimeout(timer); if (persist&&nameReady&&!setupUnconfirmed) remember();
     const [title, text] = steps[step];
     $('tli-onboard-step-title').textContent = title; $('tli-onboard-step-text').textContent = text;
     $('onboard-step-count').textContent = `STEP ${String(step + 1).padStart(2, '0')} / 05`;
@@ -212,7 +224,7 @@
     </div><p class="onboard-note">Welcome setup works offline. Bring your own local AI, download a model when you choose, or explore first.</p>`;
   }
   function personalize(dyn) {
-    dyn.innerHTML = `<div class="onboard-field"><label for="onboard-node-name">What should we call this computer?</label><input id="onboard-node-name" type="text" maxlength="48" autocomplete="off" placeholder="e.g. Studio, Office PC, My laptop" value="${esc(name)}" aria-describedby="onboard-name-hint"><p id="onboard-name-hint">A familiar name for your workspace and connected computers. Leave blank to keep the current name.</p></div><h3>Set the mood</h3><div class="onboard-theme-options" aria-label="Workspace theme"></div><p class="onboard-note" id="onboard-theme-note">Colors save in this browser. Explore the full collection in Settings.</p>`;
+    dyn.innerHTML = `<div class="onboard-field"><label for="onboard-node-name">What should we call this computer?</label><input id="onboard-node-name" type="text" autocomplete="off" placeholder="e.g. Studio, Office PC, My laptop" value="${esc(name)}" aria-describedby="onboard-name-hint"><p id="onboard-name-hint">A familiar name for your workspace and connected computers. Leave blank to keep the current name.</p></div><h3>Set the mood</h3><div class="onboard-theme-options" aria-label="Workspace theme"></div><p class="onboard-note" id="onboard-theme-note">Colors save in this browser. Explore the full collection in Settings.</p>`;
     $('onboard-node-name').addEventListener('input', event => {name = event.target.value; remember();});
     for (const id of ['emeraldLight', 'midnight', 'porcelainLight', 'pacific']) {
       const theme = window.TLIThemes?.themes.find(t => t.id === id); if (!theme) continue;
@@ -350,7 +362,7 @@
       ['chat','Ask TLI','Start a conversation, write or explore an idea.'],
       ['dashboard','Explore Dashboard','Find your bearings and see this computer’s overview.'],
       ['create','Create something','Turn an idea into a small web app with available AI.'],
-      ['companion','Connect your phone','Open Phone Companion setup when you are ready.'],
+      ['companion','Connect your phone','Take your personal AI and conversations to the Android app.'],
     ];
     for (const [id, title, text] of options) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'onboard-destination'; b.dataset.onboardDestination = id;
@@ -364,26 +376,63 @@
     const summary = $('onboard-summary'); if (!summary) return;
     summary.innerHTML = `<dl class="onboard-summary"><div><dt>Your computer</dt><dd>${esc(savedName || name || 'Current computer name')}</dd></div><div><dt>Access</dt><dd>${pinEnabled ? 'PIN protected' : 'PIN not set'}</dd></div><div><dt>Local AI</dt><dd>${esc(aiLabel())}</dd></div></dl>${ready() ? '' : '<p class="onboard-note">Your workspace is available now. Conversation and generation need a responding AI provider. Finish local model setup or configure another provider in Settings → AI.</p>'}`;
   }
+  function finishSetup() {
+    completed = true; setupCompletionReady = false; write(localStorage, SEEN, '1');
+    hide(); write(sessionStorage, DRAFT, null); if (resume) resume.hidden = true;
+    const panels = {chat:'panel-main',dashboard:'panel-dashboard2',create:'panel-builder',companion:'panel-companion'};
+    window.switchPanel?.(panels[destination] || panels.dashboard);
+    if (destination === 'chat') $('chat-input')?.focus();
+    window.dispatchEvent(new CustomEvent('tli:onboarding-complete'));
+  }
   async function next() {
     if (busy || initializing || locked) return;
+    if(!nameReady&&(step===1||step===4||!started||setupUnconfirmed||setupCompletionReady)){status('Check access after unlocking before continuing setup.',true);window.EventInterpreter?.retry?.();return;}
     if (blocked) { await initialize(true); return; }
     if (step < 4) playMusic({gesture:true});
     let ticket = epoch;
+    const operation={session:sessionEpoch,guarded:false};nextOperation=operation;
+    const operationCurrent=()=>current(ticket)&&nextOperation===operation&&operation.session===sessionEpoch;
+    const controlCurrent=()=>operationCurrent()&&nameReady;
     busy = true; controls(); status();
     try {
-      if (!started) {
-        const result = await request('/system/onboarding/start', {});
-        if (!current(ticket)) return;
-        started = true; completed = result.complete === true;
+      if (setupUnconfirmed) {
+        operation.guarded = true;
+        const state = await request('/system/onboarding/status', undefined, 15000, controlCurrent);
+        if (!controlCurrent()) return;
+        if (!validSetupState(state)) throw Error('The saved setup status could not be confirmed.');
+        started = state.started; completed = state.complete; setupCompletionReady = completed; setupUnconfirmed = null;
+        render(false);
+        status(completed ? 'Setup is complete. Choose Open TLI when you are ready.' : 'Saved setup checked. Review this step, then continue.');
+        return;
+      }
+      if (setupCompletionReady) { finishSetup(); return; }
+      if (!started && !completed) {
+        operation.guarded = true; setupUnconfirmed = 'start'; controls();
+        const result = await request('/system/onboarding/start', {}, 15000, controlCurrent);
+        if (!controlCurrent()) return;
+        if (!validSetupState(result) || (!result.started && !result.complete)) throw Error('The host did not confirm that setup was started.');
+        started = result.started; completed = result.complete; setupUnconfirmed = null; operation.guarded = false;
       }
       if (step === 1) {
+        operation.guarded = true;
+        const nameCurrent=controlCurrent;
+        if(nameUnconfirmed){
+          const snapshot=await request('/status',undefined,15000,nameCurrent);
+          if(!nameCurrent())return;
+          if(typeof snapshot.device_id!=='string'||!snapshot.device_id.trim()||typeof snapshot.device_nickname!=='string'||!snapshot.device_nickname.trim()||Array.from(snapshot.device_nickname).length>4096||/[\u0000-\u001f\u007f-\u009f]/.test(snapshot.device_nickname))throw Error('The saved computer name could not be confirmed.');
+          savedName=name=snapshot.device_nickname;nameUnconfirmed=false;render();status('Saved name checked. Review it, then continue.');return;
+        }
         const value = name.trim();
-        if (value && value !== savedName) {
-          const result = await request('/system/node/name', {name:value});
-          if (!current(ticket)) return;
-          savedName = result.node_name || value; name = value;
+        if(name!==savedName&&/[\u0000-\u001f\u007f-\u009f]/.test(name))throw Error('Choose a computer name without control characters.');
+        if (value && name !== savedName && value !== savedName) {
+          if(Array.from(value).length>64||/[\u0000-\u001f\u007f-\u009f]/.test(name))throw Error('Choose a computer name of up to 64 characters without control characters.');
+          nameSaving=true;nameUnconfirmed=true;
+          const result = await request('/system/node/name', {name:value},15000,nameCurrent);
+          if (!nameCurrent()) return;
+          if(typeof result.node_id!=='string'||!result.node_id.trim()||result.node_name!==value)throw Error('The saved computer name was not confirmed.');
+          savedName = result.node_name; name = value;nameUnconfirmed=false;nameSaving=false;
           const identity = window.TLIUI?.hostIdentity || window.TLIHostIdentity;
-          identity?.observe?.({id:identity.get?.().id, name:savedName, source:'host-rename', observedAt:Date.now()});
+          identity?.observe?.({id:result.node_id, name:savedName, source:'host-rename', generation:identity.get?.().generation, observedAt:Date.now()});
         }
       }
       if (step === 2 && (!pinEnabled || pinNeedsVerify) && security === 'pin') {
@@ -393,76 +442,82 @@
         if (!window.TLIPinLock?.verifyForSetup) throw new Error('Access setup is unavailable. Reload TLI and try again.');
         if (!pinNeedsVerify) {
           await request('/system/pin/set', {pin});
+          if (!operationCurrent()) return;
           pinEnabled = true; pinNeedsVerify = true;
-          if (!current(ticket)) return;
         }
         await window.TLIPinLock.verifyForSetup(pin);
         // The PIN owner rejects explicit lock/recovery races. Background expired
         // reads may have changed the view epoch during this confirmed unlock.
-        if (!open || locked) return;
-        ticket = epoch;
+        if (!open || locked || nextOperation!==operation) return;
+        ticket = epoch; operation.session = sessionEpoch;
         pinNeedsVerify = false;
       }
       if (step === 4) {
-        await request('/system/onboarding/complete', {});
-        if (!current(ticket)) return;
-        completed = true; write(localStorage, SEEN, '1');
-        hide(); write(sessionStorage, DRAFT, null); if (resume) resume.hidden = true;
-        const panels = {chat:'panel-main',dashboard:'panel-dashboard2',create:'panel-builder',companion:'panel-companion'};
-        window.switchPanel?.(panels[destination] || panels.dashboard);
-        if (destination === 'chat') $('chat-input')?.focus();
-        window.dispatchEvent(new CustomEvent('tli:onboarding-complete'));
+        if (!completed) {
+          operation.guarded = true; setupUnconfirmed = 'complete'; controls();
+          await request('/system/onboarding/complete', {}, 15000, controlCurrent);
+          if (!controlCurrent()) return;
+          setupUnconfirmed = null;
+        }
+        finishSetup();
       } else { step++; render(); }
     } catch (error) {
-      if (current(ticket)) {
+      if (operationCurrent()) {
         if (step === 2 && security === 'pin') {
           // A disconnected response may still have saved the PIN. Recheck
           // before offering another create request, without assuming an unlock.
           if (!pinEnabled) {
             const pinState = await request('/system/pin/status').catch(() => null);
-            if (!current(ticket)) return;
+            if (!operationCurrent()) return;
             if (pinState?.enabled === true) { pinEnabled = true; pinNeedsVerify = true; }
           }
           if (pinNeedsVerify) pinFields();
         }
-        status(error.message, true);
+        status(setupUnconfirmed ? 'The setup save is not confirmed; it may have completed. Check the saved setup before another save. '+error.message : step===1&&nameUnconfirmed?'The name change is not confirmed; it may have completed. Check the saved name before another save. '+error.message:error.message, true);
       }
     }
-    finally { busy = false; controls(); }
+    finally { if(nextOperation===operation){nextOperation=null;nameSaving=false;busy=false;controls();} }
   }
   async function initialize(force = false) {
     if (initializing) return;
+    if(locked){needsInitialization=true;return;}
+    const requestId={session:sessionEpoch};initialization=requestId;needsInitialization=false;
+    const active=()=>initialization===requestId&&requestId.session===sessionEpoch&&!locked;
     initializing = true; blocked = false; controls();
     try {
       const state = await request('/system/onboarding/status');
-      if (typeof state.complete !== 'boolean') throw new Error('Setup status could not be confirmed with your TLI host. Check that it is running and try again.');
-      completed = state.complete; started = state.started === true;
-      if (completed && !force) { write(localStorage, SEEN, '1'); if (open) hide(); delete document.documentElement.dataset.tliOnboard; return; }
+      if(!active())return;
+      if (!validSetupState(state)) throw new Error('Setup status could not be confirmed with your TLI host. Check that it is running and try again.');
+      completed = state.complete; started = state.started;
+      if (completed && !force && !setupUnconfirmed && !setupCompletionReady) { write(localStorage, SEEN, '1'); if (open) hide(); delete document.documentElement.dataset.tliOnboard; return; }
       if (!completed) write(localStorage, SEEN, null);
       if (started && !force) {
         try {
           const draft = JSON.parse(read(sessionStorage, DRAFT) || '{}');
           step = Number.isInteger(draft.step) && draft.step >= 0 && draft.step < 5 ? draft.step : 0;
-          name = typeof draft.name === 'string' ? draft.name.slice(0,48) : '';
+          name = restoreNameDraft&&typeof draft.name === 'string'&&Array.from(draft.name).length<=4096 ? draft.name : '';
           security = draft.security === 'open' ? 'open' : 'pin';
           selectedModel = typeof draft.selectedModel === 'string' ? draft.selectedModel : '';
           destination = ['chat','dashboard','create','companion'].includes(draft.destination) ? draft.destination : '';
         } catch {}
       }
       const pin = await request('/system/pin/status');
+      if(!active())return;
       if (typeof pin.enabled !== 'boolean') throw new Error('Access status could not be confirmed. Recheck before continuing.');
       pinEnabled = pin.enabled;
       if (!pinEnabled) pinNeedsVerify = false;
       const node = await request('/agent/ping').catch(() => null);
-      savedName = typeof node?.node_name === 'string' ? node.node_name : '';
+      if(!active())return;
+      savedName = typeof node?.node_name === 'string' && Array.from(node.node_name).length<=4096 && !/[\u0000-\u001f\u007f-\u009f]/.test(node.node_name) ? node.node_name : '';
       if (!name) name = savedName;
       musicEligible = true;
       show(); render();
       if (!musicAttempted && !musicSuspended) { musicAttempted = true; playMusic(); }
     } catch (error) {
+      if(!active())return;
       show(); render(); blocked = true;
       status(error.message, true); $('tli-onboard-next').textContent = 'Try again';
-    } finally { initializing = false; controls(); }
+    } finally { if(initialization===requestId){initialization=null;initializing=false;controls();} }
   }
   async function launch(replay = false) {
     if (!overlay || open || initializing) return;
@@ -472,6 +527,7 @@
   function init() {
     overlay = $('tli-onboard'); if (!overlay) return;
     locked = $('tli-lock-screen')?.getAttribute('aria-hidden') === 'false';
+    nameReady = !locked;
     initMusic();
     $('tli-onboard-next').addEventListener('click', next);
     $('tli-onboard-back').addEventListener('click', () => {if (!busy && !initializing && !locked && step > 0) {step--; render();}});
@@ -489,8 +545,14 @@
     document.addEventListener('focusin', event => {
       if (open && !locked && !overlay.contains(event.target)) $('tli-onboard-step-title').focus({preventScroll:true});
     });
-    window.addEventListener('tli-session-locked', () => {
+    for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event, () => {
       locked = true; epoch++; clearTimeout(timer); overlay.inert = true;
+      sessionEpoch++;nameReady=false;restoreNameDraft=false;
+      if(initialization){initialization=null;initializing=false;needsInitialization=true;}
+      if(nameSaving){nameUnconfirmed=true;nameSaving=false;}
+      if(nextOperation?.guarded){nextOperation=null;busy=false;}
+      name='';savedName='';const nameInput=$('onboard-node-name');if(nameInput)nameInput.value='';$('onboard-summary')?.replaceChildren();
+      status(setupUnconfirmed ? 'The setup save is not confirmed; it may have completed. After unlocking, check the saved setup before continuing.' : '');
       pauseMusic();
       overlay.querySelectorAll('input[type="password"]').forEach(input => {input.value = '';}); controls();
     });
@@ -499,11 +561,15 @@
       if (open) document.body.style.overflow = 'hidden';
       if (open && !busy && !initializing) { if (step === 3 || step === 4) refreshAI(); $('tli-onboard-step-title').focus({preventScroll:true}); }
     });
+    window.addEventListener('tli-private-observation-ready',()=>{
+      if(locked)return;nameReady=true;controls();
+      if(needsInitialization)initialize(false);
+    });
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) pauseMusic();
       clearTimeout(timer); if (!document.hidden && open && !locked && !busy && (step === 3 || step === 4)) refreshAI();
     });
-    window.addEventListener('pagehide', () => {pauseMusic(); clearTimeout(timer); epoch++;});
+    window.addEventListener('pagehide', () => {pauseMusic(); clearTimeout(timer); epoch++;sessionEpoch++;initialization=null;initializing=false;});
     window.addEventListener('pageshow', event => {if (event.persisted && open && !locked && (step === 3 || step === 4)) refreshAI();});
     window.addEventListener('tli:theme-change', syncThemes);
     window.TLIOnboarding = {open: () => launch(false), replay: () => launch(true)};

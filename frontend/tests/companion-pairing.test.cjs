@@ -61,9 +61,46 @@ test('Phone Companion reuses its mount and opening any step only reads authentic
   assert.equal(descendants(f.root).filter(node => node.id === 'native-companion-generate').length, 1);
   assert.equal(f.nodes['native-companion-generate'].disabled, false);
   assert.equal(f.calls.filter(call => call.url.endsWith('/setup')).length, 1);
-  assert.equal(f.calls.filter(call => call.url.endsWith('/startup')).length, 1);
+  assert.equal(f.calls.filter(call => call.url.endsWith('/startup')).length, 0, 'legacy startup form must not compete with guided setup');
   assert.equal(f.calls.filter(call => call.url.endsWith('/paired-devices')).length, 1);
   assert.equal(f.mutations().length, 0);
+});
+
+test('Android guide separates public installation from private pairing and does not claim phone or AI readiness', async () => {
+  const f=fixture();await f.open();
+  assert.equal(f.nodes['native-companion-download'].href,'https://thelanintelligence.com/download/#android');
+  assert.equal(f.nodes['native-companion-install-qr'].src,'/assets/companion-install.svg');
+  assert.match(f.nodes['native-companion-install-qr'].alt,/Public Android download/);
+  assert.equal(f.nodes['native-companion-step-connection'].hidden,true);
+  assert.equal(f.nodes['native-companion-step-install'].hidden,false);
+  assert.equal(f.nodes['native-companion-step-pair'].hidden,true);
+  await f.nodes['native-companion-installed'].click();
+  assert.equal(f.nodes['native-companion-step-pair'].hidden,false);
+  assert.equal(f.mutations().length,0);
+  f.handler((url,options)=>options.method==='POST'?{data:f.pairing({qr_format:'https_fragment_v1'})}:undefined);await f.generate();
+  assert.match(text(f.nodes['native-companion-pairing']),/Scan inside the TLI Android app/);
+  await f.nodes['native-companion-scan-done'].click();
+  assert.equal(f.nodes['native-companion-step-chat'].hidden,false);
+  assert.match(f.nodes['native-companion-chat-status'].textContent,/does not mean the phone is online/);
+  assert.match(text(f.nodes['native-companion-step-chat']),/Once the app confirms your connection/);
+  assert.equal(f.mutations().length,1);
+});
+
+test('a reviewed stable Android hostname avoids arbitrary adapter selection and preserves an explicit fallback', async () => {
+  const f=fixture({browserOrigin:'https://localhost:8000'}),stable='https://studio.local:8000',ip='https://192.168.50.12:8000';
+  f.handler(url=>url.endsWith('/setup')?{data:{...setup,origins:['https://172.30.0.1:8000',ip,stable]}}:undefined);await f.open();
+  assert.equal(f.nodes['native-companion-origin'].value,stable);
+  assert.equal(f.mutations().length,0);
+  f.nodes['native-companion-origin'].value=ip;await f.nodes['native-companion-origin'].fire('change');await f.refresh();
+  assert.equal(f.nodes['native-companion-origin'].value,ip);
+  assert.equal(f.mutations().length,0);
+});
+
+test('preparation is required before installation and pairing are shown', async () => {
+  const f=fixture({browserOrigin:'http://localhost:8000'});await f.open();
+  assert.equal(f.nodes['native-companion-step-install'].hidden,true);
+  assert.equal(f.nodes['native-companion-step-pair'].hidden,true);
+  assert.equal(f.nodes['native-companion-step-connection'].hidden,false);
 });
 
 test('Host Start setup is a deliberate owner read, with local installation guidance and no readiness claim', async () => {
@@ -110,7 +147,7 @@ test('optional remote guide shows the exact selected host route and performs onl
   assert.match(text(f.nodes['native-companion-remote-plan']),/192\.168\.50\.12\/32.*TCP port 8443/);
   assert.match(text(f.nodes['native-companion-remote']),/not configured any route, firewall or VPN/);
   assert.equal(f.mutations().length,0);
-  assert.deepEqual(f.calls.map(c=>c.url).sort(),['/api/companion/v1/paired-devices','/api/companion/v1/setup','/api/companion/v1/startup']);
+  assert.deepEqual(f.calls.map(c=>c.url).sort(),['/api/companion/v1/paired-devices','/api/companion/v1/setup']);
 });
 
 test('remote address plan follows deliberate LAN selection and never treats link-local as remotely routable', async () => {

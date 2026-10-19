@@ -26,25 +26,26 @@ function element(id = '') {
 
 function fixture(source = settingsSource, saved = {}) {
   const nodes = {}, docEvents = {}, observers = [], calls = [], toasts = [], theme = [], prompts = [], confirmations = [];
-  const storage = new Map([['tli_settings', JSON.stringify(saved)]]);
-  let fetchHandler = async url => url === '/system/pin/status' ? { enabled: false } : url === '/api/ai/models/presets' ? { presets: [] } : { ok: true };
+  const storage = new Map([['tli_settings', JSON.stringify(saved)]]), session = new Map(), events = [], listeners = {};
+  let fetchHandler = async url => url === '/system/pin/status' ? { enabled: false } : url === '/api/ai/models/presets' ? { presets: [] } : url === '/system/profile' ? {current:'test',profiles:{test:{label:'Test'}}} : url === '/status' ? {device_id:'test-host',device_nickname:'Test host',node_role:'standalone'} : { ok: true };
   let writeFailure = false, accept = true;
   const node = id => nodes[id] ||= element(id);
-  const ctx = vm.createContext({ console: { log() {} }, setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {}, Blob,
+  const ctx = vm.createContext({ console: { log() {} }, setTimeout() {}, clearTimeout() {}, setInterval() {}, clearInterval() {}, Blob, AbortSignal, AbortController,
     document: { readyState: 'loading', documentElement: element(), getElementById: id => nodes[id] || null, createElement: () => element(), body: element(),
       querySelectorAll: () => [], addEventListener: (name, fn) => (docEvents[name] ||= []).push(fn) },
     MutationObserver: class { constructor(callback) { this.callback = callback; observers.push(this); } observe(target, options) { this.target = target; this.options = options; } disconnect() {} },
-    window: {}, navigator: { clipboard: { writeText: async () => {} } },
+    CustomEvent: class { constructor(type) { this.type = type; } },
+    window: { addEventListener: (name, fn) => (listeners[name] ||= []).push(fn), dispatchEvent(event) { events.push(event.type); for (const fn of listeners[event.type] || []) fn(event); } }, navigator: { clipboard: { writeText: async () => {} } },
     URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
     FileReader: class { readAsText(file) { this.result = file.text; this.onload(); } },
     localStorage: { getItem: key => storage.get(key) || null, setItem(key, value) { if (writeFailure) throw new Error('Storage unavailable'); storage.set(key, value); }, removeItem: key => storage.delete(key) },
-    sessionStorage: { setItem() {}, removeItem() {} },
+    sessionStorage: { getItem: key => session.get(key), setItem: (key, value) => session.set(key, value), removeItem: key => session.delete(key) },
     $: id => nodes[id] || null, DEFAULT_THEME: 'midnight', previousPromptsKey: 'tli_previous_prompts',
     applyTheme: value => theme.push(value), showToast: (...args) => toasts.push(args), debugLog() {}, loadPreviousPrompts: () => prompts.push(true),
     confirm: message => { confirmations.push(message); return accept; },
-    fetch: async (url, options = {}) => { calls.push({ url, options }); const response = await fetchHandler(url, options); return { ok: (response.status || 200) < 300, status: response.status || 200, json: async () => response.data ?? response }; },
+    fetch: async (url, options = {}) => { calls.push({ url, options }); const response = await fetchHandler(url, options); return { ok: (response.status || 200) < 300, status: response.status || 200, json: async () => { if (response.invalidJSON) throw new Error('Invalid JSON'); return Object.hasOwn(response, 'data') ? response.data : response; } }; },
   });
-  return { ctx, node, nodes, calls, storage, toasts, theme, confirmations, observers,
+  return { ctx, node, nodes, calls, storage, session, events, toasts, theme, confirmations, observers,
     handler(fn) { fetchHandler = fn; }, failWrites(value = true) { writeFailure = value; }, accept(value) { accept = value; },
     async start() { vm.runInContext(source, ctx); if (source === settingsSource) ctx.setupSettingsPanel(); for (const fn of docEvents.DOMContentLoaded || []) fn(); await tick(); },
     settings: () => JSON.parse(storage.get('tli_settings')),
@@ -179,7 +180,10 @@ test('host model and performance saves require confirmed results, and duplicate 
   for (const [button, select, url] of [['settings-model-save', 'settings-model-id', '/models/set-default'], ['settings-system-profile-save', 'settings-system-profile', '/system/profile']]) {
     const f = fixture(); f.node(button); f.node(select).value = 'test'; await f.start();
     f.handler(async () => ({ ok: false })); await f.node(button).click();
-    assert.equal(f.toasts.at(-1)[1], 'error'); assert.equal(f.node(button).disabled, false);
+    assert.equal(f.toasts.at(-1)[1], 'error'); assert.equal(f.node(button).disabled, true, 'An unconfirmed save requires a fresh read');
+    f.handler(async () => button === 'settings-model-save' ? {models:[{id:'test',label:'Test'}]} : {current:'test',profiles:{test:{label:'Test'}}});
+    if (button === 'settings-model-save') await f.ctx.fetchModelSettings(); else await f.ctx.fetchSystemProfileSettings();
+    f.node(select).value = 'test'; assert.equal(f.node(button).disabled, false);
     let finish; f.handler(() => new Promise(resolve => { finish = resolve; }));
     const pending = f.node(button).click(); await f.node(button).fire('click');
     assert.equal(f.calls.filter(call => call.url === url && call.options.method === 'POST').length, 2);
@@ -204,6 +208,8 @@ test('computer identity save rejects an unconfirmed handler result', async () =>
   const f = fixture(); f.node('settings-node-identity-save'); f.node('settings-node-name').value = 'Test host'; f.node('settings-node-role').value = 'standalone';
   await f.start(); f.node('settings-node-name').value = 'Test host'; f.handler(async () => ({ ok: false }));
   await f.node('settings-node-identity-save').click(); assert.equal(f.toasts.at(-1)[1], 'error'); assert.equal(f.node('settings-node-identity-save').disabled, false);
+  assert.equal(f.calls.filter(call=>call.url==='/mesh/node/identity'&&call.options.method==='POST').length,1);
+  assert.equal(f.node('settings-node-identity-save').textContent,'Check saved name & role');
 });
 
 test('accordion controls expose current state and avoid duplicate activation', async () => {
@@ -279,4 +285,105 @@ test('settings version displays use the same confirmed host value and missing up
   assert.equal(f.node('settings-tli-version').textContent, 'v1.3.5-beta'); assert.equal(f.node('version-pill-settings').textContent, 'v1.3.5-beta');
   assert.match(f.node('settings-update-save-status').textContent, /does not report.*matching TLI app and host files.*if host files were updated, restart TLI normally/);
   assert.equal(f.node('settings-update-url-save').disabled, true);
+});
+
+function pinControls(f) {
+  for (const id of ['settings-pin-status-desc', 'settings-pin-action-label', 'settings-pin-current', 'settings-pin-new', 'settings-pin-confirm', 'settings-pin-save', 'settings-pin-remove', 'settings-pin-callout', 'tli-lock-btn']) f.node(id);
+}
+function enterPinChange(f, current = '') {
+  f.node('settings-pin-current').value = current;
+  f.node('settings-pin-new').value = 'new-private-pin';
+  f.node('settings-pin-confirm').value = 'new-private-pin';
+}
+function assertNoRetainedPin(f) {
+  for (const id of ['settings-pin-current', 'settings-pin-new', 'settings-pin-confirm']) assert.equal(f.node(id).value, '');
+  assert.doesNotMatch(JSON.stringify([...f.storage, ...f.session, ...f.toasts]), /new-private-pin|old-private-pin/);
+}
+
+test('initial PIN and changed PIN lock immediately on confirmed save before the status refresh finishes', async () => {
+  for (const current of ['', 'old-private-pin']) {
+    const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, current);
+    f.session.set('tli_session_unlocked', '1');
+    const recovery = [];
+    f.ctx.window.TLIPinLock = { showRecovery(message) { recovery.push(message); f.ctx.window.dispatchEvent(new f.ctx.CustomEvent('tli-session-locked')); }, checkAndLock() { assert.fail('Saving must not perform an implicit unlock check'); }, verifyForSetup() { assert.fail('Saving must not verify automatically'); } };
+    let finishStatus;
+    f.handler(url => url === '/system/pin/set' ? { ok: true, locked: true }
+      : new Promise(resolve => { finishStatus = resolve; }));
+    const saving = f.node('settings-pin-save').click(); await tick();
+    assert.deepEqual(f.events, ['tli-session-locked']); assert.equal(f.session.has('tli_session_unlocked'), false);
+    assert.match(recovery[0], /Enter your new PIN/); assertNoRetainedPin(f);
+    const writes = f.calls.filter(call => call.options.method === 'POST');
+    assert.deepEqual(writes.map(call => call.url), ['/system/pin/set']);
+    assert.deepEqual(JSON.parse(writes[0].options.body), current ? { pin: 'new-private-pin', current_pin: current } : { pin: 'new-private-pin' });
+    finishStatus({ enabled: true }); await saving;
+    assert.deepEqual(f.events, ['tli-session-locked']); assert.equal(f.session.has('tli_session_unlocked'), false);
+    assert.equal(f.toasts.at(-1)[1], 'success');
+  }
+});
+
+test('confirmed PIN save still broadcasts lock if the lock controller is unavailable', async () => {
+  const f = fixture(); pinControls(f); await f.start(); enterPinChange(f); f.session.set('tli_session_unlocked', '1');
+  f.handler(async url => url === '/system/pin/set' ? { ok: true, locked: true } : { enabled: true });
+  await f.node('settings-pin-save').click();
+  assert.deepEqual(f.events, ['tli-session-locked']); assert.equal(f.session.has('tli_session_unlocked'), false);
+  assertNoRetainedPin(f);
+});
+
+test('unconfirmed PIN changes clear secrets, stay locked and never announce success or repeat the write', async () => {
+  for (const response of [{ ok: true }, { ok: true, locked: false }, { ok: false, locked: true }, { data: null }, { invalidJSON: true }, { status: 503, data: { detail: 'Unavailable' } }, 'network-failure']) {
+    const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, 'old-private-pin'); f.session.set('tli_session_unlocked', '1');
+    f.handler(async () => { if (response === 'network-failure') throw new Error('Do not display request body new-private-pin'); return response; });
+    await f.node('settings-pin-save').click(); await tick();
+    assert.equal(f.toasts.at(-1)[1], 'error'); assert.match(f.toasts.at(-1)[0], /could not confirm whether the PIN was saved/);
+    assert.equal(f.toasts.some(toast => toast[1] === 'success'), false);
+    assert.deepEqual(f.events, ['tli-session-locked']); assert.equal(f.session.has('tli_session_unlocked'), false);
+    assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1);
+    assert.equal(f.calls.filter(call => call.url === '/system/pin/status').length, 1, 'No automatic access recheck after an uncertain write');
+    assertNoRetainedPin(f);
+  }
+});
+
+test('rejected PIN changes retain actionable server errors without storing the submitted PIN or retrying', async () => {
+  for (const [status, detail] of [[403, 'Incorrect current PIN.'], [429, 'Too many PIN attempts. Try again in 42 seconds.']]) {
+    const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, 'old-private-pin');
+    f.handler(async () => ({ status, data: { detail } })); await f.node('settings-pin-save').click(); await tick();
+    assert.equal(f.toasts.at(-1)[0], 'PIN was not saved: ' + detail); assert.equal(f.toasts.at(-1)[1], 'error');
+    assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1); assertNoRetainedPin(f);
+  }
+});
+
+test('PIN saving and removal share a pending-write barrier including synthetic duplicate clicks', async () => {
+  for (const button of ['settings-pin-save', 'settings-pin-remove']) {
+    const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, 'old-private-pin');
+    let finish;
+    f.handler(() => new Promise(resolve => { finish = resolve; }));
+    const pending = f.node(button).click();
+    assertNoRetainedPin(f); assert.equal(f.node('settings-pin-save').disabled, true); assert.equal(f.node('settings-pin-remove').disabled, true);
+    await f.node('settings-pin-save').fire('click'); await f.node('settings-pin-remove').fire('click');
+    assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1);
+    finish({ status: 429, data: { detail: 'Too many PIN attempts. Try again in 42 seconds.' } }); await pending;
+    assert.equal(f.node('settings-pin-save').disabled, false); assert.equal(f.node('settings-pin-remove').disabled, false);
+  }
+});
+
+test('PIN removal requires confirmed success and describes the local protected-controls boundary', async () => {
+  const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, 'old-private-pin'); f.session.set('tli_session_unlocked', '1');
+  f.handler(async url => url === '/system/pin/remove' ? { ok: true } : { enabled: false });
+  await f.node('settings-pin-remove').click();
+  assert.equal(f.toasts.at(-1)[1], 'success'); assert.match(f.toasts.at(-1)[0], /Protected private controls are limited to this TLI computer/);
+  assert.match(f.node('settings-pin-status-desc').textContent, /Protected private controls/);
+  assert.doesNotMatch(f.toasts.at(-1)[0], /open on your LAN/); assert.equal(f.session.has('tli_session_unlocked'), false);
+  assert.deepEqual(f.events, ['tli-session-locked'], 'Removal revokes the prior session and clears its private views');
+  assertNoRetainedPin(f); assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1);
+});
+
+test('uncertain PIN removal never promises that protection is disabled or retries the mutation', async () => {
+  for (const response of [{ data: {} }, { data: { ok: false } }, { invalidJSON: true }, 'network-failure']) {
+    const f = fixture(); pinControls(f); await f.start(); enterPinChange(f, 'old-private-pin'); f.session.set('tli_session_unlocked', '1');
+    f.handler(async () => { if (response === 'network-failure') throw new Error('offline'); return response; });
+    await f.node('settings-pin-remove').click(); await tick();
+    assert.equal(f.toasts.at(-1)[1], 'error'); assert.match(f.toasts.at(-1)[0], /could not confirm whether the PIN was removed/);
+    assert.deepEqual(f.events, ['tli-session-locked']); assert.equal(f.session.has('tli_session_unlocked'), false);
+    assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1); assertNoRetainedPin(f);
+  }
 });

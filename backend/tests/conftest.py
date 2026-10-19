@@ -49,11 +49,22 @@ import requests
 import urllib.request
 import httpx
 
+# Retain the real method for the guarded, owned-loopback TLS fixture. Merely
+# requesting this fixture does not remove any global network blocker.
+_stdlib_opener_open = urllib.request.OpenerDirector.open
+
+
+@pytest.fixture
+def stdlib_opener_open():
+    return _stdlib_opener_open
+
+
 def _no_network(*args, **kwargs):
     raise requests.ConnectionError("Live network disabled in isolated tests")
 
 _isolation.setattr(requests.sessions.Session, "request", _no_network)
 _isolation.setattr(urllib.request, "urlopen", _no_network)
+_isolation.setattr(urllib.request.OpenerDirector, "open", _no_network)
 _isolation.setattr(ai_manager, "urlopen", _no_network)
 _isolation.setattr(httpx.HTTPTransport, "handle_request", _no_network)
 async def _no_async_network(*args, **kwargs):
@@ -132,3 +143,32 @@ def authed_client(app, client):
         yield client
     finally:
         app.dependency_overrides.pop(require_session, None)
+
+
+@pytest.fixture
+def local_browser_client(app):
+    """Real direct loopback browser transport; each test controls PIN state."""
+    value = TestClient(app, base_url="http://127.0.0.1",
+                       client=("127.0.0.1", 50000),
+                       headers={"Origin": "http://127.0.0.1"},
+                       raise_server_exceptions=False)
+    try:
+        yield value
+    finally:
+        value.close()
+
+
+@pytest.fixture
+def browser_client(app, tmp_path, monkeypatch):
+    """Real PIN browser authority, without dependency overrides or app startup."""
+    monkeypatch.setattr(S, "PIN_CONFIG_FILE", tmp_path / "tli_pin.json")
+    monkeypatch.setattr(S, "_active_sessions", {})
+    S.save_pin_config("a" * 64, "b" * 64)
+    token = S.create_session_token("test-user")
+    value = TestClient(app, base_url="https://testserver",
+                       headers={"Origin": "https://testserver"},
+                       cookies={"tli_session": token}, raise_server_exceptions=False)
+    try:
+        yield value
+    finally:
+        value.close()

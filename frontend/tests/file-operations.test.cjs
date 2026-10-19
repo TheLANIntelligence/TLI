@@ -20,7 +20,7 @@ const receipt = (rows=[pair('one.txt','Target\\one.txt','moved')], kind='organiz
     undo_available:kind!=='undo'&&count>0, ...extra};
 };
 
-function fixture(handler=async()=>preview(), capabilityHandler=async()=>({ok:true,protocol:'reviewed-file-operations-v1'})) {
+function fixture(handler=async()=>preview(), capabilityHandler=async()=>({ok:true,protocol:'reviewed-file-operations-v1'}), {intercepted=false,pinOff=false}={}) {
   const nodes={}, all=[], calls=[], capabilityCalls=[], events={}, toasts=[];
   function element(tag='div') {
     const e = {tag, children:[], style:{}, handlers:{}, attributes:{}, textContent:'', value:'', disabled:false,
@@ -30,31 +30,34 @@ function fixture(handler=async()=>preview(), capabilityHandler=async()=>({ok:tru
       appendChild(child){this.append(child);return child;},
       replaceChildren(...children){for(const child of this.children){if(child.id)delete nodes[child.id];}this.children=[];this.append(...children);},
       set innerHTML(value){this._html=value;this.children=[];},get innerHTML(){return this._html||'';},
-      setAttribute(name,value){this.attributes[name]=value;}, getAttribute(name){return this.attributes[name];},
+      setAttribute(name,value){this.attributes[name]=value;}, getAttribute(name){return this.attributes[name];}, removeAttribute(name){delete this.attributes[name];},
       addEventListener(name,fn){(this.handlers[name] ||= []).push(fn);},
       querySelector(selector){if(selector==='input'&&this._html?.includes('<input'))return this.input ||= element('input');return null;},
       async fire(name){for(const fn of this.handlers[name]||[])await fn({target:this});},
       async click(){if(!this.disabled)await this.fire('click');}, scrollIntoView(){}
     };all.push(e);return e;
   }
-  const ids=['filesRootInput','filesRenamePrefix','filesStatus','filesBucketsContainer','filesExtTableBody',
+  const ids=['filesRootInput','filesRenamePrefix','filesStatus','filesBucketsContainer','filesExtTableBody','filesRulesTextarea','filesRulesSummary','filesInsightBox','filesCustomRulesButton','filesInsightButton',
     'filesScanButton','filesPreviewButton','filesRunButton','filesUndoButton','filesBatchRenameButton'];
   for(const id of ids){const e=element(id.endsWith('Input')||id==='filesRenamePrefix'?'input':'div');e.id=id;}
   const card=element();card.appendChild(nodes.filesStatus);
   nodes.filesRootInput.value=root;nodes.filesRenamePrefix.value='new';
   const document={getElementById:id=>nodes[id]||null,createElement:element,querySelectorAll:()=>[]};
-  const window={localStorage:{getItem(){return null;},setItem(){}},addEventListener:(event,fn)=>(events[event] ||= []).push(fn)};
-  const ctx=vm.createContext({window,document,console,Date,debugLog(){},showToast:msg=>toasts.push(msg),
+  const dispatch=(name,detail)=>{for(const fn of events[name]||[])fn(new CustomEvent(name,{detail}));};
+  const window={localStorage:{getItem(){return null;},setItem(){}},addEventListener:(event,fn)=>(events[event] ||= []).push(fn),dispatchEvent:event=>dispatch(event.type,event.detail)};
+  const ctx=vm.createContext({window,document,console,Date,CustomEvent,debugLog(){},showToast:msg=>toasts.push(msg),
     $:id=>nodes[id]||null,escapeHtml:value=>String(value).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('"','&quot;'),
     fetch:async(url,options)=>{
       if(url==='/file/operations/capabilities') {
         capabilityCalls.push({url,options});const result=await capabilityHandler();
-        return {ok:!result.httpError,status:result.httpError||200,json:async()=>result};
+        return {ok:!result.httpError,status:result.httpError||200,json:async()=>result,clone(){return this;}};
       }
       const body=options.body?JSON.parse(options.body):null;calls.push({url,body});
       const result=await handler(url,body);
-      return {ok:!result.httpError,status:result.httpError||200,json:async()=>result,text:async()=>JSON.stringify(result)};
+      return {ok:!result.httpError,status:result.httpError||200,json:async()=>result,text:async()=>JSON.stringify(result),clone(){return this;}};
     }});
+  if(pinOff) window.TLIPinLock={checkAndLock:()=>Promise.resolve().then(()=>dispatch('tli-session-unlocked'))};
+  if(intercepted) {window.fetch=ctx.fetch;vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/fetch-interceptor.js'),'utf8'),ctx);ctx.fetch=window.fetch;}
   vm.runInContext(source,ctx,{timeout:1000});ctx.setupFilesPanel();
   const seed=(buckets={Documents:['one.txt']},destinations={Documents:'Target'})=>{
     // Existing operation tests represent a user-selected plan, not scan defaults.
@@ -62,7 +65,7 @@ function fixture(handler=async()=>preview(), capabilityHandler=async()=>({ok:tru
     ctx.filesRenderBuckets();
   };
   seed();
-  return {ctx,nodes,calls,capabilityCalls,all,toasts,seed,dispatch:async name=>{for(const fn of events[name]||[])await fn();}};
+  return {ctx,nodes,calls,capabilityCalls,all,toasts,seed,dispatch,handler:fn=>handler=fn,capabilityHandler:fn=>capabilityHandler=fn};
 }
 const text = node => node ? [node.textContent,...node.children.map(text)].join(' ') : '';
 const reviewText = f => text(f.nodes['files-operation-review']);
@@ -171,7 +174,7 @@ test('late scan response cannot associate old filenames with a different folder'
 });
 
 test('a failed replacement scan keeps both previous tables and the original scan identity', async () => {
-  const f=fixture(async url=>url==='/files/scan'?{extension_summary:[{extension:'.new',count:4}]}:{httpError:403});
+  const f=fixture(async url=>url==='/files/scan'?{extension_summary:[{extension:'.new',count:4}]}:{httpError:503});
   f.ctx.filesRenderBuckets();
   f.ctx.filesRenderExtensionTable([{extension:'.old',count:1,example:'one.txt'}]);
   const oldBuckets=f.nodes.filesBucketsContainer.children.slice();
@@ -315,4 +318,87 @@ test('duplicate scan clicks coalesce and presets prepare without any scan reques
   const scan=f.ctx.filesScanFolder();await f.ctx.filesScanFolder();assert.equal(f.calls.length,1);
   finish({httpError:503});await scan;
   f.ctx._tliPathPreset=()=>root;f.ctx.filesSetPreset('downloads');assert.equal(f.calls.length,1);
+});
+
+for(const status of [401,403]) test('capability '+status+' clears private context and offers access recovery without an operation POST',async()=>{
+  const f=fixture();await f.ctx.filesRunOrganize();f.nodes.filesRulesSummary.textContent='Private advice';
+  f.capabilityHandler(async()=>({httpError:status,detail:'Unlock this browser before reviewing files.'}));
+  await f.ctx.filesConfirmOperation();
+  assert.equal(f.calls.length,1);assert.equal(reviewText(f),'');assert.equal(f.nodes.filesRootInput.value,'');assert.equal(f.nodes.filesRenamePrefix.value,'');
+  assert.equal(f.nodes.filesRulesSummary.textContent,'');assert.equal(f.nodes.filesUndoButton.disabled,true);
+  assert.match(f.nodes.filesStatus.textContent,/Unlock this browser.*No file-change request was sent/);
+  assert.doesNotMatch(f.nodes.filesStatus.textContent,/restart TLI/);
+});
+
+for(const kind of ['organize','rename','undo']) for(const status of [401,403]) test(kind+' execution '+status+' hides private receipts and reports an unconfirmed outcome without replay',async()=>{
+  const f=fixture(async(url,body)=>body.confirm?{httpError:status,detail:'Session changed. Unlock to review.'}:preview());
+  await f.ctx.filesPreviewOperation(kind,kind==='organize'?f.ctx.filesBuildOrganizePayload():kind==='rename'?{path:root,prefix:'new'}:{operation_id:null});
+  await f.ctx.filesConfirmOperation();
+  assert.equal(reviewText(f),'');assert.equal(f.ctx.filesBuildOrganizePayload(),null);assert.equal(f.nodes.filesRootInput.value,'');
+  assert.match(f.nodes.filesStatus.textContent,/Outcome not confirmed.*No retry was sent/);
+  assert.doesNotMatch(f.nodes.filesStatus.textContent,/No file-change request was sent/);
+  f.dispatch('tli-session-unlocked',{source:'pin-verification'});assert.equal(f.nodes.filesUndoButton.disabled,true);
+  f.dispatch('tli-private-observation-ready');await f.ctx.filesConfirmOperation();
+  assert.equal(f.calls.length,2);assert.equal(f.calls.filter(call=>call.body.confirm).length,1);assert.equal(f.nodes.filesUndoButton.disabled,false);
+});
+
+for(const status of [401,403]) test('preview '+status+' clears prior private results and never enables confirmation',async()=>{
+  const f=fixture(async()=>({httpError:status,detail:'Browser access expired.'}));await f.ctx.filesBatchRename();
+  assert.equal(f.calls.length,1);assert.equal(f.calls[0].body.confirm,false);assert.equal(reviewText(f),'');
+  assert.equal(f.nodes.filesRootInput.value,'');assert.equal(f.nodes.filesBatchRenameButton.disabled,true);
+  assert.match(f.nodes.filesStatus.textContent,/Browser access expired.*No file-change request was sent/);
+});
+
+test('bare unlock remains paused; explicit access check and verified readiness never replay a scan or operation',async()=>{
+  const f=fixture();await f.ctx.filesRunOrganize();f.dispatch('tli-session-locked');f.dispatch('tli-session-unlocked');
+  let checks=0;f.ctx.window.EventInterpreter={retry:async()=>{checks++;}};const calls=f.calls.length;
+  assert.equal(f.nodes.filesScanButton.textContent,'Check file access');assert.equal(f.nodes.filesUndoButton.disabled,true);
+  await f.ctx.filesUndoLast();await f.ctx.filesBatchRename();await f.ctx.filesConfirmOperation();await f.nodes.filesScanButton.click();
+  assert.equal(checks,1);assert.equal(f.calls.length,calls);assert.equal(f.capabilityCalls.length,1);
+  f.dispatch('tli-session-unlocked',{source:'pin-verification'});assert.equal(f.nodes.filesUndoButton.disabled,true);
+  f.dispatch('tli-private-observation-ready');assert.equal(f.calls.length,calls);assert.equal(f.nodes.filesScanButton.textContent,'Scan folder');
+  assert.equal(f.nodes.filesRootInput.value,'');assert.equal(f.ctx.filesBuildOrganizePayload(),null);
+});
+
+for(const result of ['success','401','403']) test('old execution '+result+' cannot repaint or relock a newer verified review',async()=>{
+  let resolve;const f=fixture(async(url,body)=>body.confirm?new Promise(done=>{resolve=done;}):preview());
+  await f.ctx.filesRunOrganize();const pending=f.ctx.filesConfirmOperation();await new Promise(setImmediate);
+  f.dispatch('tli-session-locked');assert.match(f.nodes.filesStatus.textContent,/outcome is not confirmed.*No retry was sent/);
+  f.dispatch('tli-session-unlocked',{source:'pin-verification'});f.dispatch('tli-private-observation-ready');
+  f.nodes.filesRootInput.value=root;f.nodes.filesRenamePrefix.value='current';f.handler(async()=>preview([pair('current.txt')]));await f.ctx.filesBatchRename();
+  const current=reviewText(f);resolve(result==='success'?receipt():{httpError:Number(result),detail:'OLD PRIVATE DENIAL'});await pending;
+  assert.equal(reviewText(f),current);assert.match(current,/current.txt/);assert.equal(f.nodes.filesBatchRenameButton.disabled,false);
+  assert.equal(f.calls.filter(call=>call.body.confirm).length,1);
+});
+
+test('a detached old confirmation cannot execute the new session review',async()=>{
+  const f=fixture();await f.ctx.filesRunOrganize();const old=f.nodes['files-operation-confirm'];
+  f.dispatch('tli-session-locked');f.dispatch('tli-session-unlocked',{source:'pin-verification'});f.dispatch('tli-private-observation-ready');
+  f.nodes.filesRootInput.value=root;f.nodes.filesRenamePrefix.value='new-session';await f.ctx.filesBatchRename();
+  old.disabled=false;await old.click();assert.equal(f.calls.length,2);assert.ok(f.calls.every(call=>call.body.confirm===false));
+});
+
+for(const status of [401,403]) for(const endpoint of ['/files/scan','/file/scan']) test(endpoint+' '+status+' clears private prior inventory and stops subsequent scan requests',async()=>{
+  const f=fixture(async url=>url===endpoint?{httpError:status,detail:'Unlock before reading this folder.'}:{extension_summary:[]});
+  f.ctx.filesRenderExtensionTable([{extension:'.private',example:'private.txt'}]);await f.ctx.filesScanFolder();
+  assert.equal(f.nodes.filesExtTableBody.children.length,0);assert.equal(f.ctx.filesBuildOrganizePayload(),null);assert.equal(f.nodes.filesRootInput.value,'');
+  assert.equal(f.calls.length,endpoint==='/files/scan'?1:2);assert.match(f.nodes.filesStatus.textContent,/Unlock before reading/);
+});
+
+test('a new verified session invalidates an unlocked in-flight preview; repeated ready signals preserve the new review',async()=>{
+  let resolve;const f=fixture(async()=>new Promise(done=>{resolve=done;}));const pending=f.ctx.filesBatchRename();await new Promise(setImmediate);
+  f.dispatch('tli-session-unlocked',{source:'pin-verification'});f.dispatch('tli-private-observation-ready');
+  resolve(preview());await pending;assert.equal(reviewText(f),'');assert.equal(f.nodes.filesRootInput.value,'');
+  f.handler(async()=>preview());f.nodes.filesRootInput.value=root;f.nodes.filesRenamePrefix.value='fresh';await f.ctx.filesBatchRename();
+  const current=reviewText(f);f.dispatch('tli-session-unlocked',{source:'pin-verification'});f.dispatch('tli-private-observation-ready');
+  assert.equal(reviewText(f),current);assert.equal(f.calls.length,2);
+});
+
+test('global 401 interception preserves PIN-off recovery detail and unknown outcome without a retry loop',async()=>{
+  const f=fixture(async(url,body)=>body.confirm?{httpError:401,detail:'Clear this site’s cookies and reconnect on localhost.'}:preview(),undefined,{intercepted:true,pinOff:true});
+  await f.ctx.filesRunOrganize();await f.ctx.filesConfirmOperation();await new Promise(setImmediate);
+  assert.equal(reviewText(f),'');assert.match(f.nodes.filesStatus.textContent,/cookies.*Outcome not confirmed.*No retry was sent/);
+  assert.equal(f.nodes.filesUndoButton.disabled,true);assert.equal(f.nodes.filesScanButton.textContent,'Check file access');
+  await f.ctx.filesUndoLast();await f.ctx.filesConfirmOperation();await new Promise(setImmediate);
+  assert.equal(f.calls.length,2);assert.equal(f.capabilityCalls.length,2);
 });

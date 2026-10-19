@@ -448,6 +448,111 @@ class BundledAIManager:
             cls._instance = cls(cfg)
             return cls._instance
 
+    @classmethod
+    def observe_existing(cls, *, check=None) -> Dict[str, Any]:
+        """Observe an existing manager without resolving files or starting it.
+
+        This is deliberately separate from get()/status(): no directory creation,
+        settings fallback, lifecycle action, or full model-directory inventory.
+        A busy or unobserved runtime is unknown, not a confirmed offline model.
+        """
+        import ipaddress
+        import stat
+        from model_probe import probe_json, ModelProbeError
+
+        authority_error = None
+
+        def access():
+            nonlocal authority_error
+            if authority_error is not None:
+                raise authority_error
+            if check is not None:
+                try:
+                    check()
+                except Exception as error:
+                    authority_error = error
+                    raise
+
+        def unknown(status="unavailable"):
+            access()
+            return {"status": status, "model_exists": None, "healthy": None,
+                    "active_preset": None, "active_model": None}
+
+        access()
+        if not cls._lock.acquire(blocking=False):
+            return unknown("busy")
+        try:
+            manager = cls._instance
+        finally:
+            cls._lock.release()
+        access()
+        if manager is None:
+            return unknown()
+        try:
+            access()
+            if not manager.operation_lock.acquire(blocking=False):
+                return unknown("busy")
+            try:
+                transition = manager._transition
+                cfg = manager.cfg
+                identity = (manager._active_preset, cfg.model_path, cfg.host, cfg.port, cfg.health_path)
+            finally:
+                manager.operation_lock.release()
+            # Captured access can read PIN state or call a request cancellation
+            # hook. Like native/HTTP observations, it belongs outside these
+            # snapshot-only locks so polling cannot block normal generation.
+            access()
+            if transition:
+                return unknown("busy")
+            preset_id, model_path, host, port, health_path = identity
+            # The bundled runtime is local. Do not reinterpret malformed runtime
+            # fields as a fresh destination or use environment proxy credentials.
+            if (not isinstance(host, str) or
+                    (host != "localhost" and not ipaddress.ip_address(host).is_loopback) or
+                    type(port) is not int or not 1 <= port <= 65535 or
+                    not isinstance(health_path, str) or len(health_path) > 1024 or
+                    not health_path.startswith("/") or health_path.startswith("//") or
+                    any(c in health_path for c in "\\?#\r\n")):
+                return unknown()
+            access()
+            try:
+                model_exists = stat.S_ISREG(model_path.stat().st_mode)
+            except FileNotFoundError:
+                access()
+                model_exists = False
+            access()
+            preset = MODEL_PRESETS.get(preset_id, {})
+            result = {"status": "unavailable", "model_exists": model_exists,
+                      "healthy": None, "active_preset": preset_id,
+                      "active_model": preset.get("name", model_path.name)}
+            url_host = "[" + host + "]" if ":" in host else host
+            try:
+                response = probe_json(f"http://{url_host}:{port}{health_path}", check=access)
+                access()
+                if response["status_code"] != 200:
+                    result.update(status="observed", healthy=False)
+                elif isinstance(response["data"], dict):
+                    result.update(status="observed", healthy=True)
+            except ModelProbeError:
+                access()
+            access()
+            if not manager.operation_lock.acquire(blocking=False):
+                return unknown("busy")
+            try:
+                current = manager.cfg
+                unchanged = (cls._instance is manager and not manager._transition and identity == (
+                    manager._active_preset, current.model_path, current.host,
+                    current.port, current.health_path))
+            finally:
+                manager.operation_lock.release()
+            access()
+            if not unchanged:
+                return unknown()
+            return result
+        except Exception:
+            access()
+            return unknown()
+
     @property
     def base_url(self):
         return f"http://{self.cfg.host}:{self.cfg.port}"

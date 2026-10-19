@@ -23,7 +23,7 @@ def test_repeated_startup_shutdown_owns_one_poller_and_one_hook(app, monkeypatch
     monkeypatch.setattr(dp, "_score_disk_actions", lambda _: None)
     monkeypatch.setattr(event_bus, "_post_emit_hooks", [])
     for _ in range(2):
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000)) as client:
             assert client.get("/dashboard/state").status_code == 200
             assert dp._poller_thread.is_alive()
             original = dp._poller_thread
@@ -66,11 +66,11 @@ def test_chat_stream_contract_and_history(client, monkeypatch):
     assert completed["user_source_ref"] == chat_memory.source_ref(ident, 0, conv["messages"][0])
 
 
-def test_no_model_degrades_without_disabling_dashboard(client, monkeypatch):
+def test_no_model_degrades_without_disabling_dashboard(browser_client, monkeypatch):
     monkeypatch.setattr(ai_routes, "_find_mesh_ai_peer", lambda: None)
-    res = client.post("/api/ai/chat/stream", json={"message": "hello"})
+    res = browser_client.post("/api/ai/chat/stream", json={"message": "hello"})
     assert '"type": "error"' in res.text
-    assert client.get("/dashboard/state").status_code == 200
+    assert browser_client.get("/dashboard/state").status_code == 200
 
 
 def test_memory_encryption_and_existing_json_formats_roundtrip(tmp_path, monkeypatch):

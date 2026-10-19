@@ -53,7 +53,7 @@ def test_readiness_requires_local_origin_but_survives_locked_session(local):
     app.dependency_overrides[require_session] = locked
     response = client.get(PREFIX + "/ready")
     assert response.status_code == 200
-    assert response.json() == {"schema_version": 1, "instance_id": R._INSTANCE_ID, "installation_id": "test-install"}
+    assert response.json() == {"schema_version": 1, "instance_id": R._INSTANCE_ID, "installation_id": "test-install", "current_version": S.TLI_VERSION}
     assert response.headers["cache-control"] == "no-store"
     assert client.get(PREFIX).status_code == 401
     assert not calls

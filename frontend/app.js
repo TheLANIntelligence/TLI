@@ -170,8 +170,36 @@ const _LMSTUDIO_REPORT_CACHE = {
   payload: null,
   failCount: 0,
 };
+let _tliProviderEpoch = 0, _tliProviderLocked = false, _tliProviderReady = true, _tliBannerRead = 0;
+const _tliProviderCurrent = epoch => !_tliProviderLocked && _tliProviderReady && epoch === _tliProviderEpoch;
+function _tliClearProviderViews() {
+  _tliProviderEpoch++; _tliProviderReady = false;
+  Object.assign(_LMSTUDIO_REPORT_CACHE, {ts: 0, nextAllowed: 0, inFlight: null, payload: null, failCount: 0});
+  AIStatus.local.available = false; AIStatus.local.health = 'unknown';
+  AIStatus.local.lastCheckedMs = 0; AIStatus.local._nextCheckMs = 0;
+  const banner = $('tli-no-ai-banner');
+  if (banner) {
+    banner.classList.add('hidden');
+    for (const selector of ['.tli-no-ai-banner-title', '.tli-no-ai-banner-sub']) {
+      const node = banner.querySelector(selector); if (node) node.textContent = '';
+    }
+  }
+  const button = $('tli-no-ai-download-btn'); if (button) delete button.dataset.tliMeshMode;
+  _setPill('model-status-pill', 'model-status-text', 'degraded', 'Brain', 'Unlock TLI and check access to read AI availability.');
+}
+window.addEventListener('tli-session-locked', () => { _tliProviderLocked = true; _tliClearProviderViews(); });
+window.addEventListener('tli-session-unlocked', () => { _tliProviderLocked = false; _tliProviderEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (_tliProviderLocked || _tliProviderReady) return;
+  _tliProviderReady = true;
+  const panel = $('panel-main');
+  if (panel && !panel.classList.contains('hidden') && !document.hidden) _refreshNoAiBanner();
+});
+window.addEventListener('pagehide', _tliClearProviderViews);
 
 async function tliFetchLMStudioReport({ force = false } = {}) {
+  const epoch = _tliProviderEpoch;
+  if (!_tliProviderCurrent(epoch)) return {ok: false, access_paused: true};
   const now = Date.now();
 
   // If TLI is running in Bundled mode, don't probe LM Studio (avoids 500 spam)
@@ -196,9 +224,11 @@ async function tliFetchLMStudioReport({ force = false } = {}) {
     try { return await _LMSTUDIO_REPORT_CACHE.inFlight; } catch { /* fall through */ }
   }
 
-  _LMSTUDIO_REPORT_CACHE.inFlight = (async () => {
+  const pending = Promise.resolve().then(async () => {
     try {
-      const res = await fetch("/health/lmstudio/report", { cache: "no-store" });
+      if (!_tliProviderCurrent(epoch)) return {ok: false, access_paused: true};
+      const res = await fetch("/health/lmstudio/report", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+      if (!_tliProviderCurrent(epoch)) return {ok: false, access_paused: true};
       let rep = null;
 
       if (res.ok) {
@@ -208,7 +238,14 @@ async function tliFetchLMStudioReport({ force = false } = {}) {
         rep = await res.json().catch(() => ({ ok: false, http_status: res.status }));
       }
 
-      if (!rep || typeof rep !== "object") rep = { ok: false };
+      if (!_tliProviderCurrent(epoch)) return {ok: false, access_paused: true};
+      if (res.status === 401 || res.status === 403) {
+        window.dispatchEvent(new CustomEvent('tli-session-locked'));
+        return {ok: false, access_paused: true};
+      }
+      if (!rep || typeof rep !== "object" || Array.isArray(rep)) rep = {ok: false, unknown: true};
+      if (typeof rep.ok !== 'boolean' && typeof rep.available !== 'boolean' && typeof rep.healthy !== 'boolean' && rep.status !== 'ok') rep = {ok: false, unknown: true};
+      if (!res.ok) rep = {ok: false, unknown: true, error: typeof rep.detail === 'string' ? rep.detail : 'Report unavailable', backoff_s: rep.backoff_s};
       rep.ok = rep.ok === true;
 
       // Backoff hints: server provides backoff_s when down.
@@ -224,19 +261,20 @@ async function tliFetchLMStudioReport({ force = false } = {}) {
       _LMSTUDIO_REPORT_CACHE.failCount = rep.ok ? 0 : (_LMSTUDIO_REPORT_CACHE.failCount + 1);
       return rep;
     } catch {
+      if (!_tliProviderCurrent(epoch)) return {ok: false, access_paused: true};
       // Quiet failure (no console spam)
-      const rep = { ok: false, error: "unreachable" };
+      const rep = { ok: false, unknown: true, error: "unreachable" };
       _LMSTUDIO_REPORT_CACHE.ts = now;
       _LMSTUDIO_REPORT_CACHE.payload = rep;
       _LMSTUDIO_REPORT_CACHE.failCount += 1;
       _LMSTUDIO_REPORT_CACHE.nextAllowed = now + Math.min(60000, 2000 * Math.min(_LMSTUDIO_REPORT_CACHE.failCount, 10));
       return rep;
     } finally {
-      _LMSTUDIO_REPORT_CACHE.inFlight = null;
+      if (_LMSTUDIO_REPORT_CACHE.inFlight === pending) _LMSTUDIO_REPORT_CACHE.inFlight = null;
     }
-  })();
-
-  return _LMSTUDIO_REPORT_CACHE.inFlight;
+  });
+  _LMSTUDIO_REPORT_CACHE.inFlight = pending;
+  return pending;
 }
 async function tliFetchBundledStatus({ force = false } = {}) {
   // Bundled AI status lives on the TLI backend
@@ -652,6 +690,9 @@ const CHAT_HISTORY_DRAFT_ID = "__draft__";
 let currentConversationId = null;  // tracks active conversation thread
 window.TLIConversationLoad = {
   contract: "v1", generation: 0,
+  locked: document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false',
+  ready: document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') !== 'false',
+  canRead() { return !this.locked && this.ready; },
   invalidate() { this.generation++; this.loading = false; },
   deleted(id) {
     this.invalidate();
@@ -676,8 +717,14 @@ function clearLocalChatSession() {
   if (send) send.disabled = false;
   if (abort) abort.disabled = true;
 }
-window.addEventListener("tli-session-locked", clearLocalChatSession);
-window.addEventListener("pagehide", clearLocalChatSession);
+for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed','pagehide']) window.addEventListener(event, () => {
+  window.TLIConversationLoad.locked = true; window.TLIConversationLoad.ready = false;
+  clearLocalChatSession();
+});
+window.addEventListener('tli-session-unlocked', () => { window.TLIConversationLoad.locked = false; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (!window.TLIConversationLoad.locked) window.TLIConversationLoad.ready = true;
+});
 let meshDirectoryCache = null;   // cache for /mesh/directory so multi-node tools can see it
 let currentNodeConfig = null;    // cache for /mesh/node (role + host state)
 let suppressShellySelection = false;
@@ -792,12 +839,15 @@ function setAIRoutePill(source, tip) {
 
 // Probe local LM Studio via your existing report endpoint
 async function refreshLocalAI() {
+  const epoch = _tliProviderEpoch;
+  if (!_tliProviderCurrent(epoch)) return false;
   // Throttle LM Studio probing to avoid log spam when offline.
   const now = Date.now();
   AIStatus.local._nextCheckMs = AIStatus.local._nextCheckMs || 0;
   if (now < AIStatus.local._nextCheckMs) return !!AIStatus.local.available;
 
   const rep = await tliFetchLMStudioReport();
+  if (!_tliProviderCurrent(epoch) || rep?.access_paused) return false;
   const ok = !!(
     rep &&
     (rep.ok === true || rep.available === true || rep.status === "ok" || rep.healthy === true) &&
@@ -805,7 +855,7 @@ async function refreshLocalAI() {
   );
 
   AIStatus.local.available = ok;
-  AIStatus.local.health = ok ? "ok" : "down";
+  AIStatus.local.health = ok ? "ok" : rep?.unknown ? "unknown" : "down";
   AIStatus.local.lastCheckedMs = now;
 
   // Down: respect server backoff if present; otherwise slow down.
@@ -825,13 +875,18 @@ async function refreshLanAI() {
 
 // Decide route (policy: Local > LAN > None)
 async function resolveIntelligenceRoute({ forceRefresh = false } = {}) {
+  const epoch = _tliProviderEpoch;
+  const paused = () => ({source: IntelligenceSource.NONE, node: null, reason: 'Unlock TLI and check access to read AI availability.'});
+  if (!_tliProviderCurrent(epoch)) return paused();
   // Refresh probes (cheap local first)
   if (forceRefresh || (Date.now() - AIStatus.local.lastCheckedMs) > 2500) {
     await refreshLocalAI();
   }
+  if (!_tliProviderCurrent(epoch)) return paused();
   if (forceRefresh || (Date.now() - AIStatus.lan.lastCheckedMs) > 3500) {
     await refreshLanAI();
   }
+  if (!_tliProviderCurrent(epoch)) return paused();
 
   const localOk = !!AIStatus.local.available;
   const lanOk = !!AIStatus.lan.available;
@@ -1320,17 +1375,20 @@ pill.title = `${label}: ${lvl} · ${when}${tip ? " — " + tip : ""}`;  // 👈 
 }
 
 async function refreshBrainHealthFromReport() {
+  const epoch = _tliProviderEpoch;
+  if (!_tliProviderCurrent(epoch)) return;
   try {
     const rep = await tliFetchLMStudioReport();
+    if (!_tliProviderCurrent(epoch) || rep?.access_paused) return;
 
     if (!rep || rep.ok !== true) {
       const backoff = rep?.backoff_s ? ` Next check ~${Math.round(rep.backoff_s)}s.` : "";
       _setPill(
         "model-status-pill",
         "model-status-text",
-        "down",
+        rep?.unknown ? "degraded" : "down",
         "Brain",
-        `AI unavailable. ${rep?.error ? "Error: " + rep.error : "Download your AI model in Settings → AI."}${backoff}`
+        `${rep?.unknown ? 'AI availability is not confirmed.' : 'AI unavailable.'} ${rep?.error ? "Error: " + rep.error : "Check providers in Settings → AI."}${backoff}`
       );
       return;
     }
@@ -1338,6 +1396,7 @@ async function refreshBrainHealthFromReport() {
     // Healthy
     _setPill("model-status-pill", "model-status-text", "ok", "Brain", "AI online and responding.");
   } catch {
+    if (!_tliProviderCurrent(epoch)) return;
     _setPill("model-status-pill", "model-status-text", "down", "Brain", "AI unavailable.");
   }
 }
@@ -1345,6 +1404,7 @@ async function refreshBrainHealthFromReport() {
 // Keep your existing call sites intact:
 // refreshStatus() calls setModelStatus(online, message) :contentReference[oaicite:4]{index=4}
 function setModelStatus(online, message) {
+  if (!_tliProviderCurrent(_tliProviderEpoch)) return;
   // “online” still drives the quick state
   if (!online) {
     _setPill("model-status-pill", "model-status-text", "down", "Brain",
@@ -1469,6 +1529,7 @@ function makeCollapsible(card) {
 let _currentPanelId = null;
 
 function switchPanel(targetId) {
+  if (window.TLIUI?.isPanelHidden?.(targetId)) return false;
   if (!document.getElementById(targetId)) return false;
 
   // Block navigation to locked (Pro-gated) panels — show upgrade modal instead
@@ -1526,7 +1587,10 @@ if (targetId === "panel-main" && typeof _refreshNoAiBanner === "function") {
 document.dispatchEvent(new CustomEvent("tli-panel-switched", { detail: { panelId: targetId } }));
 
 // Panel hooks (optional feature modules)
-if (targetId === 'panel-companion') window.TLICompanion?.onOpen?.();
+if (targetId === 'panel-companion') {
+  if (window.TLIConnectDevice?.open) window.TLIConnectDevice.open({kind:'phone'});
+  else window.TLICompanion?.onOpen?.();
+}
 else window.TLICompanion?.onClose?.();
 if (targetId === 'panel-troubleshooting') window.TLITroubleshooting?.onOpen?.();
 else window.TLITroubleshooting?.onClose?.();
@@ -1685,8 +1749,8 @@ window.TLIDash2 = (function () {
   let _panelOpen     = false;
   let _lastCategory  = null;
   let _lastData      = null;   // cached from last _refresh()
-  let _freshnessTimer = null, _lastRefreshFailed = false, _meshObservedAt = null;
-  let _refreshPending = null, _viewEpoch = 0, _sessionLocked = false;
+  let _freshnessTimer = null, _lastRefreshFailed = false, _meshObservedAt = null, _meshHealthRequest = null;
+  let _refreshPending = null, _viewEpoch = 0, _sessionLocked = false, _accessBlocked = false;
   let _dashSse       = null;   // SSE connection for mesh presence events
   const _seenFeedIds = new Set(); // dedup guard for seeded feed entries
 
@@ -2015,11 +2079,6 @@ window.TLIDash2 = (function () {
       window.TLIStorageWorkspace.prepare({view:'space', root:path || '', source:'dashboard'});
       return;
     }
-    if (path && typeof window.TLIVisualizer?.scanPath === 'function') {
-      switchPanel('panel-visualizer');
-      window.TLIVisualizer.scanPath(path);
-      return;
-    }
     switchPanel('panel-visualizer');
     const input = document.getElementById('visualizerPathInput');
     if (input && path) {
@@ -2133,11 +2192,11 @@ window.TLIDash2 = (function () {
     return pick;
   }
 
-  function _typeText(text, onDone) {
+  function _typeText(text, onDone, immediate = false) {
     if (_typeTimer) { clearInterval(_typeTimer); _typeTimer = null; }
     const el = _el("nd-statement-text");
     if (!el) return;
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    if (immediate || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       el.textContent = text;
       if (onDone) onDone();
       return;
@@ -2356,7 +2415,7 @@ window.TLIDash2 = (function () {
 
   // ── Data refresh (every 30s) ──────────────────────────────────
   async function _refresh() {
-    if (!_open || _sessionLocked || document.hidden) return;
+    if (!_open || _sessionLocked || _accessBlocked || document.hidden) return;
     if (_refreshPending) return _refreshPending;
     _refreshPending = _refreshOnce();
     try { return await _refreshPending; } finally { _refreshPending = null; }
@@ -2364,6 +2423,10 @@ window.TLIDash2 = (function () {
 
   async function _refreshOnce() {
     const epoch = _viewEpoch;
+    const alertOperations = window.TLIShell?.alertOperations;
+    const alertContext = alertOperations?.capture();
+    const current = () => epoch === _viewEpoch && !_sessionLocked && _open && (!alertOperations || alertOperations.isCurrent(alertContext));
+    if (!current()) return;
     const identityStartedAt = Date.now();
     try {
       let accessRejected = false;
@@ -2371,23 +2434,76 @@ window.TLIDash2 = (function () {
         cache: "no-store",
         credentials: "same-origin",
         signal: AbortSignal.timeout(12000),
-      }).then(r => { accessRejected = r.status === 401 || r.status === 403; return r.ok ? r.json() : null; }).catch(() => null);
-      if (accessRejected) throw new Error('Unlock TLI to check the Dashboard.');
+      }).then(r => { if (!current()) return null; accessRejected = r.status === 401 || r.status === 403; return r.ok ? r.json() : null; }).catch(() => null);
+      if (accessRejected) {
+        if (current()) {
+          _accessBlocked = true;
+          _pauseDashboard();
+          _clearPrivateDashboard();
+          _showAccessPrompt();
+        }
+        return;
+      }
+
+      if (!current()) return;
 
       if (data && (typeof data !== 'object' || Array.isArray(data) || data.ok === false)) data = null;
       if (!data) {
-        const [statusRes, devRes, aiRes, diskRes, alertsRes] = await Promise.allSettled([
-          fetch("/status",                { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+        // Status is the access gate for this legacy fallback. A denied or
+        // unavailable snapshot must not launch probes or become an empty host.
+        const statusResponse = await fetch("/status", { signal: AbortSignal.timeout(5000), cache: "no-store", credentials: "same-origin" });
+        if (!current()) return;
+        if (statusResponse.status === 401 || statusResponse.status === 403) {
+          _accessBlocked = true;
+          _pauseDashboard();
+          _clearPrivateDashboard();
+          _showAccessPrompt();
+          window.dispatchEvent(new CustomEvent('tli-session-locked'));
+          return;
+        }
+        if (!statusResponse.ok) throw new Error('Host status unavailable');
+        const status = await statusResponse.json();
+        if (!current()) return;
+        if (!status || typeof status !== 'object' || Array.isArray(status) ||
+            typeof status.model_online !== 'boolean' || typeof status.node_role !== 'string' || typeof status.mesh_status !== 'string') throw new Error('Host status unreadable');
+        const diskResponse = await fetch("/api/system/disk", { signal: AbortSignal.timeout(5000), cache: "no-store", credentials: "same-origin" });
+        if (!current()) return;
+        if (diskResponse.status === 401 || diskResponse.status === 403) {
+          _accessBlocked = true; _pauseDashboard(); _clearPrivateDashboard(); _showAccessPrompt();
+          window.dispatchEvent(new CustomEvent('tli-session-locked'));
+          return;
+        }
+        if (!diskResponse.ok) throw new Error('Storage observation unavailable');
+        const diskData = await diskResponse.json();
+        if (!current()) return;
+        if (!diskData || typeof diskData !== 'object' || Array.isArray(diskData) || diskData.ok !== true) throw new Error('Storage observation unavailable');
+        const [devRes, aiRes, alertsRes] = await Promise.allSettled([
           fetch("/homeauto/devices",      { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
           fetch("/api/ai/bundled/status", { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
-          fetch("/api/system/disk",       { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
-          fetch("/status/alerts",         { signal: AbortSignal.timeout(5000), cache: "no-store" }).then(r => r.ok ? r.json() : null),
+          (async () => {
+            const response = await fetch("/status/alerts", { signal: AbortSignal.timeout(5000), cache: "no-store", credentials: "same-origin" });
+            if (!current()) return null;
+            if (response.status === 401 || response.status === 403) {
+              _accessBlocked = true; _pauseDashboard(); _clearPrivateDashboard(); _showAccessPrompt();
+              window.dispatchEvent(new CustomEvent('tli-session-locked'));
+              return null;
+            }
+            if (!response.ok) throw new Error('Alerts unavailable');
+            const value = await response.json();
+            if (!current()) return null;
+            if (!value || !Array.isArray(value.alerts) || !value.alerts.every(alert => alert && typeof alert === 'object' && !Array.isArray(alert) &&
+                (!Object.hasOwn(alert,'id') || (typeof alert.id === 'string' && !!alert.id.trim())) &&
+                ['message','detail','severity'].every(key => !Object.hasOwn(alert,key) || typeof alert[key] === 'string') &&
+                (!Object.hasOwn(alert,'dismissed') || typeof alert.dismissed === 'boolean')) ||
+                new Set(value.alerts.filter(alert => Object.hasOwn(alert,'id')).map(alert => alert.id)).size !== value.alerts.filter(alert => Object.hasOwn(alert,'id')).length) throw new Error('Alerts unreadable');
+            return value;
+          })(),
         ]);
+        if (!current()) return;
+        if (alertsRes.status !== 'fulfilled') throw new Error('Alerts unavailable');
 
-        const status       = statusRes.status === "fulfilled" ? statusRes.value : null;
         const devData      = devRes.status    === "fulfilled" ? devRes.value    : null;
         const aiData       = aiRes.status     === "fulfilled" ? aiRes.value     : null;
-        const diskData     = diskRes.status   === "fulfilled" ? diskRes.value   : null;
         const alertsData   = alertsRes.status === "fulfilled" ? alertsRes.value : null;
         const devices      = Array.isArray(devData?.devices) ? devData.devices : [];
         const devNames     = devices.map((d, i) => (d.name?.trim()) ? d.name.trim() : `Device ${i + 1}`);
@@ -2409,7 +2525,7 @@ window.TLIDash2 = (function () {
         if (!status && !aiData && !diskData && !devData) throw new Error('Monitoring unavailable');
       }
 
-      if (epoch !== _viewEpoch || _sessionLocked || !_open) return;
+      if (!current()) return;
       const aiOk         = typeof data.aiOk === 'boolean' ? data.aiOk : null;
       const lmOnline     = typeof data.lmOnline === 'boolean' ? data.lmOnline : null;
       const devNames     = Array.isArray(data.devNames) ? data.devNames : [];
@@ -2429,6 +2545,7 @@ window.TLIDash2 = (function () {
       _lastData = Object.assign({}, data, {
         aiOk, lmOnline, devNames, devCount, nickname, nodeRole, meshSt, diskData, activeAlerts,
       });
+      window.TLINarrator?.observeContext(data);
       if (data.state) window.TLIPresence?.acceptSnapshot?.(data);
       // Only the action owner reads and versions the queue. This aggregate may
       // predate a just-completed action, and legacy fallback has no queue facts.
@@ -2488,8 +2605,9 @@ window.TLIDash2 = (function () {
       _feedLog(_snapParts.join(" · ") + ".", presentation.orb === 'warn' ? 'warn' : 'info');
 
     } catch (e) {
-      if (epoch !== _viewEpoch || _sessionLocked || !_open) return;
+      if (!current()) return;
       _lastRefreshFailed = true;
+      window.TLINarrator?.unavailable();
       _renderObservationSummary();
       setEventMessage({ type: "alert", text: "System monitoring is unavailable. TLI could not be reached for a fresh check." });
       _feedLog("Backend unreachable — check the server.", "error");
@@ -2497,6 +2615,7 @@ window.TLIDash2 = (function () {
   }
 
   function _renderObservationSummary() {
+    window.TLINarrator?.tick();
     const shared = window.TLIPresence?.getObservation?.();
     const aiSource = window.TLIAISource?.getSnapshot?.();
     const facts = window.TLIUIHealth?.dashboard({ ...(_lastData || {}), ...(shared || {}), aiSource });
@@ -2527,13 +2646,27 @@ window.TLIDash2 = (function () {
       metric.dataset.freshness = observed.freshness;
     }
     const stamp = observed.stamp ? new Date(observed.stamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'No successful system probe';
-    const failed = shared ? shared.monitoringUnavailable : _lastRefreshFailed;
+    const failed = _lastRefreshFailed || (shared ? shared.monitoringUnavailable : false);
     _setOrb(failed ? 'idle' : facts.orb);
     _setMeta(`${_lastData?.nickname || 'TLI host'} · ${failed ? (observed.stamp ? 'Monitoring unavailable; previous results retained' : 'Monitoring unavailable; no successful readings yet') : observed.label} · ${stamp}`);
     const meta = _el('nd-meta-line'); if (meta) meta.dataset.freshness = failed ? 'unavailable' : observed.freshness;
   }
 
   // ── Mesh health strip ─────────────────────────────────────────
+
+  function _validMeshHealth(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.ok === false || !Array.isArray(data.nodes)) return false;
+    return data.nodes.every(n => {
+      if (!n || typeof n !== 'object' || Array.isArray(n)) return false;
+      if (n.is_self !== undefined && typeof n.is_self !== 'boolean') return false;
+      const identity = ['peer_id','node_id','id','node_name','hostname','ip'];
+      if (!identity.some(key => typeof n[key] === 'string' && n[key].trim())) return false;
+      if ([...identity,'os','active_model','active_preset','ai_status','error'].some(key => n[key] != null && typeof n[key] !== 'string')) return false;
+      if (['online','ai_healthy','has_ai'].some(key => n[key] != null && typeof n[key] !== 'boolean')) return false;
+      if (['cpu_percent','ram_percent','disk_percent','ram_used_gb','ram_total_gb','disk_free_gb','uptime_seconds'].some(key => n[key] != null && (typeof n[key] !== 'number' || !Number.isFinite(n[key])))) return false;
+      return true;
+    });
+  }
 
   function _renderMeshStrip(nodes) {
     const strip    = document.getElementById("nd-mesh-strip");
@@ -2542,7 +2675,7 @@ window.TLIDash2 = (function () {
 
     // Only show if there are peers (more than just self)
     const peers = nodes.filter(n => !n.is_self);
-    if (!peers.length) { strip.hidden = true; return; }
+    if (!peers.length) { container.replaceChildren(); strip.hidden = true; return; }
 
     strip.hidden = false;
     const allNodes = nodes; // self first, then peers
@@ -2585,21 +2718,34 @@ window.TLIDash2 = (function () {
   }
 
   async function _refreshMeshStrip() {
+    if (!_open || _sessionLocked || _accessBlocked || document.hidden) return;
     const epoch = _viewEpoch;
+    if (_meshHealthRequest?.epoch === epoch) return;
+    const request = {epoch}; _meshHealthRequest = request;
+    const current = () => request === _meshHealthRequest && epoch === _viewEpoch && _open && !_sessionLocked && !_accessBlocked && !document.hidden;
     const strip = _el('nd-mesh-strip');
     let observed = strip?.querySelector('.ui-mesh-observed');
     if (strip && !observed) { observed = document.createElement('p'); observed.className = 'ui-mesh-observed small-meta'; strip.append(observed); }
     try {
-      const data = await fetch("/api/mesh/health", { signal: AbortSignal.timeout(6000) })
-        .then(r => r.ok ? r.json() : null);
-      if (epoch !== _viewEpoch || _sessionLocked) return;
-      if (!Array.isArray(data?.nodes)) throw new Error('No computer readings');
+      const response = await fetch("/api/mesh/health", { cache:'no-store', credentials:'same-origin', signal: AbortSignal.timeout(6000) });
+      if (!current()) return;
+      if (response.status === 401 || response.status === 403) {
+        _accessBlocked = true; _pauseDashboard(); _clearPrivateDashboard();
+        window.dispatchEvent(new CustomEvent('tli-session-locked'));
+        _showAccessPrompt(); return;
+      }
+      if (!response.ok) throw new Error('Computer readings unavailable');
+      const data = await response.json();
+      if (!current()) return;
+      if (!_validMeshHealth(data)) throw new Error('No computer readings');
       _renderMeshStrip(data.nodes);
       _meshObservedAt = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
       if (observed) observed.textContent = `Computers checked ${_meshObservedAt}`;
     } catch {
-      if (epoch !== _viewEpoch || _sessionLocked) return;
+      if (!current()) return;
       if (observed) observed.textContent = _meshObservedAt ? `Computer refresh unavailable. Previous results from ${_meshObservedAt}.` : 'Computer readings unavailable.';
+    } finally {
+      if (_meshHealthRequest === request) _meshHealthRequest = null;
     }
   }
 
@@ -2607,6 +2753,7 @@ window.TLIDash2 = (function () {
   function onOpen() {
     _panelOpen = true;
     if (_open || _sessionLocked || document.hidden) return;
+    if (_accessBlocked) { _showAccessPrompt(); return; }
     _open = true;
     _serverNarrator = null;
     // Server Narrator owns awareness and confirmation timing.
@@ -2643,9 +2790,17 @@ window.TLIDash2 = (function () {
   // msg: { type: "status"|"alert"|"action_prompt"|"confirmation", text: string }
   let _serverNarrator = null;
   let _narratorTransition = null;
-  function setEventMessage(msg) {
-    if (!msg || !msg.text || _sessionLocked) return;
+  function setEventMessage(msg, localAlertStatus = false) {
+    if (!msg || !msg.text || _sessionLocked || _accessBlocked) return;
+    const alertOperations = window.TLIShell?.alertOperations;
+    if (!localAlertStatus && alertOperations && !alertOperations.isCurrent(alertOperations.capture())) return;
     if (_serverNarrator?.timestamp && msg.timestamp && msg.timestamp < _serverNarrator.timestamp) return;
+    if (window.TLINarrator?.accept(msg) === false) return;
+    if (msg.briefing?.version === 1 && msg.briefing.summary && msg.type !== 'confirmation' &&
+        !(msg.mode === 'detailed' && msg.briefing.freshness === 'current' && !msg.briefing.attention_count)) {
+      const critical = msg.briefing.freshness === 'current' && msg.briefing.items?.some(item => item.severity === 'critical');
+      msg = { ...msg, text: msg.briefing.summary, severity: critical ? 'critical' : msg.severity };
+    }
     const unchanged = _serverNarrator?.text === msg.text && _serverNarrator?.type === msg.type && _serverNarrator?.severity === msg.severity;
     _serverNarrator = msg;
     if (!_open || unchanged) return;
@@ -2662,11 +2817,12 @@ window.TLIDash2 = (function () {
     if (stmt) { stmt.style.opacity = "0"; stmt.style.transition = "opacity 0.35s"; }
     _narratorTransition = setTimeout(function () {
       if (!_open) return;
-      _typeText(msg.text);
+      _typeText(msg.text, null, msg.briefing?.version === 1);
       _setNarratorCard({ text: msg.text, type: mapped.type, severity });
       if (stmt) stmt.style.opacity = "1";
       const narratorEl = _el("nd-narrator");
       if (narratorEl) narratorEl.dataset.narratorType = msg.type || "status";
+      window.TLINarrator?.tick();
     }, 380);
   }
 
@@ -2677,20 +2833,69 @@ window.TLIDash2 = (function () {
     else if (_panelOpen) onOpen();
   });
   window.addEventListener('beforeunload', _pauseDashboard);
-  window.addEventListener('tli-session-locked', () => {
-    _sessionLocked = true; onClose(); _lastData = null; _serverNarrator = null; _seenFeedIds.clear();
+  function _clearPrivateDashboard() {
+    window.TLINarrator?.clear();
+    _lastData = null; _serverNarrator = null; _seenFeedIds.clear();
+    _meshObservedAt = null; _meshHealthRequest = null;
+    const meshStrip = _el('nd-mesh-strip'); if (meshStrip) { meshStrip.hidden = true; const observed = meshStrip.querySelector('.ui-mesh-observed'); if (observed) observed.textContent = ''; }
     for (const id of ['nd-feed', 'nd-mesh-nodes', 'nd-statement-text', 'nd-meta-line', 'nd-actions', 'nd-suggestions', 'nd-quickread']) _el(id)?.replaceChildren();
     for (const name of ['storage', 'smart', 'ai']) _setVital(name, '—', 'Unlock TLI to check');
     _setVital('node', 'Not confirmed', 'Unlock TLI to check');
     const meter = _el('ndv-storage-meter'); if (meter) meter.hidden = true;
     const metric = _el('ndv-node-metrics'); if (metric) metric.textContent = '';
+    const storageTile = _el('nd-storage-vital-tile');
+    if (storageTile) { storageTile.dataset.scanPath = ''; storageTile.title = 'Open Free Space'; }
+  }
+  function _showAccessPrompt() {
+    if (_sessionLocked) return;
+    _setMeta('Dashboard access needs a fresh check. Unlock TLI first; if the PIN is off, use a clean private window on localhost.');
+    const actions = _el('nd-actions');
+    if (actions) {
+      actions.replaceChildren();
+      const button = document.createElement('button');
+      button.type = 'button'; button.className = 'pill-btn'; button.textContent = 'Check Dashboard';
+      button.addEventListener('click', _requestRefresh);
+      actions.appendChild(button);
+    }
+  }
+  function _requestRefresh() {
+    if (_sessionLocked) return;
+    if (_accessBlocked) {
+      if (window.EventInterpreter?.retry) return window.EventInterpreter.retry();
+      _accessBlocked = false;
+      onOpen();
+      return;
+    }
+    return _refresh();
+  }
+  window.addEventListener('tli-session-locked', () => {
+    _accessBlocked = true; _sessionLocked = true; onClose(); _clearPrivateDashboard();
+  });
+  for (const event of ['tli-account-changed','tli-user-changed']) window.addEventListener(event, () => {
+    _accessBlocked = true; _sessionLocked = true; onClose(); _clearPrivateDashboard();
+  });
+  window.addEventListener('tli-alert-operation', event => {
+    if (event.detail?.phase !== 'started' || _sessionLocked || _accessBlocked) return;
+    _viewEpoch++; _lastRefreshFailed = true; _serverNarrator = null;
+    if (_narratorTransition) { clearTimeout(_narratorTransition); _narratorTransition = null; }
+    window.TLINarrator?.unavailable();
+    if (_open) {
+      _renderObservationSummary();
+      setEventMessage({type:'status', text:'Alerts are being updated. Previous alert information needs a fresh check.'}, true);
+    }
   });
   window.addEventListener('tli-session-unlocked', () => {
     _sessionLocked = false;
     const panel = _el('panel-dashboard2');
+    if (panel && !panel.hidden && !panel.classList.contains('hidden')) _showAccessPrompt();
+  });
+  window.addEventListener('tli-private-observation-ready', () => {
+    if (_sessionLocked) return;
+    _accessBlocked = false;
+    const panel = _el('panel-dashboard2');
     if (panel && !panel.hidden && !panel.classList.contains('hidden')) onOpen();
   });
-  return { onOpen, onClose, setEventMessage, refresh: _refresh, openStorage: _openStorage };
+  return { onOpen, onClose, setEventMessage, refresh: _requestRefresh, openStorage: _openStorage };
 })();
 
 // AbortController + debounce
@@ -3458,22 +3663,39 @@ function detectShellyIntent(text) {
 async function _refreshNoAiBanner() {
   const banner = $("tli-no-ai-banner");
   if (!banner) return;
+  const epoch = _tliProviderEpoch, read = ++_tliBannerRead;
+  const current = () => _tliProviderCurrent(epoch) && read === _tliBannerRead;
+  if (!current()) return;
+  async function checkedJSON(response) {
+    if (!current()) return null;
+    if (response.status === 401 || response.status === 403) {
+      window.dispatchEvent(new CustomEvent('tli-session-locked')); return null;
+    }
+    if (!response.ok) return null;
+    const data = await response.json();
+    return current() && data && typeof data === 'object' && !Array.isArray(data) ? data : null;
+  }
   try {
     const r = await fetch("/api/ai/model/info", { signal: AbortSignal.timeout(4000) });
-    if (!r.ok) { banner.classList.add("hidden"); return; }
-    const info = await r.json();
+    const info = await checkedJSON(r);
+    if (!current()) return;
+    if (!info) { banner.classList.add('hidden'); return; }
     if (info.exists !== false || info.healthy === true) { banner.classList.add("hidden"); return; }
     // No bundled model — check if LM Studio is reachable before showing the banner
     try {
       const lr = await fetch("/health/llm", { signal: AbortSignal.timeout(2000) });
-      const ld = lr.ok ? await lr.json() : {};
-      if (ld.healthy) { banner.classList.add("hidden"); return; }
-    } catch {}
+      const ld = await checkedJSON(lr);
+      if (!current()) return;
+      const healthy = typeof ld?.healthy === 'boolean' ? ld.healthy : ld?.ok;
+      if (typeof healthy !== 'boolean') { banner.classList.add('hidden'); return; }
+      if (healthy) { banner.classList.add("hidden"); return; }
+    } catch { if (current()) banner.classList.add('hidden'); return; }
     // No local AI — check if a mesh peer is serving AI
     try {
       const mr = await fetch("/api/ai/mesh/status", { signal: AbortSignal.timeout(3000) });
-      if (mr.ok) {
-        const md = await mr.json();
+      const md = await checkedJSON(mr);
+      if (!current()) return;
+      if (md) {
         if (md.available && md.peer) {
           // Mesh AI available — update banner to inform instead of prompt download
           const titleEl = banner.querySelector(".tli-no-ai-banner-title");
@@ -3487,7 +3709,8 @@ async function _refreshNoAiBanner() {
           return;
         }
       }
-    } catch {}
+    } catch { if (!current()) return; }
+    if (!current()) return;
     // No AI anywhere — show the download prompt
     const titleEl = banner.querySelector(".tli-no-ai-banner-title");
     const subEl   = banner.querySelector(".tli-no-ai-banner-sub");
@@ -3497,7 +3720,7 @@ async function _refreshNoAiBanner() {
     if (btnEl)   { btnEl.textContent = "Open model library"; delete btnEl.dataset.tliMeshMode; }
     banner.classList.remove("hidden");
   } catch {
-    banner.classList.add("hidden");
+    if (current()) banner.classList.add("hidden");
   }
 }
 
@@ -3709,20 +3932,31 @@ function setupChat() {
   if (rcRefresh) rcRefresh.addEventListener("click", loadPreviousPrompts);
 
   const rcClear = $("recent-chats-clear");
+  let clearHistoryRequest = null;
   if (rcClear) rcClear.addEventListener("click", async () => {
-    if (rcClear.disabled) return;
+    const navigation = window.TLIConversationLoad;
+    if (rcClear.disabled || clearHistoryRequest || navigation?.canRead?.() === false) return;
+    const generation = navigation?.generation;
+    const current = () => navigation?.canRead?.() !== false && generation === navigation?.generation;
     if (sendBtn.disabled) { showToast("Wait for the current reply or cancel it before clearing history.", "info"); return; }
     if (!confirm("Clear all chat history? This cannot be undone.")) return;
+    if (!current()) return;
+    const request = {}; clearHistoryRequest = request;
     rcClear.disabled = true;
     try {
       const response = await fetch("/api/ai/conversations", { method: "DELETE" });
-      if (!response.ok || (await response.json()).ok !== true) throw new Error("History was not cleared.");
+      if (!current()) return;
+      if (response.status === 401 || response.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+      if (!response.ok) throw new Error("History was not cleared.");
+      const result = await response.json();
+      if (!current()) return;
+      if (result?.ok !== true) throw new Error("History was not cleared.");
       window.TLIConversationLoad?.deleted?.();
       if (typeof clearChatWithPlaceholder === "function") clearChatWithPlaceholder("Chat history cleared.");
       loadPreviousPrompts();
     } catch (e) {
-      if (typeof showToast === "function") showToast("Could not clear history.", "warn");
-    } finally { rcClear.disabled = false; }
+      if (current() && typeof showToast === "function") showToast("Could not clear history.", "warn");
+    } finally { if (clearHistoryRequest === request) { clearHistoryRequest = null; rcClear.disabled = false; } }
   });
 
   // ── Voice input (mic button) ─────────────────────────────────────
@@ -3742,43 +3976,89 @@ function tliSpeak(text) { window.TLILocalVoice?.speak(text, {automatic: true}); 
 function tliSpeakBubble(btn, text) { window.TLILocalVoice?.speak(text, {button: btn}); }
 
 // ---------- recent chats ----------
+// A successful access probe may recover this list, but never opens a saved
+// conversation or replays a chat request.
+let _recentChatsLocked = window.TLIConversationLoad?.canRead?.() === false, _recentChatsReady = !_recentChatsLocked, _recentChatsNeedsRecovery = false;
+let _recentChatsEpoch = 0, _recentChatsRender = 0;
+let _recentChatsRequest = null;
+for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed','pagehide']) window.addEventListener(event, () => {
+  _recentChatsLocked = true; _recentChatsReady = false; _recentChatsNeedsRecovery = true;
+  _recentChatsEpoch++; _recentChatsRender++;
+  _recentChatsRequest = null;
+  const list = $("recent-chats-list");
+  if (list) list.innerHTML = '<div class="small-meta">Unlock TLI to load chats.</div>';
+});
+window.addEventListener('tli-session-unlocked', () => { _recentChatsLocked = false; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (_recentChatsLocked) return;
+  _recentChatsReady = true;
+  if (_recentChatsNeedsRecovery) return loadPreviousPrompts();
+});
+
 async function loadPreviousPrompts() {
   const listEl = $("recent-chats-list");
   if (!listEl) return;
+  if (_recentChatsLocked || !_recentChatsReady) { _recentChatsNeedsRecovery = true; return; }
   const generation = window.TLIConversationLoad?.generation;
+  if (_recentChatsRequest && _recentChatsRequest.generation === generation) return _recentChatsRequest.promise;
+  const request = { generation, epoch: _recentChatsEpoch, promise: null };
+  const render = ++_recentChatsRender;
+  _recentChatsRequest = request;
+  _recentChatsNeedsRecovery = false;
+  const current = () => request === _recentChatsRequest && !_recentChatsLocked && _recentChatsReady
+    && generation === window.TLIConversationLoad?.generation;
   listEl.innerHTML = `<div class="small-meta">Loading…</div>`;
-  try {
-    const r = await fetch("/api/ai/conversations", { cache: "no-store" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const { conversations } = await r.json();
-    if (generation !== window.TLIConversationLoad?.generation) return;
-    if (!conversations.length) {
-      listEl.innerHTML = `<div class="small-meta">No chats yet.</div>`;
-      return;
+  request.promise = (async () => {
+    try {
+      const r = await fetch("/api/ai/conversations", { cache: "no-store" });
+      if (!current()) return;
+      if (r.status === 401 || r.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const value = await r.json();
+      if (!current()) return;
+      const conversations = value?.conversations;
+      if (!Array.isArray(conversations) || conversations.length > 20 || conversations.some(c => !c || typeof c.id !== 'string' || !c.id || c.id.length > 256 || typeof c.title !== 'string' || !Number.isSafeInteger(c.message_count) || c.message_count < 0) || new Set(conversations.map(c => c.id)).size !== conversations.length) throw Error('Invalid conversation list.');
+      if (!conversations.length) {
+        listEl.innerHTML = `<div class="small-meta">No chats yet.</div>`;
+        return;
+      }
+      listEl.innerHTML = "";
+      conversations.forEach(c => {
+        const btn = document.createElement("button");
+        btn.className = "recent-chat-btn";
+        const title = (c.title || "Untitled").slice(0, 72);
+        const turnCount = Math.max(1, Math.floor((c.message_count || 0) / 2));
+        const turns = `${turnCount} turn${turnCount !== 1 ? "s" : ""}`;
+        const label = document.createElement("span"), meta = document.createElement("span");
+        label.className = "rc-title"; label.textContent = title;
+        meta.className = "rc-meta"; meta.textContent = turns;
+        btn.append(label, meta);
+        btn.title = "Resume: " + title;
+        btn.addEventListener("click", () => {
+          if (!_recentChatsLocked && _recentChatsReady && request.epoch === _recentChatsEpoch && render === _recentChatsRender) return loadConversation(c.id, title);
+        });
+        listEl.appendChild(btn);
+      });
+    } catch (e) {
+      if (!current()) return;
+      _recentChatsNeedsRecovery = true;
+      listEl.innerHTML = `<div class="small-meta">Could not load chats.</div>`;
+    } finally {
+      if (_recentChatsRequest === request) {
+        _recentChatsRequest = null;
+        if (!_recentChatsLocked && _recentChatsReady && generation !== window.TLIConversationLoad?.generation) {
+          _recentChatsNeedsRecovery = true;
+          listEl.innerHTML = '<div class="small-meta">Refresh recent chats to load the list.</div>';
+        }
+      }
     }
-    listEl.innerHTML = "";
-    conversations.forEach(c => {
-      const btn = document.createElement("button");
-      btn.className = "recent-chat-btn";
-      const title = (c.title || "Untitled").slice(0, 72);
-      const turnCount = Math.max(1, Math.floor((c.message_count || 0) / 2));
-      const turns = `${turnCount} turn${turnCount !== 1 ? "s" : ""}`;
-      const label = document.createElement("span"), meta = document.createElement("span");
-      label.className = "rc-title"; label.textContent = title;
-      meta.className = "rc-meta"; meta.textContent = turns;
-      btn.append(label, meta);
-      btn.title = "Resume: " + title;
-      btn.addEventListener("click", () => loadConversation(c.id, title));
-      listEl.appendChild(btn);
-    });
-  } catch (e) {
-    if (generation !== window.TLIConversationLoad?.generation) return;
-    listEl.innerHTML = `<div class="small-meta">Could not load chats.</div>`;
-  }
+  })();
+  return request.promise;
 }
 
 async function loadConversation(convId, title, options = {}) {
   const navigation = window.TLIConversationLoad || (window.TLIConversationLoad = { generation: 0 });
+  if (navigation.canRead?.() === false || typeof convId !== 'string' || !convId || convId.length > 256) return false;
   const input = $("chat-input");
   const draft = input?.value || "";
   if ($("chat-send-btn")?.disabled) {
@@ -3788,7 +4068,7 @@ async function loadConversation(convId, title, options = {}) {
   if (options.restore && (navigation.generation || currentConversationId || draft.trim())) return false;
   const generation = ++navigation.generation;
   navigation.loading = true;
-  const current = () => generation === navigation.generation && (input?.value || "") === draft && !$("chat-send-btn")?.disabled;
+  const current = () => navigation.canRead?.() !== false && generation === navigation.generation && (input?.value || "") === draft && !$("chat-send-btn")?.disabled;
   // A document question belongs to the conversation in which it was sent.
   // Invalidate its callbacks before awaiting another conversation's history.
   if (!options.refresh) {
@@ -3798,10 +4078,12 @@ async function loadConversation(convId, title, options = {}) {
   }
   try {
     const r = await fetch(`/api/ai/conversations/${encodeURIComponent(convId)}`, { cache: "no-store" });
+    if (!current()) return false;
+    if (r.status === 401 || r.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return false; }
     if (!r.ok) throw new Error("HTTP " + r.status);
     const conv = await r.json();
     if (!current()) return false;
-    if (!Array.isArray(conv.messages)) throw new Error("Conversation messages were not returned.");
+    if (!conv || !Array.isArray(conv.messages) || conv.messages.some(m => !m || typeof m.role !== 'string' || !m.role || typeof m.content !== 'string')) throw new Error("Conversation messages were not returned.");
     const commitSelection = await window.TLILanInference?.prepareConversation?.(convId, { current });
     if (!current() || (commitSelection && !commitSelection())) return false;
     if (!options.refresh) window.TLIIntelligence?.clearContext?.();
@@ -3837,45 +4119,81 @@ function addPreviousPrompt(_text) {
 }
 
 // ---------- status ----------
-async function refreshStatus() {
-  const identityGeneration = window.TLIUI?.hostIdentity?.get().generation;
-  try {
-    const res = await fetch("/status");
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
- 
-
-        const online = !!data.model_online;
-    setModelStatus(online, online ? "Model server: Online" : "Model server: Offline");
-
-    // Update mesh model pill (local vs host)
-    setMeshModelStatus(data.node_role, data.mesh_status);
-
-    // Best-effort refresh of /mesh/node for richer context labels
-    try {
-      if (window.MeshService) {
-        await window.MeshService.fetchNode({ force: false });
-        syncMeshContextTags({ fallbackRole: String((data.node_role || "").toUpperCase() || "UNKNOWN") });
-      }
-    } catch {}
-
-window.TLIUI?.hostIdentity?.observe({id: data.device_id || data.node_id, name: data.device_nickname,
-  source: 'status', generation: identityGeneration});
-
-if (data.device_id && (!window.TLIUI?.hostIdentity || (window.TLIUI.hostIdentity.get().generation === identityGeneration && window.TLIUI.hostIdentity.get().status !== 'locked'))) currentDeviceId = data.device_id;
-
-
-    // Vault owns its authenticated reads and discards responses from before a
-    // lock. A delayed general-status snapshot must not reopen private content.
-
-    debugLog("info", "GET /status OK: " + JSON.stringify(data));
-  } catch (err) {
-    setModelStatus(false, "Model server: unreachable");
-    debugLog("error", "GET /status failed: " + err.message);
+let _tliStatusEpoch = 0, _tliStatusLocked = false, _tliStatusReady = true, _tliStatusRequest = null;
+function _tliClearStatusViews(message = 'Unlock TLI and check access to read host status.') {
+  currentDeviceId = null;
+  const pill = $('mesh-model-pill');
+  if (pill) {
+    pill.textContent = 'Mesh: Not confirmed'; pill.title = message;
+    pill.classList.remove('mesh-online', 'mesh-offline');
   }
+  for (const id of ['visualizer-role-tag', 'tools-role-tag']) {
+    const tag = $(id); if (tag) tag.textContent = 'Role: Not confirmed';
+  }
+}
+window.addEventListener('tli-session-locked', () => {
+  _tliStatusLocked = true; _tliStatusReady = false; _tliStatusEpoch++; _tliStatusRequest = null;
+  _tliClearStatusViews();
+});
+window.addEventListener('tli-session-unlocked', () => { _tliStatusLocked = false; _tliStatusEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if (_tliStatusLocked || _tliStatusReady) return;
+  _tliStatusReady = true;
+  refreshStatus({followups: false});
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) refreshStatus({followups: false});
+});
+window.addEventListener('pagehide', () => {
+  _tliStatusReady = false; _tliStatusEpoch++; _tliStatusRequest = null; _tliClearStatusViews();
+});
+async function refreshStatus({followups = true} = {}) {
+  if (_tliStatusLocked || !_tliStatusReady || document.hidden) return;
+  if (_tliStatusRequest) return _tliStatusRequest.promise;
+  const request = {epoch: _tliStatusEpoch, promise: null};
+  _tliStatusRequest = request;
+  const current = () => request === _tliStatusRequest && request.epoch === _tliStatusEpoch && !_tliStatusLocked && _tliStatusReady;
+  const identityGeneration = window.TLIUI?.hostIdentity?.get().generation;
+  const providerEpoch = _tliProviderEpoch;
+  request.promise = (async () => {
+    try {
+      const res = await fetch("/status", {credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(10000)});
+      if (!current()) return;
+      if (res.status === 401 || res.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+      if (!res.ok) throw new Error('Host status unavailable');
+      const data = await res.json();
+      if (!current()) return;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.model_online !== 'boolean' ||
+          typeof data.node_role !== 'string' || typeof data.mesh_status !== 'string') throw new Error('Host status unreadable');
 
-  // NEW: AI route awareness (Local → LAN → None)
-  try { await resolveIntelligenceRoute({ forceRefresh: false }); } catch {}
+      setMeshModelStatus(data.node_role, data.mesh_status);
+      const meshPill = $('mesh-model-pill'); if (meshPill) meshPill.title = '';
+      if (!current()) return;
+      window.TLIUI?.hostIdentity?.observe({id: data.device_id || data.node_id, name: data.device_nickname,
+        source: 'status', generation: identityGeneration});
+      if (!current()) return;
+      currentDeviceId = typeof data.device_id === 'string' ? data.device_id : null;
+
+      // Confirmed unlock recovers this read only; it does not replay the optional
+      // provider or mesh followups from an interrupted refresh.
+      if (!followups) return;
+      if (_tliProviderCurrent(providerEpoch)) setModelStatus(data.model_online, data.model_online ? "Model server: Online" : "Model server: Offline");
+      try {
+        if (current() && window.MeshService) {
+          await window.MeshService.fetchNode({ force: false });
+          if (!current()) return;
+          syncMeshContextTags({ fallbackRole: data.node_role.toUpperCase() || 'UNKNOWN' });
+        }
+      } catch {}
+      try { if (current() && _tliProviderCurrent(providerEpoch)) await resolveIntelligenceRoute({ forceRefresh: false }); } catch {}
+    } catch {
+      if (!current()) return;
+      _tliClearStatusViews('Host status unavailable. A fresh read is needed.');
+      if (_tliProviderCurrent(providerEpoch)) _setPill('model-status-pill', 'model-status-text', 'degraded', 'Brain', 'Host status unavailable. AI availability is not confirmed.');
+      debugLog('error', 'GET /status unavailable; no fallback was started.');
+    } finally { if (_tliStatusRequest === request) _tliStatusRequest = null; }
+  })();
+  return request.promise;
 }
 
 // ---------- device rename ----------
@@ -3886,7 +4204,10 @@ function setupDeviceRename() {
   const input = $("tli-rename-input");
   const error = $("tli-rename-error");
   if (!btn || !nameEl || !form) return;
-  let saving = false;
+  let renameEpoch = 0, renameLocked = false, renameReady = true, renameRequest = null, needsRead = false;
+  const submit = form.querySelector('[type="submit"]');
+  const allowed = epoch => !renameLocked && renameReady && epoch === renameEpoch;
+  function controls() { if (submit) { submit.disabled = renameLocked || !renameReady || !!renameRequest; submit.textContent = needsRead ? 'Check saved name' : 'Save'; } }
   function cancel(focus = false) {
     form.hidden = true;
     btn.hidden = false;
@@ -3894,50 +4215,64 @@ function setupDeviceRename() {
     if (focus) btn.focus();
   }
   btn.addEventListener('click', () => {
+    if (renameLocked) return;
     btn.hidden = true;
     form.hidden = false;
     input.value = nameEl.textContent.trim();
     input.focus(); input.select();
+    if (!renameReady) { error.textContent = 'Unlock TLI and check access before changing this name.'; error.hidden = false; window.EventInterpreter?.retry?.(); }
+    controls();
   });
   $('tli-rename-cancel').addEventListener('click', () => cancel(true));
   document.addEventListener('tli-device-menu-closed', () => cancel());
   form.addEventListener('submit', async event => {
     event.preventDefault();
-    if (saving) return;
-    const name = input.value.trim();
-    if (!name) { error.textContent = 'Enter a device name.'; error.hidden = false; return; }
-    if (name === nameEl.textContent.trim()) { cancel(true); return; }
-    saving = true;
+    if (renameRequest || !allowed(renameEpoch)) return;
+    const rawName=input.value, name = rawName.trim();
+    if(!needsRead&&/[\u0000-\u001f\u007f-\u009f]/.test(rawName)){error.textContent='Enter a device name without control characters.';error.hidden=false;return;}
+    if (!needsRead && name === nameEl.textContent.trim()) { cancel(true); return; }
+    if (!needsRead && (!name || Array.from(name).length > 64 || /[\u0000-\u001f\u007f-\u009f]/.test(rawName))) { error.textContent = 'Enter a device name of 1–64 characters without control characters.'; error.hidden = false; return; }
     const identity = window.TLIUI?.hostIdentity;
     const identityBefore = identity?.get();
-    const current = () => !identity || (identity.get().generation === identityBefore.generation && identity.get().status !== 'locked');
-    const submit = form.querySelector('[type="submit"]');
-    submit.disabled = true;
+    const request = {epoch:renameEpoch, reading:needsRead}; renameRequest = request;
+    const current = () => renameRequest === request && allowed(request.epoch) && (!identity || (identity.get().generation === identityBefore.generation && identity.get().status !== 'locked'));
+    controls();
     try {
-      const response = await fetch('/device/nickname', {
+      const response = await fetch(request.reading ? '/status' : '/device/nickname', request.reading ? {
+        cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(10000),
+      } : {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname: name }),
-      });
-      if (!response.ok) throw new Error('Could not save device name. Please try again.');
-      const saved = await response.json();
-      if (!current()) return;
-      if (saved?.status !== 'ok' || typeof saved.nickname !== 'string' || !saved.nickname.trim()) throw new Error('The name change could not be confirmed. Refresh the host before retrying.');
-      identity?.observe({id: identityBefore.id, name: saved.nickname, source: 'host-rename', generation: identityBefore.generation});
-      const meshResponse = await fetch('/mesh/node/identity', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ node_name: name }),
+        body: JSON.stringify({ nickname: name }), credentials:'same-origin', signal:AbortSignal.timeout(10000),
       });
       if (!current()) return;
-      if (!meshResponse.ok) throw new Error('Device renamed, but the mesh name could not be updated.');
-      cancel(!document.getElementById('tli-device-popover').hidden);
+      if (response.status === 401 || response.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+      const saved = await response.json().catch(() => null);
+      if (!current()) return;
+      if (!response.ok) throw new Error(typeof saved?.detail === 'string' ? saved.detail : 'The host did not confirm the request.');
+      const savedId = request.reading ? saved?.device_id : saved?.node_id;
+      const savedName = request.reading ? saved?.device_nickname : saved?.nickname;
+      if ((!request.reading && saved?.status !== 'ok') || typeof savedId !== 'string' || !savedId.trim() ||
+          typeof savedName !== 'string' || !savedName.trim() || Array.from(savedName).length > 4096 || /[\u0000-\u001f\u007f-\u009f]/.test(savedName) ||
+          (!request.reading && savedName !== name) || (identityBefore?.id && identityBefore.id !== savedId)) throw new Error('The host returned an unconfirmed name.');
+      identity?.observe({id:savedId, name:savedName, source:'host-rename', generation:identityBefore.generation});
+      needsRead = false;
+      if (request.reading) { input.value=savedName; error.textContent='Saved name checked. Review it before choosing another change.'; error.hidden=false; }
+      else cancel(!document.getElementById('tli-device-popover')?.hidden);
     } catch (err) {
       if (!current()) return;
-      error.textContent = err.message || 'Could not save device name. Please try again.';
+      needsRead = true;
+      error.textContent = 'The name change is not confirmed; it may have completed. Check the saved name before another save. ' + (err.message || 'Reconnect to TLI.');
       error.hidden = false;
       if (form.hidden && typeof showToast === 'function') showToast(error.textContent, 'warn');
-    } finally { saving = false; submit.disabled = false; }
+    } finally { if (renameRequest === request) { renameRequest=null; controls(); } }
   });
-  window.addEventListener('tli-session-locked', () => { input.value = ''; cancel(); });
+  for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed']) window.addEventListener(event, () => {
+    if (renameRequest && !renameRequest.reading) needsRead=true;
+    renameEpoch++; renameLocked=true; renameReady=false; renameRequest=null; input.value=''; cancel(); controls();
+  });
+  window.addEventListener('tli-session-unlocked', () => { renameEpoch++; renameLocked=false; controls(); });
+  window.addEventListener('tli-private-observation-ready', () => { if (!renameLocked) { renameReady=true; controls(); } });
+  window.addEventListener('pagehide', () => { renameEpoch++; renameLocked=true; renameReady=false; renameRequest=null; input.value=''; cancel(); controls(); });
 }
 
 // ---------- hamburger ----------

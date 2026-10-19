@@ -35,6 +35,11 @@
   let _initialized = false;
   let _locked = false;
   let _pageHidden = false;
+  let _accessBlocked = false;
+  let _accessCheck = null;
+  let _generation = 0;
+  let _verifiedSession = false;
+  let _verifiedRecovery = false;
 
   // ─── Subscriber management ───────────────────────────────────────────────
 
@@ -66,6 +71,10 @@
     let ev;
     try { ev = JSON.parse(raw); } catch (_) { return; }
     if (!ev || typeof ev !== "object") return;
+    if (ev.type === "auth_required") {
+      _denyAccess();
+      return;
+    }
 
     // Meta-events (v1.3): have a `type` field, no `title`
     const metaType = ev.type;
@@ -139,8 +148,62 @@
   }
 
   function _canConnect() {
-    return _initialized && !_locked && !_pageHidden &&
+    return _initialized && !_locked && !_accessBlocked && !_pageHidden &&
       (typeof document === "undefined" || !document.hidden);
+  }
+
+  function _denyAccess(message) {
+    _accessBlocked = true;
+    _lastEvent = null;
+    _stop();
+    window.dispatchEvent?.(new CustomEvent('tli-session-locked'));
+    _dispatch('access_required', {message: message || 'Live activity paused. Unlock TLI before retrying. If the PIN is off, clear this site’s cookies or use a new private window on localhost.'});
+    window.TLIPinLock?.checkAndLock();
+  }
+
+  // EventSource hides HTTP status. A bounded read uses the same browser
+  // authority before reconnecting. Confirmed PIN entry can recover once;
+  // PIN-disabled status alone cannot retry a denied browser session.
+  function _resumeVerifiedRecovery() {
+    if (!_verifiedRecovery || _accessCheck || _locked || _pageHidden ||
+        (typeof document !== 'undefined' && document.hidden)) return;
+    _verifiedRecovery = false;
+    return _checkAccess();
+  }
+
+  function _checkAccess() {
+    if (_accessCheck || _locked || _pageHidden || (typeof document !== 'undefined' && document.hidden)) return;
+    const generation = _generation;
+    _accessBlocked = true; // a global 401 -> PIN-off unlock must not retry this read
+    _accessCheck = (async () => {
+      try {
+        const response = await fetch('/api/events/recent?n=0', {cache:'no-store', signal:AbortSignal.timeout(10000)});
+        const data = await response.json().catch(() => null);
+        if (generation !== _generation) {
+          if (response.status === 401 && _accessBlocked && !_es && !_verifiedSession) {
+            _dispatch('access_required', {message: typeof data?.detail === 'string' ? data.detail : 'Live activity access expired. Unlock TLI, then retry. If the PIN is off, clear this site’s cookies or use a new private window on localhost.'});
+          }
+          return;
+        }
+        if (response.status === 401 || response.status === 403) {
+          _denyAccess(typeof data?.detail === 'string' ? data.detail : undefined);
+          return;
+        }
+        if (!response.ok || !Array.isArray(data?.events)) throw new Error('Live activity is unavailable.');
+        _accessBlocked = false;
+        _dispatch('access_ready', {});
+        window.dispatchEvent?.(new CustomEvent('tli-private-observation-ready'));
+        _connect();
+      } catch (_) {
+        if (generation === _generation) _dispatch('access_required', {message:'Live activity is unavailable. Check the host connection, then retry.'});
+      }
+    })().finally(() => {
+      _accessCheck = null;
+      // A successful PIN verification can arrive while an older probe is
+      // settling. Check once for that new session instead of reusing its reply.
+      _resumeVerifiedRecovery();
+    });
+    return _accessCheck;
   }
 
   function _connect() {
@@ -157,7 +220,7 @@
       _stop();
       if (_canConnect()) _reconnectTimer = setTimeout(() => {
         _reconnectTimer = null;
-        _connect();
+        _checkAccess();
       }, RECONNECT_DELAY_MS);
     };
   }
@@ -173,22 +236,45 @@
     return _lastEvent;
   }
 
-  window.EventInterpreter = { init, on, off, getLastEvent };
+  window.EventInterpreter = { init, on, off, getLastEvent, retry: _checkAccess };
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
-      if (_canConnect()) _connect();
+      if (_verifiedRecovery) _resumeVerifiedRecovery();
+      else if (_canConnect()) _connect();
       else _stop();
     });
   }
   window.addEventListener?.("tli-session-locked", () => {
+    _generation++;
     _locked = true;
+    _verifiedSession = false;
+    _verifiedRecovery = false;
     _lastEvent = null;
     _stop();
   });
-  window.addEventListener?.("tli-session-unlocked", () => {
+  window.addEventListener?.("tli-session-unlocked", event => {
+    if (event?.detail?.source === 'pin-verification' && !_verifiedSession) {
+      // Coalesce duplicate notifications for this unlock. The read still
+      // checks server authority before private observations resume.
+      _generation++;
+      _locked = false;
+      _verifiedSession = true;
+      _verifiedRecovery = true;
+      _accessBlocked = true;
+      _lastEvent = null;
+      _stop();
+      _resumeVerifiedRecovery();
+      return;
+    }
+    if (!_locked) return;
+    _generation++;
     _locked = false;
-    _connect();
+    if (!_accessBlocked) _checkAccess();
   });
   window.addEventListener?.("pagehide", () => { _pageHidden = true; _stop(); });
-  window.addEventListener?.("pageshow", () => { _pageHidden = false; _connect(); });
+  window.addEventListener?.("pageshow", () => {
+    _pageHidden = false;
+    if (_verifiedRecovery) _resumeVerifiedRecovery();
+    else _connect();
+  });
 })();

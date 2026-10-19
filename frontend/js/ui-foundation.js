@@ -2,6 +2,9 @@
 (() => {
   'use strict';
   const groups = ['Main', 'Devices', 'Help', 'More', 'Settings', 'Files & Storage', 'Ask TLI'];
+  // Presentation-only hiding: keep the workspace and saved references intact.
+  const hiddenPanels = new Set(['panel-homelab']);
+  const isPanelHidden = id => hiddenPanels.has(id);
   const rows = [
     ['panel-dashboard2', 'Dashboard', 'compass', 0, 'dashboard home overview narrator narrative health'],
     ['panel-main', 'Ask TLI', 'chat', 0, 'AI Chat main conversation assistant screenshot screen help image'],
@@ -9,10 +12,11 @@
     ['panel-visualizer', 'Free Space', 'storage', 0, 'visualizer storage disk treemap cleanup make room disk full running out of space'],
     ['panel-games', 'Game Optimizer', 'game', 0, 'gaming games settings hardware AI optimization fps visuals get ready to play low fps smoother gameplay'],
     ['panel-vault', 'Vault', 'lock', 0, 'encrypted secrets private files'],
+    ['panel-homelab', 'HomeLab', 'network', 1, 'homelab home lab infrastructure inventory server proxmox virtual machines containers storage pihole pi-hole dns filtering'],
     ['panel-mesh', 'Computers', 'network', 1, 'mesh peers nodes LAN network'],
     ['panel-homeauto', 'Smart home', 'home', 1, 'home automation shelly relays home assistant integration smart devices'],
     ['panel-automations', 'Routines', 'flow', 1, 'Automations routines triggers actions scenes set the scene lights together'],
-    ['panel-companion', 'Phone Companion', 'phone', 1, 'phone pair pairing QR iPhone Android mobile secure connection take TLI with me start TLI from phone host helper'],
+    ['panel-companion', 'Connect phone', 'phone', 1, 'phone pair pairing QR iPhone Android mobile secure connection take TLI with me start TLI from phone host helper'],
     ['panel-printshop', 'Printers & scanners', 'printer', 1, 'Print & Scan printshop scan document'],
     ['panel-usb', 'USB drives', 'storage', 1, 'Printers & USB removable storage external drives'],
     ['panel-help', 'Help', 'tools', 2, 'support fix problem troubleshooting manual'],
@@ -41,8 +45,9 @@
     'panel-files': ['Prepare and review changes to files in a chosen folder.', 'The exact folder and host shown in the operation preview.', 'The host needs access to the folder. AI suggestions require available AI and are only advice.', 'Choose folder → prepare changes → review → results. Inspect collisions and partial outcomes.'],
       'panel-visualizer': ['Choose a location, inspect what uses space and review selected files.', 'The exact drive or folder on the TLI host, not the computer running this browser.', 'Choose Scan to start a quick overview, or request a deeper scan. Check the observation time, exclusions and incomplete coverage.', 'Scans and comparisons never delete files. Cleanup needs a separate exact-file review. Files moved to Trash may still occupy disk space.'],
     'panel-vault': ['Keep files, secrets and Vault notes behind a separate passphrase.', 'The Vault for this TLI account on the connected host.', 'Unlock with the Vault passphrase. An access PIN and a Vault passphrase serve different purposes.', 'Upload, retrieve or edit Vault items. Notes & fixes and conversation backups do not include Vault content.'],
+    'panel-homelab': ['Bring saved TLI records together, inspect Proxmox and manage a selected Pi-hole client’s filtering groups.', 'Saved inventory and the exact HTTPS addresses and client IP you supply.', 'Refresh overview for saved inventory. Proxmox uses a read-only token; Pi-hole requires an unlocked TLI PIN and an application password.', 'Inventory does not confirm live health. Pi-hole changes require a review; a client pause lasts until explicitly restored. DNS activity may reflect a shared router.'],
     'panel-mesh': ['Connect another TLI computer and review the computer roster.', 'Each computer is identified separately, even when names match.', 'Peers must be reachable. Reported capabilities or installed files do not confirm a running model.', 'Review each computer’s status and time. Phone Companion pairs the native app; Browser satellite connects a browser.'],
-    'panel-companion': ['Connect the installed TLI Companion app to this host.', 'This TLI host and the phones you explicitly pair with it.', 'Owner PIN access, HTTPS, LAN access and an address covered by the host certificate.', 'Review connection setup, create a single-use pairing QR, then manage phone access. Opening this page creates no invitation.'],
+    'panel-companion': ['Take your personal AI and conversations to your Android phone.', 'This workspace stays on your computer.', 'Keep this computer awake and your phone on the same home network for setup.', 'Follow Connect phone to prepare this computer, install the app and scan a private pairing code.'],
     'panel-devices': ['Review printers and queues reported by the host.', 'Devices attached to or configured on the TLI host.', 'Printer and scanner support depends on host drivers and the operating system.', 'Refresh inventory, open OS settings or explicitly send a test page. Submission does not confirm physical printing.'],
     'panel-homeauto': ['Control registered smart devices with an explicit target.', 'The named device, identifier and relay shown for the action.', 'A supported driver and reachable device are required. Unknown or ambiguous targets do not run.', 'Discover supported devices, review their reported state and choose an action. No matches is different from discovery failure.'],
     'panel-automations': ['Prepare and deliberately run a saved routine.', 'The exact registered devices and relays named in its reviewed steps.', 'Preview every target, save the routine and review the current targets before running it. Automatic triggers are not active in this installation.', 'Saving does not run a routine. Results describe each attempted step and any failure or partial completion.'],
@@ -56,8 +61,8 @@
     'panel-settings': ['Configure appearance, AI, access and saved-data tools.', 'Each setting identifies whether it applies to this browser, account or host.', 'Some controls require owner access or HTTPS. Startup changes apply after a manual restart.', 'Save the relevant settings. Check reads saved data; Create makes a scoped backup; Verify checks an archive without restoring it.'],
   };
   help['panel-performance'] = help['panel-games'];
-  help['panel-games'] = ['Ask the selected AI to recommend game settings for your hardware and goal.', 'The TLI host being analyzed; the AI provider is shown separately.', 'Choose a game and read the hardware. Correct missing information before asking for advice.', 'Recommendations explain settings and tradeoffs. Apply changes yourself in the game; advice is not a measured benchmark.'];
-  const navigation = rows.map(([id, label, icon, group, aliases, kind = 'panel', parent = id]) => {
+  help['panel-games'] = ['Choose a game setting to try and compare your own before and after readings.', 'The game and computer you choose; optional AI advice uses the selected provider.', 'Choose a game and a setting trial. Record readings from your game or overlay; AI advice is optional.', 'Apply the setting yourself, then compare the readings you entered. Keep or undo your change based on the result.'];
+  const navigation = rows.filter(([id]) => !isPanelHidden(id)).map(([id, label, icon, group, aliases, kind = 'panel', parent = id]) => {
     const [purpose, target, prerequisites, result] = help[id] || [label === 'Devices' ? 'Your computers, smart devices, printers and phone, in one place.' : 'Choose a task to continue.', 'The target shown in the selected workspace.', 'Each workspace explains its requirements.', 'Opening a destination does not run an action.'];
     return {id, label, icon, group: groups[group], aliases, kind, parent, primary:parent === id && (group === 0 || group === 1), pinnable:parent !== id, purpose, target, prerequisites, result};
   });
@@ -94,10 +99,16 @@
     button.title = item.label + ' — ' + item.purpose;
   }
   const pinKey = 'tli_navigation_pins_v1';
-  let pins = [];
-  try { const saved = JSON.parse(localStorage.getItem(pinKey) || '[]'); if (Array.isArray(saved)) pins = [...new Set(saved)].filter(id => navigation.some(n => n.id === id && n.pinnable)); } catch {}
+  let pins = [], retainedHiddenPins = [];
+  try {
+    const saved = JSON.parse(localStorage.getItem(pinKey) || '[]');
+    if (Array.isArray(saved)) {
+      retainedHiddenPins = [...new Set(saved.filter(isPanelHidden))];
+      pins = [...new Set(saved)].filter(id => navigation.some(n => n.id === id && n.pinnable));
+    }
+  } catch {}
   const premium = () => document.documentElement?.dataset.experience === 'premium';
-  const primaryIds = ['panel-dashboard2', 'panel-main', 'panel-builder', 'panel-files', 'panel-homeauto', 'panel-mesh'];
+  const primaryIds = ['panel-dashboard2', 'panel-main', 'panel-builder', 'panel-files', 'panel-homelab', 'panel-homeauto', 'panel-mesh'].filter(id => !isPanelHidden(id));
   function rootFor(id) {
     if (premium()) {
       if (primaryIds.includes(id)) return id;
@@ -119,7 +130,7 @@
     if (!navigation.some(n => n.id === id && n.pinnable)) return false;
     pins = enabled ? [...new Set([...pins, id])] : pins.filter(p => p !== id);
     let saved = true;
-    try { localStorage.setItem(pinKey, JSON.stringify(pins)); } catch { saved = false; }
+    try { localStorage.setItem(pinKey, JSON.stringify([...pins, ...retainedHiddenPins])); } catch { saved = false; }
     buildNavigation(); syncNavigation();
     window.dispatchEvent(new CustomEvent('tli:navigation-pins-changed'));
     window.showToast?.(saved ? (enabled ? 'Pinned to your sidebar.' : 'Removed from your sidebar.') : 'Applied for this page. Browser preferences could not be saved.');
@@ -164,12 +175,13 @@
     'panel-files': ['Files', 'Choose the files to organize and review where they will go.'],
     'panel-visualizer': ['Free Space', 'See what uses space on your computer.'],
     'panel-devices-home': ['Devices overview', 'Open a device workspace here or directly from the sidebar.'],
+    'panel-homelab': ['HomeLab', 'Your computers, devices and infrastructure, together.'],
     'panel-mesh': ['Computers', 'Your TLI computers, their connections and reported capabilities.'],
-    'panel-companion': ['Phone Companion', 'Pair the installed TLI Companion app and manage its access to this host.'],
+    'panel-companion': ['Connect phone', 'Your personal AI, conversations and ideas on Android.'],
     'panel-devices': ['Printers & scanners', 'Review printers and their reported queues.'],
     'panel-homeauto': ['Smart home', 'Your rooms and devices, together.'],
     'panel-tools': ['Utilities', 'Run an existing tool, review its output and choose whether to ask AI.'],
-    'panel-games': ['Game Optimizer', 'Get AI recommendations for your game, your PC, and the way you want to play.'],
+    'panel-games': ['Game Optimizer', 'Try a game setting and compare your own readings. Ask AI for advice if useful.'],
     'panel-performance': ['App performance check', 'Record what an app is doing while the slowdown happens.'],
     'panel-scripts': ['Scripts', 'Generate and review a script. Creating a script does not run it.'],
     'panel-printshop': ['Printers & scanners', 'Choose a printer or scanner connected to the TLI host.'],
@@ -317,6 +329,6 @@
   window.addEventListener('tli:host-identity', renderHostIdentity);
   window.addEventListener('tli-session-locked', () => { window.TLIHostIdentity?.setLocked(true); dashboardAccess(true); });
   window.addEventListener('tli-session-unlocked', () => { window.TLIHostIdentity?.setLocked(false); dashboardAccess(false); });
-  window.TLIUI = { navigation, icon, openNotes, rootFor, isActive, setPinned, getPins: () => [...pins], syncNavigation, hostIdentity: window.TLIHostIdentity };
+  window.TLIUI = { navigation, isPanelHidden, icon, openNotes, rootFor, isActive, setPinned, getPins: () => [...pins], syncNavigation, hostIdentity: window.TLIHostIdentity };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, {once: true}); else init();
 })();

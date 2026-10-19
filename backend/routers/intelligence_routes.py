@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Response, Query, Request
 from pydantic import BaseModel, Field, ConfigDict
 from routers.system_routes import require_session
+from browser_authority import browser_control_access
 from intelligence import devices, diagnostics, memory, models, vision, screenshots, report_facts, case_next_check
 
 router = APIRouter(prefix="/api/intelligence", tags=["intelligence"], dependencies=[Depends(require_session)])
@@ -79,9 +80,13 @@ def list_devices():
 
 
 @router.post("/printers/refresh")
-def refresh_printers():
-    devices.refresh_printers()
-    return devices.inventory()
+def refresh_printers(check=Depends(browser_control_access)):
+    check()
+    devices.refresh_printers(check=check)
+    check()
+    result = devices.inventory()
+    check()
+    return result
 
 
 @router.patch("/devices/{ident}")

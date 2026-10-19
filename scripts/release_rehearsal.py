@@ -107,6 +107,11 @@ def main():
             effects.enter_context(patch.object(application, name, lambda: None))
         effects.enter_context(patch.object(application.lan_discovery, "start", lambda: None))
         effects.enter_context(patch.object(application.lan_discovery, "stop", lambda: None))
+        if hasattr(application, "_dp_start_polling"):
+            effects.enter_context(patch.object(application, "_dp_start_polling", lambda: None))
+        if hasattr(application, "_auto_update"):
+            effects.enter_context(patch.object(application._auto_update, "auto_check_on_startup", lambda: None))
+            effects.enter_context(patch.object(application._auto_update, "stop_auto_check", lambda: None))
         async def no_ambient():
             return
         effects.enter_context(patch.object(application, "run_ambient_loop", no_ambient))
@@ -116,22 +121,25 @@ def main():
         effects.enter_context(patch.object(dp, "_score_disk_actions", lambda state: None))
         user = "release-fixture-user"
         password = "Synthetic-Rehearsal-Only-123!"
-        application.app.dependency_overrides[system_routes.require_session] = lambda: user
+        # Use the actual saved PIN and session contract. Admission-only dependency
+        # overrides do not authorize the current captured-browser routes.
+        if args.stage == "seed":
+            salt = "b" * 64
+            S.save_pin_config(hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000).hex(), salt)
+        assert S.load_pin_config()["enabled"] is True
+        token = S.create_session_token(user)
         from routers import vault_routes
 
         def expect(response):
             assert response.status_code == 200, (response.status_code, response.text[:300])
             return response.json()
 
-        with TestClient(application.app) as client:
+        with TestClient(application.app, base_url="https://testserver",
+                        headers={"Origin": "https://testserver"},
+                        cookies={"tli_session": token}) as client:
             expect(client.get("/dashboard/state"))
             assert client.get("/").status_code in (200, 307)
             if args.stage == "seed":
-                # Real persisted security fixtures. Functional legacy endpoints
-                # below retain their explicit auth override; actual HTTPS/PIN
-                # enforcement is exercised separately by https_rehearsal.py.
-                salt = "b" * 64
-                S.save_pin_config(hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000).hex(), salt)
                 cfg = S.load_node_config()
                 cfg.node_name = "Synthetic rollback host"
                 S.save_node_config(cfg)
@@ -235,7 +243,7 @@ def main():
         print(json.dumps({"stage": args.stage, "passed": True, "code": str(code),
                           "data_root": str(root), "sidecars": len(fingerprints()), "live_device_calls": 0,
                           "features": feature_scope,
-                          "authentication_scope": "Legacy functional data checks use a dependency override; real PIN and HTTPS checks are separate.",
+                          "authentication_scope": "Real synthetic PIN/browser session and same-origin HTTPS request contract; actual socket TLS is checked separately.",
                           "compatibility_limits": ["Older code does not expose Companion or Notebook features.",
                               "Older memory writes may discard new note metadata; rollback checks preserve and read those files without editing them.",
                               "Older launchers require explicit equivalent HTTPS, bind and port environment settings.",

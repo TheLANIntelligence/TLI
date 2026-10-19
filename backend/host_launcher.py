@@ -138,11 +138,18 @@ def inspect_backend(root, settings):
             connection.close()
 
 
+class ReleaseVerificationError(H.HostControlError):
+    def __init__(self, detail, *, restart_required=False):
+        super().__init__(409, detail)
+        self.restart_required = restart_required
+
+
 def verify_release(root, settings):
     """Do not open a process that still serves application code from before an update."""
     from release_identity import ReleaseIdentity
     expected = ReleaseIdentity(Path(root)).loaded
     connection = None
+    restart_required = False
     try:
         if expected is None:
             raise ValueError("Local application identity is unavailable")
@@ -158,14 +165,18 @@ def verify_release(root, settings):
         if response.status != 200 or len(raw) > 65536:
             raise ValueError("Release identity response unavailable")
         release = json.loads(raw)["release"]
+        restart_required = (release.get('compatibility', {}).get('state') == 'restart_required'
+                            or (isinstance(release.get('source_id'), str)
+                                and release['source_id'] != expected['source_id']))
         if (release.get("compatibility", {}).get("state") != "matched"
                 or release.get("source_id") != expected["source_id"]
                 or release.get("on_disk", {}).get("source_id") != expected["source_id"]):
             raise ValueError("Running application does not match this release")
-    except Exception:
-        H._fail("The running TLI has not confirmed this release's application files. "
+    except Exception as error:
+        raise ReleaseVerificationError("The running TLI has not confirmed this release's application files. "
                 "Finish active work and use Restart TLI in the existing local app, or Stop TLI in local setup, "
-                "then open this release again. No process was stopped or replaced.", 409)
+                "then open this release again. No process was stopped or replaced.",
+                restart_required=restart_required) from error
     finally:
         if connection:
             connection.close()
@@ -369,7 +380,7 @@ def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings
     return result
 
 
-def recorded_backend_children(root):
+def recorded_backend_generations(root):
     candidates = []
     try:
         candidates.append(H.read_json(H.path_for(root, 'desktop-child.json'), 16384))
@@ -380,7 +391,126 @@ def recorded_backend_children(root):
         candidates.extend(item.get('child') for item in receipt['requests'] if item.get('phase') == 'accepted')
     except FileNotFoundError:
         pass
-    return [child for child in candidates if isinstance(child, dict) and child.get('script') == 'main.py' and child_alive(root, child)]
+    return [child for child in candidates if isinstance(child, dict) and child.get('script') == 'main.py']
+
+
+def recorded_backend_children(root):
+    return [child for child in recorded_backend_generations(root) if child_alive(root, child)]
+
+
+def current_backend_settings(root, child):
+    """Read only the fixed startup fields of the positively identified process.
+
+    Saved preferences can already describe the *next* listener. They must not
+    prevent a user from closing the current listener after a network change.
+    """
+    import psutil
+    if process_generation_state(root, child) != 'running':
+        H._fail('TLI process status could not be confirmed. Check status again.', 503)
+    environment = psutil.Process(child['pid']).environ()
+    startup = {key: environment[key] for key in
+               ('TLI_HOST', 'TLI_PORT', 'TLI_ENABLE_TLS', 'TLI_LAN_MODE') if key in environment}
+    if process_generation_state(root, child) != 'running':
+        H._fail('The TLI process changed while checking its address. Check status again.')
+    return startup_config.resolve(root, environ=startup)['effective_next']
+
+
+def _desktop_snapshot(root):
+    root = H.root_path(root)
+    next_settings = startup_config.resolve(root, environ={})['effective_next']
+    children = {}
+    for child in recorded_backend_generations(root):
+        generation = process_generation_state(root, child)
+        if generation == 'unknown':
+            H._fail('TLI process status could not be confirmed. Check status again; it has not been reported stopped.', 503)
+        if generation == 'running':
+            children[child['pid']] = child
+    if len(children) > 1:
+        H._fail('More than one recorded TLI process is running. Open logs to review this installation.')
+    child = next(iter(children.values()), None)
+    settings = current_backend_settings(root, child) if child else next_settings
+    state, reason = inspect_backend(root, settings)
+    if child and state == 'stopped':
+        state, reason = 'starting', 'TLI has a running background process but its listener is not ready.'
+    return {'state': state, 'message': reason, 'child': child,
+            'current_settings': settings, 'next_settings': next_settings}
+
+
+def _desktop_token(root, snapshot, bucket):
+    """A short-lived review bound to this installation and exact generation.
+
+    Polling does not invalidate an open confirmation. A reused PID, new process
+    or changed listener preferences invalidate every outstanding confirmation.
+    """
+    import hmac
+    identity = H.installation(root)
+    payload = {key: snapshot[key] for key in ('child', 'current_settings', 'next_settings')}
+    payload.update(installation_id=identity['installation_id'], bucket=bucket)
+    return hmac.new(bytes.fromhex(identity['secret']), b'tli-launcher-review-v1:' +
+                    json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def desktop_status(root, *, issue_token=True):
+    """Local UI projection. A failed check never means the host has stopped."""
+    result = {'state': 'unverified', 'can_stop': False, 'can_restart': False,
+              'can_open': False, 'requires_restart': False}
+    try:
+        snapshot = _desktop_snapshot(root)
+        state = snapshot['state']
+        result.update(state=state if state in {'running', 'stopped', 'starting'} else 'unverified',
+                      message=snapshot['message'])
+        if state == 'stopped':
+            result['message'] = 'TLI is stopped. Close this window before running the updater.'
+        elif state == 'running':
+            controlled = snapshot['child'] is not None
+            result.update(can_stop=controlled, can_restart=controlled)
+            if controlled and issue_token:
+                result['action_token'] = _desktop_token(root, snapshot, int(time.time() // 30))
+            try:
+                verify_release(root, snapshot['current_settings'])
+                result.update(can_open=True, url=startup_config.browser_url(snapshot['current_settings']),
+                              message='TLI is running. You can open, restart or stop it here.' if controlled else
+                              'TLI is running in a diagnostic session. Close it in its original console.')
+            except H.HostControlError as error:
+                required = bool(getattr(error, 'restart_required', False))
+                message = ('TLI is still running with earlier application files. Restart TLI to load the update.' if required else
+                           'TLI is running, but its current application files could not be confirmed. Check status again or restart TLI.')
+                result.update(requires_restart=required, message=message if controlled else
+                              'TLI is still running in a diagnostic session. Close its original console, then open TLI again.')
+        return result
+    except Exception as error:
+        result.update(state='unverified', can_stop=False, can_restart=False, can_open=False,
+                      message=str(getattr(error, 'detail', error)))
+        result.pop('action_token', None)
+        result.pop('url', None)
+        return result
+
+
+def desktop_action(root, action, token, *, progress=None):
+    """Explicit native confirmation; never exposed as an unauthenticated API."""
+    if action not in {'stop', 'restart'} or not isinstance(token, str) or not H.HEX.fullmatch(token):
+        H._fail('Check TLI status and review Stop or Restart before continuing.', 422)
+    root = H.root_path(root)
+    report = progress or (lambda message: None)
+    with H.FileLock(H.path_for(root, 'desktop-action.lock')):
+        snapshot = _desktop_snapshot(root)
+        bucket = int(time.time() // 30)
+        if (snapshot['state'] != 'running' or snapshot['child'] is None or
+                not any(secrets.compare_digest(token, _desktop_token(root, snapshot, candidate))
+                        for candidate in range(bucket, bucket - 4, -1))):
+            H._fail('TLI or its settings changed, or this review expired. Check status and review the action again.')
+        report('Stopping TLI. Waiting for its background process to finish...')
+        stop_owned_backend(root, expected_child=snapshot['child'], settings=snapshot['current_settings'])
+        if process_generation_state(root, snapshot['child']) != 'exited':
+            H._fail('TLI shutdown could not be confirmed. Check status again; no restart was attempted.', 503)
+        if action == 'stop':
+            return None
+        if startup_config.resolve(root, environ={})['effective_next'] != snapshot['next_settings']:
+            H._fail('TLI stopped, but startup settings changed. Review them before opening TLI again.')
+        report('TLI has stopped. Starting the updated application...')
+        return launch(root, open_browser=False, wait_seconds=300, progress=report,
+                      settings=snapshot['next_settings'])
 
 
 def stop_owned_backend(root, *, wait_seconds=40, expected_child=None, settings=None):
@@ -410,25 +540,19 @@ def stop_owned_backend(root, *, wait_seconds=40, expected_child=None, settings=N
         signature = hmac.new(bytes.fromhex(identity['secret']), message.encode(), hashlib.sha256).hexdigest()
         if not child_alive(root, child):
             H._fail('The recorded backend changed before stop. No stop was requested.')
-        if expected_child is not None and process_generation_state(root, expected_child) != 'running':
+        if process_generation_state(root, child) != 'running':
             H._fail('The reviewed backend process could not be verified before stop. No stop was requested.')
         H.write_json(H.path_for(root, 'stop-backend.json'), {**child, 'nonce': nonce, 'proof': signature, 'at': issued_at})
         deadline = time.monotonic() + wait_seconds
-        if expected_child is not None:
-            while True:
-                state = process_generation_state(root, expected_child)
-                if state == 'exited':
-                    return {'stopped': True, 'reason': 'The reviewed backend generation exited. No process was forcibly terminated.'}
-                if state == 'unknown':
-                    H._fail('The reviewed backend exit could not be confirmed. No forced termination or restart was used.', 503)
-                if time.monotonic() >= deadline:
-                    H._fail('The owned backend has not confirmed graceful shutdown. No forced termination was used; inspect backend.log.', 503)
-                time.sleep(0.2)
-        while child_alive(root, child) and time.monotonic() < deadline:
+        while True:
+            state = process_generation_state(root, child)
+            if state == 'exited':
+                return {'stopped': True, 'reason': 'The reviewed backend generation exited. No process was forcibly terminated.'}
+            if state == 'unknown':
+                H._fail('The reviewed backend exit could not be confirmed. No forced termination or restart was used.', 503)
+            if time.monotonic() >= deadline:
+                H._fail('The owned backend has not confirmed graceful shutdown. No forced termination was used; inspect backend.log.', 503)
             time.sleep(0.2)
-        if child_alive(root, child):
-            H._fail('The owned backend has not confirmed graceful shutdown. No forced termination was used; inspect backend.log.', 503)
-        return {'stopped': True, 'reason': 'The recorded TLI backend exited. The helper, if enabled, remains available.'}
 
 
 def dependencies_ready(root):

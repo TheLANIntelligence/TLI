@@ -8,6 +8,32 @@ const TLI_BUILTIN_TOOL_FORMS = {
   model_health: 'Read the configured LM Studio model list. This does not prove that a model can generate a reply.',
   tli_env_check: 'Read TLI runtime paths and configuration on the host.',
 };
+const TLI_SCRIPT_EXECUTION_UNAVAILABLE = 'Host script execution is unavailable pending reviewed containment. You can view and copy the stored source.';
+let toolsCatalog = new Map(), toolsListUnavailable = false, toolsListEpoch = 0;
+let toolsSessionEpoch = 0, toolsSessionLocked = false;
+let toolsUpdateControls = () => {}, toolsClearPrivate = () => {}, scriptsClearPrivate = () => {};
+function toolCanRun(id) {
+  const entry = toolsCatalog.get(id);
+  return !toolsSessionLocked && !toolsListUnavailable && Object.hasOwn(TLI_BUILTIN_TOOL_FORMS, id) &&
+    (!entry || (entry.kind === 'builtin' && entry.executable === true));
+}
+async function toolResponse(response, epoch) {
+  const data = await response.json().catch(() => null);
+  if (epoch === toolsSessionEpoch && (response.status === 401 || response.status === 403)) {
+    window.dispatchEvent?.(new CustomEvent('tli-session-locked'));
+    window.TLIPinLock?.checkAndLock();
+  }
+  if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
+  if (!data || typeof data !== 'object') throw new Error('TLI returned an incomplete response.');
+  return data;
+}
+window.addEventListener?.('tli-session-locked', () => {
+  toolsSessionEpoch++; toolsSessionLocked = true; toolsListEpoch++;
+  toolsCatalog.clear(); toolsListUnavailable = true;
+  toolsClearPrivate(); scriptsClearPrivate();
+});
+window.addEventListener?.('tli-session-unlocked', () => { toolsSessionLocked = false; toolsUpdateControls(); });
+window.addEventListener?.('tli-private-observation-ready', () => { if (!toolsSessionLocked) refreshToolsList(); });
 function toolOutcome(data) {
   const raw = typeof data.output === 'string' ? data.output : JSON.stringify(data, null, 2);
   let value; try { value = JSON.parse(raw); } catch {}
@@ -18,13 +44,19 @@ function toolOutcome(data) {
 }
 async function refreshToolsList() {
   const select = $("tools-select");
-  if (!select) return;
+  if (!select || toolsSessionLocked) return;
+  const epoch = toolsSessionEpoch, request = ++toolsListEpoch;
+  toolsListUnavailable = true; toolsUpdateControls();
   try {
     const res = await fetch("/tools/list");
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const tools = data.tools || [];
+    const data = await toolResponse(res, epoch);
+    if (epoch !== toolsSessionEpoch || request !== toolsListEpoch) return;
+    if (!Array.isArray(data.tools) || data.tools.some(tool => !tool || typeof tool.id !== 'string')) throw new Error('TLI did not return a tool list.');
+    const tools = data.tools;
+    toolsCatalog = new Map(tools.map(tool => [tool.id, tool]));
+    toolsListUnavailable = false;
     select.innerHTML = "";
+    select.value = '';
     if (!tools.length) {
       const opt = document.createElement("option");
       opt.value = ""; opt.textContent = "No tools registered";
@@ -36,20 +68,24 @@ async function refreshToolsList() {
     select.appendChild(placeholder);
     tools.forEach(tool => {
       const opt = document.createElement("option");
-      opt.value = tool.id; opt.textContent = tool.label || tool.id;
+      opt.value = tool.id; opt.textContent = (tool.label || tool.id) + (tool.kind === 'script' ? ' — source only' : '');
       select.appendChild(opt);
     });
     debugLog("info", "GET /tools/list OK, tools=" + tools.length);
   } catch (err) {
+    if (epoch !== toolsSessionEpoch || request !== toolsListEpoch) return;
+    toolsCatalog.clear(); select.value = '';
     select.innerHTML = '<option value="">Error loading tools</option>';
+    if ($('tools-explain-box')) $('tools-explain-box').textContent = 'Tools unavailable: ' + err.message;
     debugLog("error", "GET /tools/list failed: " + err.message);
-  }
+  } finally { if (epoch === toolsSessionEpoch && request === toolsListEpoch) toolsUpdateControls(true); }
 }
 
 // NEW: ask /chat to interpret a tool's raw output for humans
 async function explainToolOutput(toolLabel, rawOutput) {
   const summaryBox = $("tools-explain-box");
-  if (!summaryBox) return;
+  if (!summaryBox || toolsSessionLocked) return;
+  const epoch = toolsSessionEpoch;
 
   // Show interim status
   summaryBox.textContent = "Asking your LAN AI to interpret this tool’s output…";
@@ -74,13 +110,14 @@ async function explainToolOutput(toolLabel, rawOutput) {
       })
     });
 
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
+    const data = await toolResponse(res, epoch);
+    if (epoch !== toolsSessionEpoch) return;
     const reply = data.reply || data.answer || "";
     if (!reply || data.ok === false) throw new Error(data.detail || 'The provider did not return an explanation.');
     summaryBox.textContent = reply;
     debugLog("info", "POST /chat (tool explain) OK");
   } catch (err) {
+    if (epoch !== toolsSessionEpoch) return;
     summaryBox.textContent =
       "Couldn't interpret the output via local model: " + err.message;
     debugLog("error", "POST /chat (tool explain) failed: " + err.message);
@@ -92,7 +129,7 @@ function setupToolsPanel() {
   const runBtn = $("tools-run-btn");
   if (!runBtn) return;
   setupToolsPanel._done = true;
-  let busy = false, lastResult = null;
+  let busy = false, lastResult = null, sourceEpoch = 0, sourceBusy = false, source = null;
   const select = $('tools-select'), params = $('tools-params');
   const fields = document.createElement('div'); fields.id = 'tools-guided-fields';
   const description = document.createElement('p'); description.id = 'tools-description';
@@ -101,7 +138,13 @@ function setupToolsPanel() {
   const advancedChoice = document.createElement('label'), useAdvanced = document.createElement('input'); useAdvanced.type = 'checkbox'; useAdvanced.id = 'tools-use-advanced';
   advancedChoice.append(useAdvanced, document.createTextNode(' Use the arguments below instead of the guided fields')); advanced.append(advancedChoice);
   const oldParamsLabel = params.previousElementSibling;
-  params.before(description, fields, advanced);
+  const sourcePanel = document.createElement('div'); sourcePanel.id = 'tools-source-panel';
+  const viewSource = document.createElement('button'); viewSource.id = 'tools-view-source'; viewSource.type = 'button'; viewSource.className = 'btn-outline'; viewSource.textContent = 'View stored source';
+  const copySource = document.createElement('button'); copySource.id = 'tools-copy-source'; copySource.type = 'button'; copySource.className = 'btn-outline'; copySource.textContent = 'Copy source';
+  const sourceStatus = document.createElement('p'); sourceStatus.id = 'tools-source-status'; sourceStatus.setAttribute('role', 'status');
+  const sourcePre = document.createElement('pre'); sourcePre.id = 'tools-source-text';
+  sourcePanel.append(viewSource, copySource, sourceStatus, sourcePre);
+  params.before(description, fields, sourcePanel, advanced);
   if (oldParamsLabel?.classList.contains('field-label')) { oldParamsLabel.textContent = 'Arguments (JSON object or raw text)'; advanced.append(oldParamsLabel); }
   advanced.append(params);
   params.setAttribute('aria-label', 'Advanced tool arguments (JSON or raw arguments)');
@@ -110,21 +153,68 @@ function setupToolsPanel() {
     control.id = id; control.type = type; control.value = value; wrap.append(control); fields.append(wrap); return control;
   }
   function configure() {
+    sourceEpoch++; sourceBusy = false; source = null; sourcePre.textContent = ''; sourceStatus.textContent = '';
     fields.replaceChildren(); useAdvanced.checked = false;
     const id = select.value;
-    description.textContent = TLI_BUILTIN_TOOL_FORMS[id] || (id ? 'This is an installed script. Running it executes its code on the TLI host. Review the script before running.' : 'Choose a tool to see what it does.');
+    const storedScript = id && !Object.hasOwn(TLI_BUILTIN_TOOL_FORMS, id);
+    description.textContent = toolsSessionLocked ? 'Unlock TLI to load tools and stored source.' : storedScript
+      ? (toolsCatalog.get(id)?.unavailable_reason || TLI_SCRIPT_EXECUTION_UNAVAILABLE)
+      : TLI_BUILTIN_TOOL_FORMS[id] || 'Choose a tool to see what it does.';
+    sourcePanel.hidden = !storedScript;
+    advanced.hidden = fields.hidden = !!storedScript;
     if (id === 'sys_top_processes') { const limit = field('tools-process-limit', 'Number of processes', '10', 'number'); limit.min = '1'; limit.max = '100'; }
     if (id === 'net_connectivity_diag') field('tools-ping-hosts', 'Addresses to check (comma separated)', '127.0.0.1, 8.8.8.8, 1.1.1.1');
-    runBtn.disabled = !id || busy;
+    controls();
   }
-  select.addEventListener('change', configure); configure();
+  function controls(reconfigure = false) {
+    if (reconfigure) { configure(); return; }
+    runBtn.disabled = busy || !toolCanRun(select.value);
+    select.disabled = busy || toolsSessionLocked || toolsListUnavailable;
+    explain.disabled = busy || toolsSessionLocked || !lastResult;
+    viewSource.disabled = toolsSessionLocked || toolsListUnavailable || sourceBusy || !select.value || Object.hasOwn(TLI_BUILTIN_TOOL_FORMS, select.value);
+    copySource.disabled = toolsSessionLocked || sourceBusy || source === null;
+  }
+  select.addEventListener('change', configure);
   const explain = document.createElement('button'); explain.id = 'tools-explain-btn'; explain.type = 'button'; explain.className = 'btn-outline'; explain.textContent = 'Ask AI to explain this output'; explain.disabled = true;
   $('tools-explain-box')?.after(explain);
+  toolsUpdateControls = controls;
+  toolsClearPrivate = () => {
+    lastResult = null; select.value = ''; select.innerHTML = '<option value="">Unlock to load tools</option>';
+    params.value = ''; $('tools-output')?.querySelector('pre')?.replaceChildren();
+    if ($('tools-explain-box')) $('tools-explain-box').textContent = 'Unlock TLI to load tools and stored source.';
+    configure();
+  };
+  configure();
+  viewSource.addEventListener('click', async () => {
+    if (viewSource.disabled || toolsSessionLocked) return;
+    const id = select.value, request = ++sourceEpoch, epoch = toolsSessionEpoch;
+    source = null; sourcePre.textContent = ''; sourceStatus.textContent = 'Loading stored source…'; sourceBusy = true; controls();
+    try {
+      const data = await toolResponse(await fetch(`/tools/scripts/${encodeURIComponent(id)}/source`, {cache: 'no-store', signal: AbortSignal.timeout(10000)}), epoch);
+      if (epoch !== toolsSessionEpoch || request !== sourceEpoch || select.value !== id) return;
+      if (data.id !== id || typeof data.contents !== 'string' || data.execution_allowed !== false) throw new Error('TLI did not return the stored script source.');
+      source = data.contents; sourcePre.textContent = source;
+      sourceStatus.textContent = 'Stored source — host execution is unavailable. Copying does not execute it.';
+    } catch (error) {
+      if (epoch === toolsSessionEpoch && request === sourceEpoch) sourceStatus.textContent = 'Source unavailable: ' + error.message;
+    } finally { if (epoch === toolsSessionEpoch && request === sourceEpoch) { sourceBusy = false; controls(); } }
+  });
+  copySource.addEventListener('click', async () => {
+    if (copySource.disabled || toolsSessionLocked || source === null) return;
+    const epoch = toolsSessionEpoch, request = sourceEpoch;
+    copySource.disabled = true;
+    try {
+      await navigator.clipboard.writeText(source);
+      if (epoch === toolsSessionEpoch && request === sourceEpoch) sourceStatus.textContent = 'Source copied. Nothing was executed.';
+    } catch (_) {
+      if (epoch === toolsSessionEpoch && request === sourceEpoch) sourceStatus.textContent = 'Could not copy. Select the source text and copy it manually.';
+    } finally { if (epoch === toolsSessionEpoch && request === sourceEpoch) controls(); }
+  });
   explain.addEventListener('click', async () => {
-    if (busy || !lastResult) return;
+    if (busy || toolsSessionLocked || !lastResult) return;
     busy = true; explain.disabled = true; runBtn.disabled = true;
     try { await explainToolOutput(lastResult.label, lastResult.raw); }
-    finally { busy = false; explain.disabled = !lastResult; runBtn.disabled = !select.value; }
+    finally { busy = false; controls(); }
   });
 
   // Set default explainer text
@@ -135,9 +225,10 @@ function setupToolsPanel() {
   }
 
   runBtn.addEventListener("click", async () => {
-    if (busy) return;
+    if (busy || toolsSessionLocked) return;
     const id = $("tools-select").value;
-    if (!id) return;
+    if (!toolCanRun(id)) return;
+    const epoch = toolsSessionEpoch;
     const paramsText = $("tools-params").value.trim();
     let params = {};
     if (useAdvanced.checked && paramsText) {
@@ -158,7 +249,7 @@ function setupToolsPanel() {
     const pre = outputCard ? outputCard.querySelector("pre") : null;
     const summaryBoxLocal = $("tools-explain-box");
 
-    busy = true; runBtn.disabled = true; explain.disabled = true;
+    busy = true; controls();
     if (summaryBoxLocal) {
       summaryBoxLocal.textContent = 'Running tool…' + (lastResult ? ' Previous output remains below until a result arrives.' : '');
     }
@@ -179,8 +270,8 @@ function setupToolsPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool_id: id, params })
       });
-      if (!res.ok) throw new Error("HTTP " + res.status);
-      const data = await res.json();
+      const data = await toolResponse(res, epoch);
+      if (epoch !== toolsSessionEpoch) return;
 
       const outcome = toolOutcome(data);
       if (pre) pre.textContent = outcome.raw;
@@ -190,12 +281,13 @@ function setupToolsPanel() {
       debugLog("info", "POST /tools/run OK for " + id);
 
     } catch (err) {
+      if (epoch !== toolsSessionEpoch) return;
       if (summaryBoxLocal) {
         summaryBoxLocal.textContent = 'The tool request failed: ' + err.message + (lastResult ? ' Previous output remains below; it does not describe this attempt.' : ' No output was received.');
         summaryBoxLocal.dataset.state = 'error';
       }
       debugLog("error", "POST /tools/run failed: " + err.message);
-    } finally { busy = false; runBtn.disabled = !select.value; explain.disabled = !lastResult; }
+    } finally { busy = false; controls(); }
   });
 }
 
@@ -333,6 +425,11 @@ function setupScriptsPanel() {
   const btn       = $("scripts-generate-btn");
   const promptBox = $("scripts-prompt");
   if (!btn || !promptBox) return;
+  let generating = false;
+  scriptsClearPrivate = () => {
+    promptBox.value = ''; if ($('scripts-output')) $('scripts-output').value = '';
+    document.getElementById('scripts-danger-banner')?.remove();
+  };
 
   // Preset buttons that talk to the Files panel context
   const fullBackupBtn = $("scripts-preset-backup-folder");
@@ -453,8 +550,11 @@ function setupScriptsPanel() {
 
   // Generate — bundled AI streaming with LM Studio fallback
   btn.addEventListener("click", async () => {
+    if (generating || toolsSessionLocked) return;
     const prompt = promptBox.value.trim();
     if (!prompt) return;
+    const epoch = toolsSessionEpoch;
+    generating = true;
 
     const outputEl = $("scripts-output");
     outputEl.value = "";
@@ -474,6 +574,7 @@ function setupScriptsPanel() {
         max_tokens: 1200,
         temperature: 0.1,
         onDelta: (chunk) => {
+          if (epoch !== toolsSessionEpoch) return;
           accumulated += chunk;
           outputEl.value = accumulated;
           outputEl.scrollTop = outputEl.scrollHeight;
@@ -486,7 +587,7 @@ function setupScriptsPanel() {
     }
 
     // 2) Fallback: /chat
-    if (!streamed) {
+    if (!streamed && epoch === toolsSessionEpoch) {
       try {
         const res = await fetch("/chat", {
           method: "POST",
@@ -498,24 +599,25 @@ function setupScriptsPanel() {
             mode: "dev",
           })
         });
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data = await res.json();
-        accumulated = data.reply || data.answer || "";
-        outputEl.value = accumulated;
+        const data = await toolResponse(res, epoch);
+        if (epoch === toolsSessionEpoch) {
+          accumulated = data.reply || data.answer || "";
+          outputEl.value = accumulated;
+        }
         debugLog("info", "Scripts: /chat fallback OK");
       } catch (err) {
-        outputEl.value = "# Error: " + err.message;
+        if (epoch === toolsSessionEpoch) outputEl.value = "# Error: " + err.message;
         debugLog("error", "Scripts: all AI routes failed: " + err.message);
       }
     }
 
     // Danger scan — runs regardless of which AI path was used
-    if (accumulated && accumulated.trim() && !accumulated.startsWith("# Error")) {
+    if (epoch === toolsSessionEpoch && accumulated && accumulated.trim() && !accumulated.startsWith("# Error")) {
       const flags = _scanScriptDanger(accumulated);
       if (flags.length) _showScriptWarning(flags, outputEl);
     }
 
-    btn.disabled = false;
+    generating = false; btn.disabled = false;
     btn.textContent = "Ask AI for script";
   });
 }

@@ -14,34 +14,40 @@ import { HostStartCard } from '../src/host-start-view';
 
 export default function SettingsScreen() {
   const state = useCompanion(), router = useRouter(); const [error, setError] = useState('');
-  const [showRemote, setShowRemote] = useState(false), refreshing = useRef<Promise<void> | null>(null);
-  useEffect(() => { setShowRemote(false); }, [state.foreground, state.pairing?.device_id]);
+  const [showRemote, setShowRemote] = useState(false), [advanced, setAdvanced] = useState(false), [connectionDetails, setConnectionDetails] = useState(false);
+  const refreshing = useRef<Promise<void> | null>(null);
+  useEffect(() => { setShowRemote(false); setAdvanced(false); setConnectionDetails(false); }, [state.foreground, state.pairing?.device_id]);
   const checkConnection = () => { if (refreshing.current || !state.foreground || state.pairingPhase !== 'idle' || state.sending || state.client?.hasActiveMutations) return; refreshing.current = state.refresh().finally(() => { refreshing.current = null; }); };
   const plan = privateNetworkPlan(state.pairing?.origin || '');
   if (!state.pairing) return <Redirect href="/pair" />;
-  return <Screen><Section title="A place in your home." detail="Your connection, your preferences." />
-    <Card><Label>Paired with</Label><Copy size={25} weight="600">{state.bootstrap?.node.name || state.pairing.node_name}</Copy><Copy>{state.connection === 'connected' ? 'Paired host reached over verified HTTPS' : state.connection === 'checking' ? 'Checking connection…' : state.connectionProblem?.title || 'Connection check needed'}</Copy><Copy size={12} muted>Latest connection check started {formatTime(state.connectionAttemptAt)}</Copy><Copy size={12} muted>Last connected {formatTime(state.checkedAt)}</Copy><Copy size={13} muted selectable>{state.pairing.origin}</Copy><Button secondary title="Refresh connection and capabilities" busy={state.connection === 'checking'} disabled={state.pairingPhase !== 'idle' || !state.foreground || state.sending || state.client?.hasActiveMutations} onPress={checkConnection} />{!!state.connectionError && <Notice error>{state.connectionError}</Notice>}<Button secondary title="Review replacement pairing" icon="qr-code-outline" disabled={state.pairingPhase !== 'idle' || state.sending} onPress={() => router.push({ pathname: '/pair', params: { replace: '1' } })} /></Card>
-    <HostStartCard />
-    <Card><Label>Away from home · optional</Label><Copy muted>Use your existing pairing through an externally managed private network. Opening this guide makes no connection changes.</Copy><Button secondary title={showRemote ? 'Hide private network setup' : 'Show private network setup'} icon="globe-outline" onPress={() => setShowRemote(value => !value)} />
-      {showRemote && state.foreground && <><Notice>{PRIVATE_NETWORK_LIMIT}</Notice><Copy muted>{plan.reason}</Copy>{plan.eligible && <><Label>Keep this pairing address</Label><Copy selectable>{plan.origin}</Copy><Copy selectable>Single-host route: {plan.route}</Copy><Copy>Allowed transport: TCP port {plan.port}</Copy></>}{PRIVATE_NETWORK_STEPS.map((step, index) => <Copy key={step} size={14}>{index + 1}. {step}</Copy>)}
-        <Button title="Check this paired connection" busy={state.connection === 'checking'} disabled={!plan.eligible || state.pairingPhase !== 'idle' || state.sending || state.client?.hasActiveMutations} onPress={checkConnection} />
-        <Copy size={13} muted>Last paired-host response: {formatTime(state.checkedAt)}. Host access and AI readiness are separate. This guide does not change or renew your TLS certificate.</Copy>
-        <Copy size={13} muted>Remote traffic crosses the Internet through your chosen encrypted private network. Its account, route and gateway are managed outside TLI. Do not publish TLI through a public tunnel or disable certificate verification.</Copy>
-        {PRIVATE_NETWORK_LINKS.map(link => <Button key={link.url} secondary title={link.title} onPress={() => void Linking.openURL(link.url).catch(() => setError('The setup reference could not be opened. Try again when ready.'))} />)}</>}
+  return <Screen><Section title="Connection and settings" detail="Your TLI computer, app updates and preferences." />
+    <Card><Label>Your computer</Label><Copy size={25} weight="600">{state.bootstrap?.node.name || state.pairing.node_name}</Copy>
+      <Copy>{state.connection === 'connected' && state.foreground ? 'Connected securely' : state.connection === 'checking' ? 'Checking connection…' : state.connectionProblem?.title || 'Connection check needed'}</Copy>
+      {!!state.connectionError && <Notice error>{state.connectionError}</Notice>}
+      <Copy muted size={13}>Use your home Wi-Fi and keep TLI running on this computer. Conversations stay saved there when the phone disconnects.</Copy>
+      <Button secondary title="Check connection" busy={state.connection === 'checking'} disabled={state.pairingPhase !== 'idle' || !state.foreground || state.sending || state.client?.hasActiveMutations} onPress={checkConnection} />
+      {state.connectionProblem?.kind === 'permission' && <Button secondary title="Open phone settings" onPress={() => void Linking.openSettings()} />}
+      <Button secondary title="Scan a new connection code" icon="qr-code-outline" disabled={state.pairingPhase !== 'idle' || state.sending} onPress={() => router.push({ pathname: '/pair', params: { replace: '1' } })} />
+      <Button secondary title={connectionDetails ? 'Hide connection details' : 'Connection details'} onPress={() => setConnectionDetails(value => !value)} />
+      {connectionDetails && <><Copy size={12} muted>Latest check started {formatTime(state.connectionAttemptAt)}</Copy><Copy size={12} muted>Last connected {formatTime(state.checkedAt)}</Copy><Copy size={13} muted selectable>{state.pairing.origin}</Copy><AIReadinessNotice /></>}
     </Card>
-    <Card><Label>Keep useful work together</Label><Button secondary title="Notes & fixes" icon="book-outline" onPress={() => router.push('/notebook')} /><Button secondary title="Computers and reports" icon="desktop-outline" onPress={() => router.push('/computers')} /><Button secondary title="Troubleshooting" icon="construct-outline" onPress={() => router.push('/cases')} /></Card>
-    <Card><AIReadinessNotice /></Card>
     <ReleaseInfo />
     <AppearanceSettings />
-    <Card><Label>Notes & fixes</Label><Copy muted>Your private saved details and preferences. Choose which notes to attach to a question.</Copy><Button secondary title="Open Notes & fixes" icon="book-outline" onPress={() => router.push('/notebook')} /></Card>
-    <Card><Label>Data & Recovery</Label><Copy muted>Check selected saved data on your TLI and read manual backup guidance. This phone is not a backup.</Copy><Button secondary title="Open Data & Recovery" icon="document-text-outline" onPress={() => router.push('/data-recovery')} /></Card>
-    <Card><Label>When you need a hand</Label><Copy muted>At home, use a network that can reach the paired address and allow local network access in phone settings. Away from home, check your configured private-network route and keep the TLI host and gateway running. If the address or certificate changed, review a new desktop pairing code; this app never bypasses trust checks.</Copy><Button secondary title="Open phone settings" onPress={() => void Linking.openSettings()} /></Card>
-    <Card><Label>Privacy, by design</Label><Copy muted>This phone stores its revocable credential in protected platform storage. Conversations and reports belong to your TLI owner account. Photo uploads use zero retention; preview files are removed after submission or removal. Commands and messages are never queued for later delivery.</Copy></Card>
-    <Button secondary title="Forget this TLI" icon="unlink-outline" onPress={() => Alert.alert('Forget this TLI?', 'This removes the credential and conversation view from this phone. Revoke the phone in Phone Companion on TLI desktop to end its server access. You can pair again with a new code.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Forget TLI', style: 'destructive', onPress: () => void state.forget().catch(error => setError(errorText(error))) }])} />
-    {!!error && <Notice error>{error}</Notice>}<Copy size={12} muted>TLI Companion · Private beta 0.1.0{ '\n' }One owner. One paired TLI installation.</Copy>
+    <Card><Label>Advanced connection</Label><Copy muted size={13}>Optional computer-start and externally managed network settings.</Copy><Button secondary title={advanced ? 'Hide advanced connection' : 'Advanced connection options'} onPress={() => setAdvanced(value => !value)} /></Card>
+    {advanced && <><HostStartCard />
+      <Card><Label>Existing private-network setup</Label><Copy muted>This beta is designed for home Wi-Fi. An existing external private-network setup can use the saved connection; this guide does not configure remote access.</Copy><Button secondary title={showRemote ? 'Hide private network setup' : 'Show private network setup'} icon="globe-outline" onPress={() => setShowRemote(value => !value)} />
+        {showRemote && state.foreground && <><Notice>{PRIVATE_NETWORK_LIMIT}</Notice><Copy muted>{plan.reason}</Copy>{plan.eligible && <><Label>Keep this pairing address</Label><Copy selectable>{plan.origin}</Copy><Copy selectable>Single-host route: {plan.route}</Copy><Copy>Allowed transport: TCP port {plan.port}</Copy></>}{PRIVATE_NETWORK_STEPS.map((step, index) => <Copy key={step} size={14}>{index + 1}. {step}</Copy>)}
+          <Button title="Check this paired connection" busy={state.connection === 'checking'} disabled={!plan.eligible || state.pairingPhase !== 'idle' || state.sending || state.client?.hasActiveMutations} onPress={checkConnection} />
+          <Copy size={13} muted>Last paired-host response: {formatTime(state.checkedAt)}. Host access and AI readiness are separate. This guide does not change or renew your TLS certificate.</Copy>
+          <Copy size={13} muted>Remote traffic crosses the Internet through your chosen encrypted private network. Its account, route and gateway are managed outside TLI. Do not publish TLI through a public tunnel or disable certificate verification.</Copy>
+          {PRIVATE_NETWORK_LINKS.map(link => <Button key={link.url} secondary title={link.title} onPress={() => void Linking.openURL(link.url).catch(() => setError('The setup reference could not be opened. Try again when ready.'))} />)}</>}
+      </Card>
+    </>}
+    <Card><Label>Privacy</Label><Copy muted size={13}>The phone keeps its connection credential in protected storage. Your conversations and notes belong to your TLI account. Photos are sent only after review and Send, with no image retention. Messages and commands are never queued for later delivery.</Copy><Copy muted size={13}>Keyboard dictation is provided by your keyboard app and follows its privacy settings. Review the text before sending it to TLI.</Copy></Card>
+    <Button secondary title="Forget this TLI" icon="unlink-outline" onPress={() => Alert.alert('Forget this TLI?', 'This removes the saved connection and conversation view from this phone. To end its access on the computer, remove the phone from Connect phone in TLI. You can connect again with a new code.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Forget TLI', style: 'destructive', onPress: () => void state.forget().catch(error => setError(errorText(error))) }])} />
+    {!!error && <Notice error>{error}</Notice>}
   </Screen>;
 }
-
 function PalettePreview({ theme }: { theme: Theme }) {
   return <View accessible={false} importantForAccessibility="no-hide-descendants" style={{ backgroundColor: theme.background, height: 86, borderRadius: 12, overflow: 'hidden', flexDirection: 'row', borderWidth: 1, borderColor: theme.border }}>
     <View style={{ width: 22, backgroundColor: theme.nav, padding: 6, gap: 5 }}><View style={{ width: 10, height: 10, borderRadius: 3, backgroundColor: theme.glow }} /><View style={{ width: 10, height: 3, borderRadius: 2, backgroundColor: theme.navMuted }} /></View>
@@ -73,3 +79,4 @@ function AppearanceSettings() {
     </Screen></SafeAreaView></Modal>
   </Card>;
 }
+

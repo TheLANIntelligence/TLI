@@ -32,18 +32,29 @@ def test_sensitive_routes_require_session_when_pin_enabled(client, pin_required,
     if json_body is not None:
         kwargs["json"] = json_body
 
-    res = request(path, **kwargs)
+    if path.startswith("/system/lm_studio/") or path in {"/device/nickname", "/system/node/name"}:
+        # Exercise PIN admission using an actual same-origin browser transport;
+        # unsupported HTTP remote/proxy transport is separately forbidden.
+        res = request("https://testserver" + path, headers={"Origin": "https://testserver"}, **kwargs)
+    else:
+        res = request(path, **kwargs)
 
     assert res.status_code == 401
 
 
-def test_emergency_pin_reset_is_available_during_lockout(client, monkeypatch):
-    """Recovery must remain reachable when the PIN session is unavailable."""
-    monkeypatch.setattr(S, "clear_pin_config", lambda: None)
-    monkeypatch.setattr(S, "revoke_all_sessions", lambda: None)
-    res = client.post("/system/pin/emergency-reset")
-    assert res.status_code == 200
-    assert res.json()["ok"] is True
+def test_emergency_pin_reset_requires_unlocked_browser(tmp_path, monkeypatch):
+    """An anonymous reset must not bypass the PIN or overwrite security state."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import system_routes
+    monkeypatch.setattr(S, "PIN_CONFIG_FILE", tmp_path / "pin.json")
+    S.save_pin_config("a" * 64, "b" * 64)
+    before = S.PIN_CONFIG_FILE.read_bytes()
+    app = FastAPI()
+    app.include_router(system_routes.router)
+    with TestClient(app, base_url="https://localhost", headers={"Origin": "https://localhost"}) as browser:
+        assert browser.post("/system/pin/emergency-reset").status_code == 401
+    assert S.PIN_CONFIG_FILE.read_bytes() == before
 
 
 def test_builder_command_runner_blocks_shell_operators(tmp_path):

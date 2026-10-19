@@ -655,7 +655,8 @@
 <p>Edit prepares the saved routine for a revision-checked update. Duplicate creates a separate editable draft. Archive hides a routine from the active list and blocks runs; Show archived and Restore bring it back. Favorites appear on Home in this browser and always open a current-target review before execution. Conflicting edits or changed devices require a fresh review; running routines cannot be edited.</p>
 <p>Review all current targets and acknowledge the complete plan before Run reviewed routine. Inspect per-step results and saved receipts for partial or uncertain outcomes; do not assume a failed connection means no device changed. There is no automatic retry or automatic schedule. Native Companion continues to use its existing scenes; desktop routine synchronization requires a separate Companion release. Native app distribution is unchanged by this release.</p>
 <h3 id="more">More → Installed apps and Advanced tools</h3>
-<p>Installed apps opens packages already installed on the host. Builder, Scripts, raw Utilities and Hub package management remain under Advanced tools and can be pinned. Existing projects, registries, apps and app storage stay available. Package management replaces the prominent Hub storefront; it does not add a public marketplace.</p>
+<p>Installed apps opens single-file HTML/JavaScript packages in an isolated local view. Host-connected features, external assets and the old storage bridge are unavailable; declared permissions do not grant access. Existing package files and saved browser storage are preserved. Builder, Scripts, Utilities and Hub package management remain under Advanced tools and can be pinned. Package management does not add a public marketplace.</p>
+<p>Hub changes validate package identifiers and preserve damaged metadata. An interrupted or unconfirmed change pauses Hub reads and changes while recovery copies remain available. Do not repeatedly install or delete a package after an uncertain result; review the recorded pending change first.</p>
 
     <h2 id="problems">Help → Fix a problem</h2>
 <p>Follow a problem through <strong>Describe → Choose computer → Review a check → Run → Review evidence → Record what helped</strong>. Opening a case, choosing a symptom or reviewing a suggested check does not run a diagnostic or send a Chat request.</p>
@@ -673,17 +674,17 @@
 
     <h2 id="tli-chat">Computers → Messages &amp; files</h2>
 <p>Choose a recipient and check its connection, then send a message or file. These are messages between users, not AI replies. Review message and transfer status before a deliberate retry after a failure.</p>
-<p>Local connections use reachable TLI peers. Optional cross-network configuration is separate and may use an external relay. Backgrounding or losing Wi-Fi does not authorize automatic replay of an action.</p>
+<p>Local connections use reachable, reviewed TLI peers. The older room-based cross-network relay is unavailable: its protocol did not verify peer identities. Existing settings and retained message history are preserved for private review, with explicit Stop or Disconnect for any older connection. This does not replace trusted LAN messaging or inference. Backgrounding or losing Wi-Fi does not authorize automatic replay of an action.</p>
 
 
     <h2 id="tools">More → Advanced tools → Utilities &amp; Scripts</h2>
 <p>Utilities starts with the question a diagnostic can answer. Choose the tool, inspect its target and labeled parameters, then run it. Review measured output before optionally asking AI for an explanation.</p>
-<p>Connectivity checks to public addresses contact the internet. The LM Studio model-list check reads model information; it does not prove generation. Custom scripts run code on the host and are not an OS security sandbox.</p>
-<p>Scripts generates a draft for your described task and target shell. Review, copy or download it. Generation does not execute it, and a backup script is not a completed backup.</p>
+<p>Connectivity checks to public addresses contact the internet. The LM Studio model-list check reads model information; it does not prove generation. Host execution of stored custom scripts is unavailable pending reviewed containment. Utilities still offers built-in checks and lets you view and copy stored script source.</p>
+<p>Scripts generates an editable draft for your described task and target shell. Review and copy the text. Generation does not execute it, and a backup script is not a completed backup. Pattern warnings are advisory; they do not prove that a script is safe.</p>
 <h3>Builder</h3>
 <p>Open the exact project folder, review its permissions, then choose the task mode. Inspect proposals and diffs before applying them. Applied changes, command execution and snapshot receipts describe different outcomes. Commands run with host access. Preserve unfinished drafts and use only a snapshot's recorded rollback scope.</p>
 <h3>Package management (TLI Hub)</h3>
-<p>Read the package source and effect. Install stores a package; a theme action changes appearance, a prompt action changes the prompt, and Run script on host executes code. A package listing is not vetting. Share on this host does not publish to a public store.</p>
+<p>Read the package source and effect. Install stores a package; a theme action changes appearance and a prompt action changes the prompt. Installed scripts offer View stored source and Copy source; the Installed tab also shows saved scripts missing from the selected catalogue. Host script execution is unavailable pending reviewed containment. Source is shown as text and is not executed. A package listing is not vetting. Share on this host does not publish to a public store.</p>
 
 
     <h2 id="settings">Settings</h2>

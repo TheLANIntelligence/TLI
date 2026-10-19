@@ -4,22 +4,21 @@ from __future__ import annotations
 import json
 import os
 import platform
+import ipaddress
 import re
 import subprocess
 import sys
-import uuid
-from datetime import datetime
-from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from enum import Enum
+from pydantic import BaseModel, Field
 
 import tli_state as S
 from process_utils import hidden_process_kwargs
-from routers.system_routes import require_session
+from browser_authority import browser_control_access
+from script_sources import list_tool_metadata, read_tool_source
 
 try:
     import psutil
@@ -30,38 +29,17 @@ router = APIRouter(tags=["tools"])
 
 
 # ============================================
-#  Tool registry (disk-backed)
+#  Legacy saved source is read-only; scripts are never host tools.
 # ============================================
 
-def _load_tools():
-    return S.load_json_file(S.TOOLS_INDEX_PATH, {})
-
-def _save_tools(tools):
-    S.save_json_file(S.TOOLS_INDEX_PATH, tools)
-
-def register_tool(tool_id, name, language, script_path, task_description):
-    tools = _load_tools()
-    tools[tool_id] = {"id": tool_id, "name": name, "language": language,
-                      "script_path": script_path, "task_description": task_description,
-                      "created_at": S.now_iso()}
-    _save_tools(tools)
-
 def list_tools():
-    return list(_load_tools().values())
+    return list_tool_metadata()
 
-def get_tool(tool_id):
-    return _load_tools().get(tool_id)
 
-def delete_tool(tool_id):
-    tools = _load_tools()
-    tool = tools.pop(tool_id, None)
-    _save_tools(tools)
-    if tool and tool.get("script_path"):
-        try:
-            Path(tool["script_path"]).unlink(missing_ok=True)
-        except Exception:
-            pass
-    return tool
+SCRIPT_RETIRED = (
+    "Host script execution is unavailable. Saved source files were preserved. "
+    "Use Scripts to draft code or view and export saved source; built-in diagnostics remain available."
+)
 
 
 # ============================================
@@ -163,12 +141,14 @@ def builtin_net_snapshot(params=None):
     result["raw_output"] = res.get("stdout") or res.get("stderr", "")
     return result
 
-def builtin_net_connectivity_diag(params=None):
+def builtin_net_connectivity_diag(params=None, *, check=None):
     hosts = ["127.0.0.1", "8.8.8.8", "1.1.1.1"]
     if isinstance(params, dict) and isinstance(params.get("hosts"), list):
         hosts = [str(h) for h in params["hosts"]]
     tests = []
     for host in hosts:
+        if check is not None:
+            check()
         is_win = platform.system().lower().startswith("win")
         cmd = ["ping", "-n" if is_win else "-c", "2", host]
         res = _run_subprocess(cmd, timeout=8)
@@ -210,108 +190,93 @@ BUILTIN_TOOLS = {
 #  Models & Endpoints
 # ============================================
 
-class ScriptLanguage(str, Enum):
-    bat = "bat"; ps1 = "ps1"; py = "py"
-
-class GenerateScriptRequest(BaseModel):
-    task_description: str
-    language: ScriptLanguage = ScriptLanguage.bat
-    script_name: Optional[str] = None
-
-class GenerateScriptResponse(BaseModel):
-    id: str; name: str; language: str; path: str; contents: str
-
 class SimpleToolRunRequest(BaseModel):
-    tool_id: str
+    tool_id: str = Field(min_length=1, max_length=128)
     params: Optional[Dict[str, Any]] = None
 
 
-def generate_script_with_llm(task_description, language="bat"):
-    payload = {
-        "model": S.MODEL_CONFIG.get("qwen", S.MODEL_CONFIG[S.DEFAULT_MODEL_KEY])["id"],
-        "messages": [
-            {"role": "system", "content": f"You generate ONLY valid {language} scripts. Add comments. No prose outside the script."},
-            {"role": "user", "content": f'Create a {language} script for: """{task_description}"""'},
-        ],
-        "temperature": 0.2, "max_tokens": 1200,
-    }
-    try:
-        resp = requests.post(S.LM_STUDIO_URL, json=payload, timeout=(S.HTTP_CONNECT_TIMEOUT, S.HTTP_READ_TIMEOUT_GEN))
-        resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f":: Script generation failed: {e}\n:: Task: {task_description}\n"
-
-
-@router.post("/tools/generate_script", response_model=GenerateScriptResponse)
-async def generate_script_endpoint(req: GenerateScriptRequest, _session=Depends(require_session)):
-    script_id = str(uuid.uuid4())
-    language = req.language.value
-    ext = {"bat": ".bat", "ps1": ".ps1", "py": ".py"}[language]
-    raw_name = req.script_name or f"tool_{language}_{script_id[:8]}"
-    name = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_name.strip()) or f"tool_{language}_{script_id[:8]}"
-    script_path = S.SCRIPTS_DIR / f"{name}{ext}"
-    script_code = generate_script_with_llm(req.task_description, language=language)
-    with script_path.open("w", encoding="utf-8") as f:
-        f.write(script_code)
-    register_tool(script_id, name, language, str(script_path), req.task_description)
-    return GenerateScriptResponse(id=script_id, name=name, language=language, path=str(script_path), contents=script_code)
+@router.post("/tools/generate_script")
+def generate_script_endpoint(check: Callable[[], None] = Depends(browser_control_access)):
+    check()
+    raise HTTPException(410, "The legacy script-file generator is retired. Use the Scripts drafting panel; existing source and registry files were preserved.", headers={"Cache-Control": "no-store"})
 
 @router.get("/tools/list_scripts")
-async def list_scripts_endpoint():
-    return {"tools": list_tools()}
+def list_scripts_endpoint(check: Callable[[], None] = Depends(browser_control_access)):
+    check()
+    result = list_tools()
+    check()
+    return {"tools": result}
+
+
+@router.get("/tools/scripts/{tool_id}/source")
+def tool_source_endpoint(tool_id: str, check: Callable[[], None] = Depends(browser_control_access)):
+    return read_tool_source(tool_id, check)
 
 @router.delete("/tools/delete_script/{tool_id}")
-async def delete_script_endpoint(tool_id: str, _session=Depends(require_session)):
-    tool = delete_tool(tool_id)
-    if not tool:
-        raise HTTPException(status_code=404, detail="Tool not found")
-    return {"status": "deleted", "tool": tool}
+def delete_script_endpoint(tool_id: str, check: Callable[[], None] = Depends(browser_control_access)):
+    check()
+    raise HTTPException(410, "Legacy script deletion is retired. Existing source and registry files were preserved; view or export the source instead.", headers={"Cache-Control": "no-store"})
 
 @router.get("/tools/list")
-async def tools_list_for_ui():
-    builtin_ui = [{"id": tid, "label": meta.get("label") or tid} for tid, meta in BUILTIN_TOOLS.items()]
-    script_ui = [{"id": t["id"], "label": t.get("name") or t["id"]} for t in list_tools()]
+def tools_list_for_ui(check: Callable[[], None] = Depends(browser_control_access)):
+    check()
+    builtin_ui = [{"id": tid, "label": meta.get("label") or tid, "kind": "builtin", "executable": True} for tid, meta in BUILTIN_TOOLS.items()]
+    saved = list_tools()
+    if any(t["id"] in BUILTIN_TOOLS for t in saved):
+        raise HTTPException(503, "The saved tool registry conflicts with a built-in identifier. It was preserved; review the original file before continuing.")
+    script_ui = [{"id": t["id"], "label": t.get("name") or t["id"], "kind": "script", "executable": False, "unavailable_reason": SCRIPT_RETIRED} for t in saved]
+    check()
     return {"tools": builtin_ui + script_ui}
 
 
-def _powershell_command():
-    if platform.system().lower().startswith("win"):
-        return ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File"]
-    return ["pwsh", "-NoLogo", "-NoProfile", "-File"]
+def _tool_params(tool_id: str, params: dict | None) -> dict:
+    params = params or {}
+    allowed = {"limit"} if tool_id == "sys_top_processes" else {"hosts"} if tool_id == "net_connectivity_diag" else set()
+    if set(params) - allowed:
+        raise HTTPException(422, "This built-in tool received unsupported parameters.")
+    if tool_id == "sys_top_processes":
+        limit = params.get("limit", 10)
+        if type(limit) is not int or not 1 <= limit <= 100:
+            raise HTTPException(422, "Choose from 1 to 100 processes.")
+        return {"limit": limit}
+    if tool_id == "net_connectivity_diag":
+        hosts = params.get("hosts", ["127.0.0.1", "8.8.8.8", "1.1.1.1"])
+        if not isinstance(hosts, list) or not 1 <= len(hosts) <= 10:
+            raise HTTPException(422, "Choose from 1 to 10 hostnames or IP addresses.")
+        for host in hosts:
+            if not isinstance(host, str) or not 1 <= len(host) <= 253:
+                raise HTTPException(422, "Each target must be a hostname or IP address.")
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.?", host):
+                    raise HTTPException(422, "Each target must be a hostname or IP address, without command options or a URL.")
+        return {"hosts": list(hosts)}
+    return {}
 
 
 @router.post("/tools/run")
-async def tools_run_for_ui(req: SimpleToolRunRequest, _session=Depends(require_session)):
-    if req.tool_id in BUILTIN_TOOLS:
-        handler = BUILTIN_TOOLS[req.tool_id].get("handler")
-        if not callable(handler):
-            raise HTTPException(status_code=500, detail="Builtin tool handler not callable")
-        try:
-            result = handler(req.params or {})
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Builtin tool error: {e}")
-        output_text = result if isinstance(result, str) else json.dumps(result, indent=2, default=str)
-        return {"output": output_text, "exit_code": 0}
+def tools_run_for_ui(req: SimpleToolRunRequest, check: Callable[[], None] = Depends(browser_control_access)):
+    return run_builtin_tool(req.tool_id, req.params, check)
 
-    tool = get_tool(req.tool_id)
-    if not tool:
-        raise HTTPException(status_code=404, detail="Tool not found")
-    script_path = Path(tool["script_path"])
-    if not script_path.exists():
-        raise HTTPException(status_code=404, detail="Script file missing on disk")
-    language = tool["language"]
-    if language == "bat":
-        if not platform.system().lower().startswith("win"):
-            raise HTTPException(status_code=400, detail=".bat not supported on non-Windows")
-        cmd = ["cmd.exe", "/c", str(script_path)]
-    elif language == "ps1":
-        cmd = _powershell_command() + [str(script_path)]
-    elif language == "py":
-        cmd = [sys.executable or "python", str(script_path)]
-    else:
-        raise HTTPException(status_code=400, detail="Unsupported script language")
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(S.SCRIPTS_DIR), shell=False,
-                          **hidden_process_kwargs())
-    output = proc.stdout.strip() or proc.stderr.strip() or f"Exit code {proc.returncode}"
-    return {"output": output, "exit_code": proc.returncode}
+
+def run_builtin_tool(tool_id: str, params: dict | None, check: Callable[[], None]):
+    """Shared explicit built-in dispatch; callers must carry captured authority."""
+    check()
+    if tool_id not in BUILTIN_TOOLS:
+        raise HTTPException(410, SCRIPT_RETIRED, headers={"Cache-Control": "no-store"})
+    params = _tool_params(tool_id, params)
+    handler = BUILTIN_TOOLS[tool_id].get("handler")
+    if not callable(handler):
+        raise HTTPException(500, "Builtin tool handler not callable")
+    check()
+    try:
+        result = handler(params, check=check) if tool_id == "net_connectivity_diag" else handler(params)
+    except HTTPException:
+        raise
+    except Exception:
+        check()
+        raise HTTPException(503, "The built-in diagnostic could not complete. No automatic retry was made.") from None
+    check()
+    output_text = result if isinstance(result, str) else json.dumps(result, indent=2, default=str)
+    return {"output": output_text, "exit_code": 0}

@@ -155,6 +155,35 @@
     }
   }
 let _savetoCurrentPath = "";
+let _savetoEpoch = 0, _savetoRead = 0, _savetoReady = true, _savetoLocked = false, _savetoBusy = false, _savetoHasOptions = false;
+const saveToCurrent = token => _savetoReady && !_savetoLocked && token.epoch === _savetoEpoch && token.read === _savetoRead;
+function clearSaveToPicker() {
+  _savetoEpoch++; _savetoReady = false; _savetoBusy = false; _savetoHasOptions = false; _savetoCurrentPath = "";
+  for (const id of ['mm2-saveto-path', 'mm2-saveto-free', 'mm2-saveto-picker']) {
+    const node = el(id); if (node) node.textContent = '';
+  }
+  el('mm2-saveto-picker')?.classList.add('hidden');
+  if (el('mm2-saveto-path')) el('mm2-saveto-path').textContent = 'Unlock TLI, then check the destination again.';
+  status('Storage access changed. Check the current destination before making another change.');
+}
+window.addEventListener?.('tli-session-locked', () => { _savetoLocked = true; clearSaveToPicker(); });
+window.addEventListener?.('tli-session-unlocked', () => { _savetoLocked = false; _savetoEpoch++; });
+window.addEventListener?.('tli-private-observation-ready', () => { if (!_savetoLocked) _savetoReady = true; });
+window.addEventListener?.('pagehide', clearSaveToPicker);
+async function saveToRequest(url, token, options = {}) {
+  if (!saveToCurrent(token)) throw Error('Storage access changed.');
+  const response = await fetch(url, {cache: 'no-store', signal: AbortSignal.timeout(10000), ...options});
+  if (!saveToCurrent(token)) throw Error('Storage access changed.');
+  const data = await response.json().catch(() => null);
+  if (!saveToCurrent(token)) throw Error('Storage access changed.');
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent(new CustomEvent('tli-session-locked'));
+    throw Error('Storage access changed.');
+  }
+  if (!response.ok || data?.ok === false) throw Error(typeof data?.detail === 'string' ? data.detail : data?.error || `HTTP ${response.status}`);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('Storage response unreadable.');
+  return data;
+}
 
 async function loadSaveToPicker() {
   const pathEl   = el("mm2-saveto-path");
@@ -162,15 +191,49 @@ async function loadSaveToPicker() {
   const picker   = el("mm2-saveto-picker");
   const changeBtn = el("mm2-saveto-change-btn");
   if (!pathEl) return;
+  // Bind recovery before any failed/paused read can return.
+  if (changeBtn && !changeBtn.__stb) {
+    changeBtn.__stb = true;
+    changeBtn.addEventListener("click", async () => {
+      if (_savetoLocked) return;
+      if (!_savetoReady) { window.EventInterpreter?.retry?.(); return; }
+      const epoch = _savetoEpoch;
+      if (!_savetoHasOptions) await loadSaveToPicker();
+      if (epoch !== _savetoEpoch || !_savetoReady || _savetoLocked || !_savetoHasOptions || !picker) return;
+      const isHidden = picker.classList.contains("hidden");
+      picker.classList.toggle("hidden", !isHidden);
+      changeBtn.textContent = isHidden ? "Done" : "Change";
+    });
+  }
+  // Opening or refreshing after recovery is read-only; previous choices are never replayed.
+  if (!_savetoReady || _savetoLocked) return;
+  const token = {epoch: _savetoEpoch, read: ++_savetoRead};
+  _savetoHasOptions = false; _savetoCurrentPath = '';
+  pathEl.textContent = 'Checking destination…';
+  if (freeEl) freeEl.textContent = '';
+  if (picker) picker.textContent = '';
 
   // Show the selected destination immediately; USB discovery may take longer.
   let locData = null, usbData = null;
-  try { locData = await api("/api/ai/storage/location"); }
-  catch (e) { pathEl.textContent = "Unknown"; status(e.message); return; }
+  try {
+    locData = await saveToRequest("/api/ai/storage/location", token);
+    if (!saveToCurrent(token)) return;
+    if (typeof locData.path !== 'string' || !locData.path) throw Error('Storage destination unreadable.');
+  }
+  catch (e) { if (saveToCurrent(token)) { pathEl.textContent = "Unknown"; status(e.message); } return; }
   _savetoCurrentPath = locData.path || "";
   pathEl.textContent = _savetoCurrentPath;
   if (freeEl) freeEl.textContent = locData.free_gb != null ? `${locData.free_gb} GB free` : "Free space unknown";
-  try { usbData = await api("/devices/usb", {signal: AbortSignal.timeout(5000)}); } catch {}
+  try {
+    usbData = await saveToRequest("/devices/usb", token, {signal: AbortSignal.timeout(5000)});
+    if (!saveToCurrent(token)) return;
+    if (!Array.isArray(usbData.devices)) throw Error('USB destinations unreadable.');
+  } catch (e) {
+    if (!saveToCurrent(token)) return;
+    status('USB destinations unavailable: ' + e.message + '. The current storage destination is unchanged.');
+    usbData = null;
+  }
+  if (!saveToCurrent(token)) return;
 
   // Build options: default TLI location + each USB drive
   const sep = _savetoCurrentPath.includes("/") ? "/" : "\\";
@@ -209,43 +272,38 @@ async function loadSaveToPicker() {
         </span>
       </button>`;
     }).join("");
+    _savetoHasOptions = true;
 
     picker.querySelectorAll(".mm2-saveto-option").forEach(btn => {
       btn.addEventListener("click", async () => {
+        if (!saveToCurrent(token) || _savetoBusy) return;
         const newPath = btn.getAttribute("data-saveto-path");
         if (!newPath) return;
-        btn.disabled = true;
+        btn.disabled = true; _savetoBusy = token;
         try {
-          const r = await fetch("/api/ai/storage/location", {
+          const d = await saveToRequest("/api/ai/storage/location", token, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ path: newPath }),
           });
-          const d = await r.json();
-          if (r.ok && d.ok) {
+          if (!saveToCurrent(token)) return;
+          if (d.ok === true && typeof d.path === 'string' && d.path) {
             _savetoCurrentPath = d.path || newPath;
             pathEl.textContent = _savetoCurrentPath;
-            freeEl.textContent = "";
+            if (freeEl) freeEl.textContent = "";
             // Refresh with updated free space
-            setTimeout(loadSaveToPicker, 200);
+            setTimeout(() => { if (saveToCurrent(token)) loadSaveToPicker(); }, 200);
             if (picker) picker.classList.add("hidden");
-          } else { status(d.detail || d.error || "Could not change storage location."); }
-        } catch (e) { status(e.message); }
-        btn.disabled = false;
+          } else { throw Error('Storage change acknowledgement unreadable.'); }
+        } catch (e) { if (saveToCurrent(token)) status('Storage change unconfirmed: ' + e.message + '. Check the current destination before trying again.'); }
+        finally {
+          if (_savetoBusy === token) _savetoBusy = false;
+          if (saveToCurrent(token)) btn.disabled = false;
+        }
       });
     });
   }
 
-  // Wire Change button (idempotent)
-  if (changeBtn && !changeBtn.__stb) {
-    changeBtn.__stb = true;
-    changeBtn.addEventListener("click", () => {
-      if (!picker) return;
-      const isHidden = picker.classList.contains("hidden");
-      picker.classList.toggle("hidden", !isHidden);
-      changeBtn.textContent = isHidden ? "Done" : "Change";
-    });
-  }
 }
 
 // Expose so mesh.js "Use for AI models" can refresh it after setting a path

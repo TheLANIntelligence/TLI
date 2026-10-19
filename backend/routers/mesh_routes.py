@@ -22,16 +22,39 @@ import peer_pairing
 import peer_presentation
 import peer_connections as connections
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 
 import tli_state as S
 from tli_state import NodeConfig
 
-from routers.system_routes import require_session
+from routers.system_routes import require_session, _observation_access, _private_observation
 from license_gate import gate as _gate
 
-router = APIRouter(tags=["mesh"], route_class=peer_trust.BoundedPeerRoute)
+class _MeshSettingsRoute(peer_trust.BoundedPeerRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+        if self.path not in {"/mesh/node/identity", "/mesh/node", "/mesh/directory", "/mesh/status"}:
+            return handler
+        async def private_response(request):
+            try:
+                response = await handler(request)
+            except RequestValidationError:
+                detail = ("Provide a valid bounded computer name and role." if self.path == "/mesh/node/identity"
+                          else "Private computer information is unavailable.")
+                return JSONResponse({"detail": detail},
+                                    status_code=422, headers={"Cache-Control": "no-store"})
+            except HTTPException as error:
+                error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
+                raise
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        return private_response
+
+
+router = APIRouter(tags=["mesh"], route_class=_MeshSettingsRoute)
 
 
 @router.post('/agent/peer/status')
@@ -269,33 +292,57 @@ def _ensure_host_in_mesh_directory() -> None:
 # ============================================
 
 @router.get("/mesh/node")
-def get_node_identity(_session=Depends(require_session)):
-    cfg = S.load_node_config()
-    _refresh_own_host_address(cfg)
+def get_node_identity_http(check=Depends(_observation_access)):
+    return _mesh_read_response(get_node_identity, check)
+
+
+def _mesh_read_response(reader, check):
+    # Encode within the captured authority boundary: a private value that cannot
+    # be serialized is unavailable, and revocation after encoding still denies it.
+    with _private_observation(check):
+        result = reader(check=check)
+        return JSONResponse(jsonable_encoder(result), headers={"Cache-Control": "no-store"})
+
+
+def _existing_mesh_node(check):
+    cfg = _mesh_observation(lambda: S.read_node_config(check=check) if check is not None else S.read_node_config(), check)
+    if cfg is None:
+        raise HTTPException(503, "Saved computer identity is unavailable.", headers={"Cache-Control": "no-store"})
+    return cfg
+
+
+def get_node_identity(_session=None, *, check=None):
+    cfg = _existing_mesh_node(check)
     if cfg.role == "host":
         join_mode = "host"
     elif cfg.role == "member":
         join_mode = "member"
     else:
         join_mode = "standalone"
-    now = S.now_iso()
-    cfg.updated_at = now
-    S.save_node_config(cfg)
-    return {
+    result = {
         "node_id": cfg.node_id, "display_name": cfg.node_name, "role": cfg.role,
         "join_mode": join_mode, "host_address": cfg.host_address,
         "created_at": cfg.created_at, "last_seen": cfg.updated_at, "is_host": cfg.role == "host",
     }
+    if check is not None:
+        check()
+    return result
 
 
 @router.get("/mesh/status")
-def mesh_health_status(_session=Depends(require_session)):
-    """Smoke-test endpoint: returns full presence picture for a single node."""
-    cfg = S.load_node_config()
-    directory = S.load_mesh_directory()
+def mesh_health_status_http(check=Depends(_observation_access)):
+    return _mesh_read_response(mesh_health_status, check)
+
+
+def mesh_health_status(_session=None, *, check=None):
+    """Project saved identity and cached presence without refreshing either."""
+    cfg = _existing_mesh_node(check)
+    directory = _mesh_observation(lambda: S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory(), check)
     online_ids, offline_ids, unknown_ids = [], [], []
     for dev_id, d in directory.items():
-        state = connections.snapshot(dev_id,d) if dev_id != cfg.node_id else {'online':True,'fresh':True}
+        if check is not None:
+            check()
+        state = _mesh_peer_observation(dev_id, d, check)[0] if dev_id != cfg.node_id else {'online':True,'fresh':True}
         if state['online'] is True and state['fresh']:
             online_ids.append(dev_id)
         elif state['online'] is False and state['fresh']:
@@ -304,7 +351,7 @@ def mesh_health_status(_session=Depends(require_session)):
             unknown_ids.append(dev_id)
     self_in_dir = cfg.node_id in directory
     self_entry  = directory.get(cfg.node_id, {})
-    return {
+    result = {
         "node_id":         cfg.node_id,
         "node_name":       cfg.node_name,
         "role":            cfg.role,
@@ -319,29 +366,21 @@ def mesh_health_status(_session=Depends(require_session)):
         "offline_nodes":   offline_ids,
         "unknown_nodes":   unknown_ids,
     }
+    if check is not None:
+        check()
+    return result
 
 
 class UpdateNodeIdentityRequest(BaseModel):
-    node_name: Optional[str] = None
-    role: Optional[str] = None
+    node_name: Optional[str] = Field(default=None, max_length=256)
+    role: Optional[str] = Field(default=None, max_length=32)
 
 
 @router.post("/mesh/node/identity")
-def update_node_identity(body: UpdateNodeIdentityRequest, _session=Depends(require_session)):
-    cfg = S.load_node_config()
-    if body.node_name is not None:
-        name = body.node_name.strip()
-        if not name:
-            raise HTTPException(status_code=400, detail="node_name cannot be empty")
-        cfg.node_name = name[:64]
-    if body.role is not None:
-        role = body.role.strip().lower()
-        if role not in ("standalone", "host", "member"):
-            raise HTTPException(status_code=400, detail="Invalid role; must be standalone, host, or member")
-        cfg.role = role
-    cfg.updated_at = S.now_iso()
-    S.save_node_config(cfg)
-    return {"ok": True, "node_id": cfg.node_id, "node_name": cfg.node_name, "role": cfg.role}
+def update_node_identity(body: UpdateNodeIdentityRequest, check=Depends(_observation_access)):
+    with _private_observation(check):
+        saved = S.update_node_settings(name=body.node_name, role=body.role, check=check)
+        return {"ok": True, **saved}
 
 
 @router.post("/mesh/node/become_host")
@@ -475,12 +514,39 @@ def _peer_display_name(device_id, entry):
 
 
 @router.get("/mesh/directory", response_model=MeshDirectoryResponse)
-def get_mesh_directory(_session=Depends(require_session)):
-    node_cfg = S.load_node_config()
-    _ensure_host_in_mesh_directory()
-    raw = S.load_mesh_directory()
+def get_mesh_directory_http(check=Depends(_observation_access)):
+    return _mesh_read_response(get_mesh_directory, check)
+
+
+def _mesh_peer_observation(device_id, entry, check):
+    if check is None:
+        return (connections.snapshot(device_id, entry), peer_trust.message_readiness(device_id),
+                peer_trust.public_trust(device_id))
+    state = _mesh_observation(lambda: connections.snapshot(device_id, entry, check=check), check)
+    messaging = _mesh_observation(lambda: peer_trust.message_readiness(device_id, check=check), check)
+    trust = _mesh_observation(lambda: peer_trust.public_trust(device_id, check=check), check)
+    if state.get('trust_revision') != trust.get('trust_revision'):
+        reason = {'code': 'peer_changed',
+                  'message': "This computer's permissions changed during this view. Review its current status."}
+        state = {**state, 'state': 'unknown' if trust.get('trust_state') == 'verified' else 'review_required',
+                 'online': None, 'fresh': False, 'ready_grants': [], 'capabilities': {}, 'reason': reason}
+        messaging = {'available': False, **reason}
+    elif messaging.get('available') and (trust.get('trust_state') != 'verified' or
+                                        'messages' not in trust.get('reviewed_grants', [])):
+        # Message readiness is a separate read without a revision. A transient
+        # grant between matching earlier/final snapshots cannot enable it.
+        messaging = {'available': False, 'code': 'messages_permission_required',
+                     'message': 'Text messages permission is not confirmed by the final trust review.'}
+    return state, messaging, trust
+
+
+def get_mesh_directory(_session=None, *, check=None):
+    node_cfg = _existing_mesh_node(check)
+    raw = _mesh_observation(lambda: S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory(), check)
     devices = []
     for dev_id, d in raw.items():
+        if check is not None:
+            check()
         # Never include this node itself in the peer list — it's identified by this_device_id
         if dev_id == node_cfg.node_id:
             continue
@@ -488,31 +554,64 @@ def get_mesh_directory(_session=Depends(require_session)):
             status_enum = MeshDeviceStatusEnum(d.get("status", "pending"))
         except Exception:
             status_enum = MeshDeviceStatusEnum.pending
+        state, messaging, trust = _mesh_peer_observation(dev_id, d, check)
         devices.append(MeshDeviceEntry(
             device_id=dev_id, display_name=_peer_display_name(dev_id, d), ip=d.get("ip"),
             tli_port=int(d.get("tli_port", 8000)),
             status=status_enum, is_host=bool(d.get("is_host", False)), last_seen=d.get("last_seen"),
             labels=d.get("labels") or [], notes=d.get("notes"),
-            messaging=peer_trust.message_readiness(dev_id), discovered_name=_discovered_peer_name(d),
-            connection=connections.snapshot(dev_id,d),
-            **peer_trust.public_trust(dev_id),
+            messaging=messaging, discovered_name=_discovered_peer_name(d),
+            connection=state, **trust,
         ))
     host_device_id = node_cfg.node_id if node_cfg.role == "host" else None
-    return MeshDirectoryResponse(mode=node_cfg.role, this_device_id=node_cfg.node_id, host_device_id=host_device_id, devices=devices)
+    result = MeshDirectoryResponse(mode=node_cfg.role, this_device_id=node_cfg.node_id, host_device_id=host_device_id, devices=devices)
+    if check is not None:
+        check()
+    return result
 
 
 @router.get("/api/mesh/health")
-def mesh_health(_session=Depends(require_session)):
-    """Cached peer states. Opening a list never waits on other computers."""
-    self_health = {'is_self':True,'online':True}
+def mesh_health_http(response: Response, check=Depends(_observation_access)):
+    response.headers["Cache-Control"] = "no-store"
+    with _private_observation(check):
+        return mesh_health(check=check)
+
+
+def _mesh_observation(call, check):
+    if check is not None:
+        check()
     try:
-        from routers.system_routes import agent_health
-        self_health.update(agent_health())
+        result = call()
     except Exception:
-        pass
-    rows=get_lan_peers(_session)
+        if check is not None:
+            check()
+        raise
+    if check is not None:
+        check()
+    return result
+
+
+def mesh_health(_session=None, *, check=None):
+    """Cached peer states. Opening a list never waits on other computers."""
+    if check is not None:
+        check()
+    self_health = {'is_self':True,'online':True}
+    from routers.system_routes import agent_health
+    if check is not None:
+        # A denied or failed checked self observation must not become a fake
+        # healthy self row or authorize a subsequent private peer read.
+        self_health.update(_mesh_observation(lambda: agent_health(check=check), check))
+        rows = _mesh_observation(lambda: get_lan_peers(_session, check=check), check)
+    else:
+        try:
+            self_health.update(agent_health())
+        except Exception:
+            pass
+        rows = get_lan_peers(_session)
     nodes,previous=[self_health],[]
     for peer in rows['peers']:
+        if check is not None:
+            check()
         state=peer['connection']
         row={**peer,'is_self':False,'peer_id':peer['id'],'node_name':peer['name'],
              'connection_state':state['state'],'reason':state['reason'],
@@ -524,20 +623,50 @@ def mesh_health(_session=Depends(require_session)):
             previous.append(row)
         else:
             nodes.append(row)
-    return {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'nodes':nodes,'previous_discoveries':previous,'ts':S.now_iso()}
+    result = {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'nodes':nodes,'previous_discoveries':previous,'ts':S.now_iso()}
+    if check is not None:
+        check()
+    return result
 
 
 @router.get('/api/lan/peers')
-def get_lan_peers(_session=Depends(require_session)):
-    cfg=S.load_node_config()
-    raw=S.load_mesh_directory()
-    previous=peer_presentation.previous_discoveries(raw,self_id=cfg.node_id)
+def get_lan_peers_http(_session=Depends(require_session)):
+    # This route retains its separate existing client policy. The checked
+    # service is used by the private browser health projection below it.
+    return get_lan_peers(_session)
+
+
+def get_lan_peers(_session=None, *, check=None):
+    if check is not None:
+        cfg = _mesh_observation(lambda: S.read_node_config(check=check), check)
+        raw = _mesh_observation(lambda: S.load_mesh_directory(check=check), check)
+    else:
+        cfg = S.read_node_config()
+        raw = S.load_mesh_directory()
+    self_id = cfg.node_id if cfg is not None else None
+    previous = _mesh_observation(lambda: peer_presentation.previous_discoveries(raw, self_id=self_id), check)
     peers=[]
     for dev_id,entry in raw.items():
-        if dev_id==cfg.node_id or not entry.get('ip'):
+        if check is not None:
+            check()
+        if dev_id==self_id or not entry.get('ip'):
             continue
-        state=connections.snapshot(dev_id,entry)
-        messaging=peer_trust.message_readiness(dev_id)
+        if check is not None:
+            state = _mesh_observation(lambda: connections.snapshot(dev_id, entry, check=check), check)
+            messaging = _mesh_observation(lambda: peer_trust.message_readiness(dev_id, check=check), check)
+            trust = _mesh_observation(lambda: peer_trust.public_trust(dev_id, check=check), check)
+        else:
+            state = connections.snapshot(dev_id, entry)
+            messaging = peer_trust.message_readiness(dev_id)
+            trust = peer_trust.public_trust(dev_id)
+        if check is not None and state.get('trust_revision') != trust.get('trust_revision'):
+            # Do not join an earlier connection result to a newly changed grant
+            # snapshot and present the combination as current readiness.
+            reason = {'code': 'peer_changed',
+                      'message': "This computer's permissions changed during this view. Review its current status."}
+            state = {**state, 'state': 'unknown' if trust.get('trust_state') == 'verified' else 'review_required',
+                     'online': None, 'fresh': False, 'ready_grants': [], 'capabilities': {}, 'reason': reason}
+            messaging = {'available': False, **reason}
         if state['fresh'] and state['state']=='connected':
             available='messages' in state['ready_grants']
             messaging={'available':available,'code':'checked',
@@ -548,9 +677,11 @@ def get_lan_peers(_session=Depends(require_session)):
             'superseded_by':previous.get(dev_id),'online':state['online'],'discovered_recently':state['discovery']['seen_recently'],
             'status':entry.get('status','pending'),'messaging':messaging,'connection':state,
             'pairing_available':entry.get('status','pending')=='pending' and entry.get('peer_trust') is None,
-            **peer_trust.public_trust(dev_id)})
+            **trust})
     peers.sort(key=lambda p:(0 if p['online'] else 1,p['name'].lower()))
-    return {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'peers':peers,'self_id':cfg.node_id}
+    if check is not None:
+        check()
+    return {'protocol':connections.PROTOCOL,'schema_version':connections.SCHEMA_VERSION,'peers':peers,'self_id':self_id}
 
 
 @router.get('/mesh/discovery/status')

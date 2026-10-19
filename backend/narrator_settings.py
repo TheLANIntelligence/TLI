@@ -34,19 +34,27 @@ def read():
         return {"mode": data["mode"]}
 
 
-def save(mode):
+def save(mode, *, check=None):
     with LOCK:
+        if check:
+            check()
         read()  # Never replace malformed/unreadable existing configuration.
+        if check:
+            check()
         if mode not in MODES:
             raise HTTPException(422, "Choose Quiet, Balanced or Detailed.")
         path = _path()
         temp = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            if check:
+                check()
             with temp.open("x", encoding="utf-8") as handle:
                 json.dump({"version": 1, "mode": mode}, handle)
                 handle.flush()
                 os.fsync(handle.fileno())
+            if check:
+                check()
             os.replace(temp, path)
         except OSError as exc:
             raise HTTPException(503, "Narrator preferences were not saved. The previous mode remains active.") from exc

@@ -63,7 +63,7 @@ def _digest(root, kind):
         for name in sorted(files):
             path = parent / name
             suffix = path.suffix.lower()
-            include = suffix == ".py" or name == "requirements.txt" or suffix == ".txt" and "prompts" in relative.parts
+            include = suffix == ".py" or name in {"requirements.txt", "requirements-sonos.txt", "requirements-voice.txt"} or suffix == ".txt" and "prompts" in relative.parts
             if kind == "frontend":
                 include = suffix in {".js", ".css", ".html", ".json", ".svg"}
             if not include:

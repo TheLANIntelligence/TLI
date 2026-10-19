@@ -186,7 +186,12 @@ def _check_mesh_nodes() -> None:
 
 
 def run_all_checks() -> None:
-    _check_disk()
+    try:
+        _check_disk()
+    except Exception:
+        # Strict alert-store failures preserve evidence without disabling other
+        # independent monitors or exposing saved details in the error log.
+        S.log_debug("ambient", "WARN", "Disk alerts unavailable; other checks continue")
     try:
         from intelligence.storage_monitor import tick
         tick()
@@ -265,9 +270,12 @@ def get_home_snapshot() -> Dict[str, Any]:
     try:
         alerts = S.load_alerts()
         active = [a for a in alerts if not a.get("dismissed")]
+        snap["alerts_available"] = True
         snap["alert_count"]   = len(active)
-        snap["alert_messages"] = [a["message"] for a in active[:4]]
+        snap["alert_messages"] = [a.get("message") or "System alert" for a in active[:4]]
     except Exception:
-        pass
+        snap["alerts_available"] = False
+        snap["alert_count"] = None
+        snap["alert_messages"] = []
 
     return snap

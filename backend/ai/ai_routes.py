@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query, Depends, Response
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -43,6 +43,7 @@ except ImportError:
 router = APIRouter(prefix="/api/ai", tags=["BundledAI"])
 
 from routers.system_routes import require_session
+from browser_authority import browser_control_access
 from intelligence import context as shared_context, memory as shared_memory
 from intelligence import input_budget, observed_answers, answer_evidence
 from intelligence.storage_diagnosis import answer as storage_answer, classify as storage_question
@@ -53,6 +54,7 @@ from intelligence import notebook, documents, case_context
 from intelligence.documents import Document
 from conversation_guard import exclusive_turn, assert_idle
 from companion_auth import operation_access
+from private_client_authority import private_client_access, checked_call, checked_json
 import lan_inference
 from . import lan_chat
 from stream_lifecycle import ClosingStreamingResponse
@@ -194,18 +196,27 @@ def _auto_title(text, max_len=60):
     return clean[:max_len].rsplit(" ", 1)[0] + "..."
 
 @S.conversation_transaction
-def _save_turn(conv_id, role, content, **extra):
+def _save_turn(conv_id, role, content, _authorize=None, **extra):
     from run_context import checkpoint, run_id
     checkpoint()
+    if _authorize is not None:
+        _authorize()
     if run_id():
         extra["run_id"] = run_id()
     if not _HAS_STATE or not conv_id:
         return
-    conversations = S.load_conversations()
+    try:
+        conversations = S.load_conversations()
+    except Exception:
+        if _authorize is not None:
+            _authorize()
+        raise
+    if _authorize is not None:
+        _authorize()
     conv = conversations.get(conv_id)
     if not conv:
         return
-    msg = {"role": role, "content": content, "ts": _now()}
+    msg = {"role": role, "content": str(content) if _authorize is not None else content, "ts": _now()}
     receipt_data = extra.pop("screenshot_context", None)
     receipt = public_receipt(receipt_data) if role == "assistant" else None
     note_data = extra.pop("note_context", None)
@@ -232,7 +243,19 @@ def _save_turn(conv_id, role, content, **extra):
     conv["last_updated"] = _now()
     if not conv.get("title") and role == "user":
         conv["title"] = _auto_title(content)
-    S.save_conversations(conversations)
+    if _authorize is not None:
+        _authorize()
+    try:
+        if _authorize is None:
+            S.save_conversations(conversations)
+        else:
+            S.save_conversations(conversations, check=_authorize)
+    except Exception:
+        if _authorize is not None:
+            _authorize()
+        raise
+    if _authorize is not None:
+        _authorize()
 
 def _load_history(conv_id):
     if not _HAS_STATE or not conv_id:
@@ -364,6 +387,14 @@ def _tool_answer_inner(request, text):
 #  Action intent execution (AI function-calling)
 # ==================================================================
 
+class _DiagnosticReply(str):
+    """Text plus the original diagnostic authority; never serialized as metadata."""
+    def __new__(cls, text, check):
+        value = super().__new__(cls, text)
+        value.authorize = check
+        return value
+
+
 def _route_action_intent(request: Request, user_text: str) -> Optional[str]:
     """
     Route through the intent engine. Returns a response string if the intent engine
@@ -373,8 +404,9 @@ def _route_action_intent(request: Request, user_text: str) -> Optional[str]:
       no_match → return None (fall through to tools/LLM)
       failed   → return error string (LLM locked out — device not found)
       matched  → execute action, return result (LLM locked out)
-    On any exception → return error string (NOT None — don't fall through to LLM)
+    Action authorization failures propagate; other errors never fall through to a model.
     """
+    check = None
     try:
         # Named home requests use the authenticated in-process services. The
         # generic intent executor's loopback HTTP calls carry no user session.
@@ -407,13 +439,39 @@ def _route_action_intent(request: Request, user_text: str) -> Optional[str]:
             return "No device action was performed. To control a device, send a direct request such as 'Turn on Office Lamp'. Use Routines to review several actions together."
         _log("chat", "INFO", f"Intent matched: {intent.get('type')} → {intent.get('action', intent.get('tool_id', '?'))}")
         base_url = str(request.base_url).rstrip("/")
-        action_result = execute_action(base_url, intent)
+        if intent.get("type") in {"tool_run", "diagnostic"}:
+            # Carry the initiating browser's authority in-process; loopback is
+            # never an authentication credential for private host diagnostics.
+            check = browser_control_access(request, Response())
+            if intent["type"] == "diagnostic":
+                from .intent_engine import _format_diagnostic_report
+                text = _format_diagnostic_report(ai_diagnostics(request, check=check))
+                check()
+                return _DiagnosticReply(text, check)
+            action_result = execute_action(base_url, intent, check=check)
+        else:
+            action_result = execute_action(base_url, intent)
         _log("chat", "INFO", f"Action result: success={action_result.success} elapsed_ms={action_result.elapsed_ms}")
+        if check is not None:
+            check()
+            return _DiagnosticReply(action_result.message, check)
         return action_result.message
 
+    except HTTPException as error:
+        if error.status_code in (401, 403):
+            raise
+        if check is not None:
+            check()
+        text = f"Action system error: {error}"
+        return _DiagnosticReply(text, check) if check is not None else text
     except Exception as e:
+        if check is not None:
+            check()
         _log("chat", "WARN", f"Intent engine exception (blocking LLM): {e}")
-        return f"Action system error: {e}"
+        if check is not None:
+            check()
+        text = f"Action system error: {e}"
+        return _DiagnosticReply(text, check) if check is not None else text
 
 
 # ==================================================================
@@ -615,9 +673,11 @@ class MemoryAddRequest(BaseModel):
 # ==================================================================
 
 @router.get("/diagnostics")
-def ai_diagnostics(request: Request):
+def ai_diagnostics(request: Request, check=Depends(browser_control_access)):
     """Full system health report — AI runtime, model file, Shelly devices, tools, conversations."""
+    check()
     mgr = BundledAIManager.get()
+    check()
     base_url = str(request.base_url).rstrip("/")
 
     shelly_registry = []
@@ -626,6 +686,7 @@ def ai_diagnostics(request: Request):
             shelly_registry = S.load_shelly_registry()
         except Exception:
             pass
+    check()
 
     # Resolve active model path
     model_path = None
@@ -635,6 +696,7 @@ def ai_diagnostics(request: Request):
             model_path = get_models_dir() / MODEL_PRESETS[active]["filename"]
     except Exception:
         pass
+    check()
 
     conversations_path = None
     if _HAS_STATE:
@@ -649,7 +711,9 @@ def ai_diagnostics(request: Request):
         shelly_registry=shelly_registry,
         model_path=model_path,
         conversations_path=conversations_path,
+        check=check,
     )
+    check()
     return report
 
 
@@ -1107,13 +1171,23 @@ def ai_chat(request: Request, req: ChatRequest):
     t1 = time.time()
     action_result = _route_action_intent(request, user_text) if not (req.target_id or req.diagnostic_id) else None
     if action_result is not None:
+        action_check = getattr(action_result, "authorize", None)
+        if action_check is not None:
+            action_check()
         trace.record("intent_engine", action_result[:60], int((time.time() - t1) * 1000))
         _log("chat", "DEBUG", "request_trace", **trace.summary())
-        _save_turn(conv_id, "user", user_text)
-        _save_turn(conv_id, "assistant", action_result, provider="tli-action")
-        return ChatResponse(session_id=conv_id, conversation_id=conv_id,
+        if action_check is not None:
+            action_check()
+        _save_turn(conv_id, "user", user_text, _authorize=action_check)
+        if action_check is not None:
+            action_check()
+        _save_turn(conv_id, "assistant", action_result, provider="tli-action", _authorize=action_check)
+        response = ChatResponse(session_id=conv_id, conversation_id=conv_id,
                             reply=action_result, provider="tli-action", elapsed_ms=0,
                             handled_by="intent_engine", **chat_continuity.source_refs(conv_id))
+        if action_check is not None:
+            action_check()
+        return response
 
     trace.record("intent_engine", "no_match", int((time.time() - t1) * 1000))
 
@@ -1514,15 +1588,38 @@ def _stream_response(request: Request, message: str, conv_id: str, device_id: Op
 
     # Layer 1: Action intent (Shelly control, tool runs — LLM lockout on match or fail)
     t1 = time.time()
-    action_result = _route_action_intent(request, user_text) if not (target_id or diagnostic_id) else None
-    if action_result is not None:
-        trace.record("intent_engine", action_result[:60], int((time.time() - t1) * 1000))
-        _log("chat", "DEBUG", "request_trace", **trace.summary())
-        _save_turn(conv_id, "user", user_text)
-        _save_turn(conv_id, "assistant", action_result, provider="tli-action")
-        yield f"data: {json.dumps({'type': 'meta', 'session_id': conv_id, 'handled_by': 'intent_engine', **chat_continuity.source_refs(conv_id)})}\n\n"
-        yield f"data: {json.dumps({'type': 'delta', 'text': action_result})}\n\n"
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    try:
+        action_result = _route_action_intent(request, user_text) if not (target_id or diagnostic_id) else None
+        if action_result is not None:
+            action_check = getattr(action_result, "authorize", None)
+            if action_check is not None:
+                action_check()
+            trace.record("intent_engine", action_result[:60], int((time.time() - t1) * 1000))
+            _log("chat", "DEBUG", "request_trace", **trace.summary())
+            if action_check is not None:
+                action_check()
+            _save_turn(conv_id, "user", user_text, _authorize=action_check)
+            if action_check is not None:
+                action_check()
+            _save_turn(conv_id, "assistant", action_result, provider="tli-action", _authorize=action_check)
+            frame = f"data: {json.dumps({'type': 'meta', 'session_id': conv_id, 'handled_by': 'intent_engine', **chat_continuity.source_refs(conv_id)})}\n\n"
+            if action_check is not None:
+                action_check()
+            yield frame
+            frame = f"data: {json.dumps({'type': 'delta', 'text': action_result})}\n\n"
+            if action_check is not None:
+                action_check()
+            yield frame
+            if action_check is not None:
+                action_check()
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            return
+    except HTTPException as error:
+        if error.status_code not in (401, 403):
+            raise
+        # Headers may already be sent. Terminate with public access status,
+        # never a private action delta or a successful completion frame.
+        yield f"data: {json.dumps({'type': 'error', 'status_code': error.status_code, 'code': 'session_changed', 'detail': 'Action access ended. Reconnect to TLI and check the device or action status before trying again; nothing will retry automatically.'})}\n\n"
         return
 
     trace.record("intent_engine", "no_match", int((time.time() - t1) * 1000))
@@ -1754,16 +1851,23 @@ def memory_clear(device_id: str, user: str = Depends(require_session)):
 # ==================================================================
 
 @router.get("/conversations")
-def list_conversations(user: str = Depends(require_session)):
+def list_conversations(request: Request, response: Response):
     """Return recent bundled-AI conversations for the Recent Chats panel.
     Excludes conversations that were initiated by mesh peers — those originated
     on another node and were processed here as a service; they should only appear
     in the Recent Chats of the node that sent the request."""
+    user, check = private_client_access(request, response)
+    return checked_json(check, checked_call(check, lambda: _conversation_list(user, check)))
+
+
+def _conversation_list(user, check):
+    check()
     if not _HAS_STATE:
         return {"conversations": []}
-    convs = S.load_conversations()
+    convs = S.load_conversations(check=check)
     items = []
     for c in convs.values():
+        check()
         if not isinstance(c, dict):
             continue
         if c.get("user_id") not in ({user, "bundled-ai"} if user == "local" else {user}):
@@ -1775,6 +1879,7 @@ def list_conversations(user: str = Depends(require_session)):
         title = c.get("title") or ""
         if not title:
             for m in msgs:
+                check()
                 if m.get("role") == "user" and m.get("content"):
                     title = m["content"][:80]
                     break
@@ -1787,6 +1892,7 @@ def list_conversations(user: str = Depends(require_session)):
             "message_count": len(msgs),
         })
     items.sort(key=lambda x: x.get("last_updated", ""), reverse=True)
+    check()
     return {"conversations": items[:20]}
 
 
@@ -1805,22 +1911,30 @@ def clear_all_conversations(user: str = Depends(require_session)):
 
 
 @router.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str, user: str = Depends(require_session)):
+def get_conversation(conv_id: str, request: Request, response: Response):
     """Return full message list for a conversation (for resuming in chat)."""
+    user, check = private_client_access(request, response)
+    return checked_json(check, checked_call(check, lambda: _conversation_detail(conv_id, user, check)))
+
+
+def _conversation_detail(conv_id, user, check):
+    check()
     if not _HAS_STATE:
         raise HTTPException(status_code=404, detail="State not available")
-    convs = S.load_conversations()
+    convs = S.load_conversations(check=check)
     conv = convs.get(conv_id)
+    check()
     if not conv or conv.get("user_id") not in ({user, "bundled-ai"} if user == "local" else {user}):
         raise HTTPException(status_code=404, detail="Not found")
+    messages = []
+    for index, message in enumerate(conv.get("messages") or []):
+        check()
+        if message.get("role") in ("user", "assistant") and isinstance(message.get("content"), str) and message["content"]:
+            messages.append(checked_call(check, lambda: _public_conversation_turn(message, conv_id, index)))
     return {
         "id": conv_id,
         "title": conv.get("title", ""),
-        "messages": [
-            _public_conversation_turn(m, conv_id, index)
-            for index, m in enumerate(conv.get("messages") or [])
-            if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str) and m["content"]
-        ],
+        "messages": messages,
     }
 
 

@@ -32,6 +32,15 @@ test('old unauthorized response cannot relock a newly unlocked session',async()=
  assert.deepEqual(f.events,['tli-session-locked','tli-session-unlocked']);
  assert.equal(f.checked(),0);
 });
+
+for(const event of ['tli-account-changed','tli-user-changed','pagehide'])test('old 401 after '+event+' cannot relock or clear the new session',async()=>{
+ const pending=[],f=fixture(()=>new Promise(resolve=>pending.push(resolve)));
+ const old=f.window.fetch('/api/ai/conversations/private-old');f.window.dispatchEvent(new CustomEvent(event));
+ const response=new Response('old denied body',{status:401});pending[0](response);assert.equal(await old,response);
+ assert.equal(await response.text(),'old denied body');assert.equal(f.checked(),0);assert.deepEqual(f.events,[event]);
+ const current=f.window.fetch('/api/ai/conversations/current');pending[1](f.response);await current;
+ assert.equal(f.checked(),1);assert.deepEqual(f.events,[event,'tli-session-locked']);assert.equal(f.calls.length,2);
+});
 test('concurrent rejections relock once and a later session still handles its own rejection',async()=>{
  const pending=[];const f=fixture(()=>new Promise(resolve=>pending.push(resolve)));
  const first=f.window.fetch('/api/one'),second=f.window.fetch('/api/two');

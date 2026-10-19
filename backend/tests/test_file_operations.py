@@ -24,10 +24,10 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(ops, "_plans", {})
     calls = []
     original = ops._exclusive_move
-    def move(source, destination, expected):
+    def move(source, destination, expected, **kwargs):
         assert source.is_relative_to(home) and destination.is_relative_to(home)
         calls.append((source, destination))
-        return original(source, destination, expected)
+        return original(source, destination, expected, **kwargs)
     monkeypatch.setattr(ops, "_exclusive_move", move)
     return home, calls
 
@@ -145,9 +145,9 @@ def test_runtime_failure_keeps_truthful_partial_receipt_and_undo(isolated, monke
     home, calls = isolated
     for name in ("one", "two", "three"): write(home, name)
     original = ops._exclusive_move
-    def move(source, destination, identity):
+    def move(source, destination, identity, **kwargs):
         if source.name == "two": raise PermissionError("File is in use")
-        return original(source, destination, identity)
+        return original(source, destination, identity, **kwargs)
     monkeypatch.setattr(ops, "_exclusive_move", move)
     result = organize(home, {"Target": ["one", "two", "three"]}, True)
     assert result["status"] == "partial" and not result["ok"] and result["moved_count"] == 1
@@ -171,9 +171,9 @@ def test_partial_undo_retains_unresolved_entries_for_explicit_retry(isolated, mo
     home, calls = isolated; write(home, "one"); write(home, "two")
     organize(home, {"Target": ["one", "two"]}, True)
     original = ops._exclusive_move
-    def move(source, destination, identity):
+    def move(source, destination, identity, **kwargs):
         if source.name == "two": raise PermissionError("Busy")
-        return original(source, destination, identity)
+        return original(source, destination, identity, **kwargs)
     monkeypatch.setattr(ops, "_exclusive_move", move)
     result = undo(True)
     assert result["status"] == "partial" and result["undone"] == 1
@@ -206,7 +206,7 @@ def test_legacy_undo_is_readable_but_never_guesses_identity(isolated):
 def test_recovery_record_failure_prevents_first_filesystem_change(isolated, monkeypatch, failure):
     home, calls = isolated; write(home, "file")
     if failure == "corrupt": S.LAST_FILE_OP_PATH.write_text("{broken")
-    else: monkeypatch.setattr(ops, "_save", lambda record: (_ for _ in ()).throw(OSError("Disk full")))
+    else: monkeypatch.setattr(ops, "_save", lambda record, **kwargs: (_ for _ in ()).throw(OSError("Disk full")))
     with pytest.raises(Exception): organize(home, {"Target": ["file"]}, True)
     assert not calls and not (home / "Target").exists() and (home / "file").exists()
     if failure == "corrupt": assert S.LAST_FILE_OP_PATH.read_text() == "{broken"
@@ -216,8 +216,8 @@ def test_shared_lock_refuses_competing_operations(isolated, monkeypatch):
     home, calls = isolated; write(home, "one"); write(home, "two")
     entered, release = threading.Event(), threading.Event()
     original = ops._exclusive_move
-    def move(*args):
-        entered.set(); assert release.wait(4); return original(*args)
+    def move(*args, **kwargs):
+        entered.set(); assert release.wait(4); return original(*args, **kwargs)
     monkeypatch.setattr(ops, "_exclusive_move", move)
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(organize, home, {"Target": ["one"]}, True)
@@ -233,30 +233,32 @@ def test_shared_lock_refuses_competing_operations(isolated, monkeypatch):
 def test_destination_created_after_preflight_is_preserved(isolated, monkeypatch):
     home, calls = isolated; write(home, "one")
     original = ops._exclusive_move
-    def race(source, destination, identity):
+    def race(source, destination, identity, **kwargs):
         write(home, "Target/one", "raced unrelated file")
-        return original(source, destination, identity)
+        return original(source, destination, identity, **kwargs)
     monkeypatch.setattr(ops, "_exclusive_move", race)
     response = organize(home, {"Target": ["one"]}, True)
     assert not response["ok"] and (home / "one").read_text() == "original"
     assert (home / "Target/one").read_text() == "raced unrelated file"
 
 
-def test_existing_api_fields_and_authenticated_undo(authed_client, client, isolated, monkeypatch):
+def test_existing_api_fields_and_authenticated_undo(browser_client, isolated, monkeypatch):
     home, _ = isolated; write(home, "one.txt")
-    capability = authed_client.get("/file/operations/capabilities")
+    capability = browser_client.get("/file/operations/capabilities")
     assert capability.json() == {"ok": True, "protocol": "reviewed-file-operations-v1"}
     assert capability.headers["Cache-Control"] == "no-store"
-    response = authed_client.post("/file/rename", json={"path": str(home), "prefix": "legacy"})
+    response = browser_client.post("/file/rename", json={"path": str(home), "prefix": "legacy"})
     assert response.status_code == 200 and response.json()["count"] == 1
     from main import app
     from routers.system_routes import require_session
     from unittest.mock import patch
+    from fastapi.testclient import TestClient
     with patch.dict(app.dependency_overrides, {}, clear=True):
-        monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
-        assert client.post("/file/undo").status_code == 401
-        assert client.get("/file/operations/capabilities").status_code == 401
-    result = authed_client.post("/file/undo").json()
+        with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                        headers={"Origin": "http://localhost"}) as client:
+            assert client.post("/file/undo").status_code == 401
+            assert client.get("/file/operations/capabilities").status_code == 401
+    result = browser_client.post("/file/undo").json()
     assert result["undone"] == 1 and result["message"]
 
 
@@ -276,8 +278,8 @@ def test_unchanged_rename_row_is_not_pending_even_before_first_move(isolated, mo
     home, _ = isolated; write(home, "prefix_1.txt"); write(home, "z.txt")
     original = ops._save
     saved = []
-    def save(value):
-        saved.append(json.loads(json.dumps(value))); original(value)
+    def save(value, **kwargs):
+        saved.append(json.loads(json.dumps(value))); original(value, **kwargs)
     monkeypatch.setattr(ops, "_save", save)
     result = ops.request("rename", "tester", {"path": str(home), "prefix": "prefix"}, confirm=True)
     assert result["ok"] and result["count"] == 1 and "1 already" in result["message"]

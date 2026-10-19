@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.responses import StreamingResponse
 from routers.system_routes import require_session
 from companion_auth import operation_access
+from private_client_authority import private_client_access, checked_call, checked_json
 from ai.lan_chat import Selection
 import host_runs
 import workspace_events
@@ -19,7 +20,7 @@ router = APIRouter(tags=["Shared workspace"])
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     request_id: str = Field(min_length=16, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
-    kind: Literal["chat", "builder_create", "builder_revise"]
+    kind: Literal["chat", "builder_create", "builder_revise", "agent_task"]
     payload: dict
     app_id: str | None = Field(default=None, max_length=128)
     chat_path: Literal["/chat", "/api/ai/chat/stream"] | None = None
@@ -43,41 +44,60 @@ def submit(req: RunRequest, request: Request, response: Response, owner: str = D
 
 
 @router.get("/api/runs")
-def list_runs(response: Response, conversation_id: str | None = Query(default=None, max_length=128), owner: str = Depends(require_session)):
+def list_runs(request: Request, response: Response, conversation_id: str | None = Query(default=None, max_length=128), owner: str = Depends(require_session)):
     response.headers["Cache-Control"] = "no-store"
-    return host_runs.listing(owner, conversation_id)
+    value = host_runs.listing(owner, conversation_id)
+    try:
+        from browser_authority import browser_control_access
+        browser_control_access(request, response)()
+    except HTTPException:
+        value["runs"] = [entry for entry in value["runs"] if entry["kind"] != "agent_task"]
+    return value
 
 
 @router.get("/api/runs/{ident}")
-def get_run(ident: str, response: Response, after: int = Query(default=0, ge=0), owner: str = Depends(require_session)):
+def get_run(ident: str, request: Request, response: Response, after: int = Query(default=0, ge=0), owner: str = Depends(require_session)):
     response.headers["Cache-Control"] = "no-store"
-    return host_runs.get(ident, owner, after)
+    value = host_runs.get(ident, owner, after)
+    if value["kind"] == "agent_task":
+        from browser_authority import browser_control_access
+        browser_control_access(request, response)()
+    return value
 
 
 @router.post("/api/runs/{ident}/cancel")
-def cancel_run(ident: str, response: Response, owner: str = Depends(require_session)):
+def cancel_run(ident: str, request: Request, response: Response, owner: str = Depends(require_session)):
     response.headers["Cache-Control"] = "no-store"
+    if host_runs.get(ident, owner)["kind"] == "agent_task":
+        from browser_authority import browser_control_access
+        browser_control_access(request, response)()
     return host_runs.cancel(ident, owner)
 
 
 @router.get("/api/runs/{ident}/events")
 def stream_run(ident: str, request: Request, after: int = Query(default=0, ge=0), owner: str = Depends(require_session)):
-    host_runs.get(ident, owner, after)
+    value = host_runs.get(ident, owner, after)
     check = operation_access(request, owner)
+    if value["kind"] == "agent_task":
+        from browser_authority import browser_control_access
+        check = browser_control_access(request, Response())
     async def events():
         cursor = after
         while True:
             check()
             value = host_runs.get(ident, owner, cursor)
             if value["replay_reset"]:
+                check()
                 yield f"event: snapshot\ndata: {json.dumps(value)}\n\n"
                 cursor = value["cursor"]
             else:
                 for item in value["events"]:
                     cursor = item["id"]
+                    check()
                     yield f"id: {cursor}\ndata: {json.dumps(item['event'])}\n\n"
             if value["status"] in host_runs.TERMINAL:
                 if not value["events"]:
+                    check()
                     yield f"event: snapshot\ndata: {json.dumps(value)}\n\n"
                 return
             if await request.is_disconnected():
@@ -88,9 +108,9 @@ def stream_run(ident: str, request: Request, after: int = Query(default=0, ge=0)
 
 
 @router.get("/api/ai/conversations/{ident}/settings")
-def get_settings(ident: str, response: Response, owner: str = Depends(require_session)):
-    response.headers["Cache-Control"] = "no-store"
-    return workspace_settings.get(ident, owner)
+def get_settings(ident: str, request: Request, response: Response):
+    owner, check = private_client_access(request, response)
+    return checked_json(check, checked_call(check, lambda: workspace_settings.get(ident, owner, check=check)))
 
 
 @router.patch("/api/ai/conversations/{ident}/settings")

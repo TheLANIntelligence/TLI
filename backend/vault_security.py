@@ -191,43 +191,77 @@ def _normalize_user_id(user_id: Optional[str]) -> str:
     return user_id.strip().lower()
 
 
-def _has_vault_dependencies(data_dir=None) -> bool:
+def _has_vault_dependencies(data_dir=None, *, check=None) -> bool:
+    _security._read_access(check)
     root = Path(data_dir if data_dir is not None else _DATA_DIR)
     # The blob directory remains the same configured directory used by routes.
     import tli_state as S
     vault_dir = Path(S.VAULT_DIR)
     try:
+        _security._read_access(check)
         with os.scandir(vault_dir) as entries:
             for index, entry in enumerate(entries):
+                _security._read_access(check)
                 if index >= 4096 or entry.name.lower().endswith(".vault"):
+                    _security._read_access(check)
                     return True
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
         pass
     except OSError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
         raise _security.SecurityStateUnavailable("Vault metadata") from exc
+    _security._read_access(check)
     try:
-        sessions = _security.read_json(root / "vault_sessions.json", "Vault metadata")
-    except FileNotFoundError:
+        sessions = _security.read_json(root / "vault_sessions.json", "Vault metadata", check=check)
+    except FileNotFoundError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
         return False
+    except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
+        raise
+    _security._read_access(check)
     if not isinstance(sessions, dict):
         raise _security.SecurityStateUnavailable("Vault metadata")
-    return bool(sessions)
+    result = bool(sessions)
+    _security._read_access(check)
+    return result
 
 
-def read_existing_meta(*, data_dir=None) -> dict:
+def read_existing_meta(*, data_dir=None, check=None) -> dict:
     """Read legacy metadata in its existing location; never repair missing salts."""
+    _security._read_access(check)
     try:
-        meta = _security.read_json(VAULT_META_PATH, "Vault metadata")
-    except FileNotFoundError:
-        if _has_vault_dependencies(data_dir):
+        meta = _security.read_json(VAULT_META_PATH, "Vault metadata", check=check)
+    except FileNotFoundError as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
+        if _has_vault_dependencies(data_dir, check=check):
             raise _security.SecurityStateUnavailable("Vault metadata")
+        _security._read_access(check)
         return {}
+    except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
+        raise
     try:
+        _security._read_access(check)
         if not isinstance(meta, dict):
             raise ValueError("Invalid metadata")
         for field, length in (("password_hash", 32), ("password_salt", 16), ("encryption_salt", 16)):
+            _security._read_access(check)
             if field == "encryption_salt" and field not in meta:
-                if _has_vault_dependencies(data_dir):
+                if _has_vault_dependencies(data_dir, check=check):
                     raise ValueError("Missing encryption salt for saved data")
                 continue  # Phase 1 vaults without encrypted data may upgrade on unlock.
             if not isinstance(meta.get(field), str) or len(base64.b64decode(meta[field], validate=True)) != length:
@@ -242,15 +276,22 @@ def read_existing_meta(*, data_dir=None) -> dict:
                 raise ValueError("Invalid extension key")
             if "ext_api_key_user" in meta and (not isinstance(meta["ext_api_key_user"], str) or not meta["ext_api_key_user"].strip()):
                 raise ValueError("Invalid extension owner")
+        _security._read_access(check)
         return meta
-    except _security.SecurityStateUnavailable:
+    except _security.SecurityStateUnavailable as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
         raise
     except Exception as exc:
+        if getattr(exc, "security_read_authority_failure", False):
+            raise
+        _security._read_access(check)
         raise _security.SecurityStateUnavailable("Vault metadata") from exc
 
 
-def _load_meta() -> dict:
-    return read_existing_meta()
+def _load_meta(*, check=None) -> dict:
+    return read_existing_meta(check=check)
 
 
 def _save_meta(meta: dict) -> None:
@@ -332,33 +373,44 @@ def verify_password(password: str) -> bool:
     return _verify_password(password)
 
 
-def get_status(user_id: Optional[str] = None) -> dict:
-    meta = _load_meta()
-    locked_until = meta.get("locked_until")
-    if locked_until is not None:
+def get_status(user_id: Optional[str] = None, *, check=None) -> dict:
+    """One metadata snapshot; checked observations never clean up sessions.
+
+    The optional check binds this read to its caller. It does not authorize the
+    existing no-check Vault lifecycle/API callers or harden the metadata format.
+    """
+    _security._read_access(check)
+    with _META_LOCK:
+        _security._read_access(check)
         try:
-            lock_dt = datetime.fromisoformat(locked_until)
-            if lock_dt <= _now():
+            meta = _load_meta(check=check)
+            _security._read_access(check)
+            now = _now()
+            locked_until = meta.get("locked_until")
+            if locked_until is not None and datetime.fromisoformat(locked_until) <= now:
                 locked_until = None
-        except Exception:
-            locked_until = None
-
-    norm_user = _normalize_user_id(user_id)
-    is_unlocked = False
-    if norm_user and norm_user in UNLOCKED_VAULTS:
-        if UNLOCKED_VAULTS[norm_user] > _now():
-            is_unlocked = True
-        else:
-            # session expired
-            UNLOCKED_VAULTS.pop(norm_user, None)
-            ENCRYPTION_KEYS.pop(norm_user, None)
-
-    return {
-        "is_initialized": is_initialized(),
-        "locked_until": locked_until,
-        "failed_attempts": int(meta.get("failed_attempts", 0)),
-        "is_unlocked_for_user": is_unlocked,
-    }
+            _security._read_access(check)
+            norm_user = _normalize_user_id(user_id)
+            expiry = UNLOCKED_VAULTS.get(norm_user) if norm_user else None
+            is_unlocked = expiry is not None and expiry > now
+            if expiry is not None and not is_unlocked and check is None:
+                # Preserve legacy cleanup for lifecycle callers. Private status
+                # observes expiration without mutating either in-memory map.
+                UNLOCKED_VAULTS.pop(norm_user, None)
+                ENCRYPTION_KEYS.pop(norm_user, None)
+            result = {
+                "is_initialized": "password_hash" in meta and "password_salt" in meta,
+                "locked_until": locked_until,
+                "failed_attempts": int(meta.get("failed_attempts", 0)),
+                "is_unlocked_for_user": is_unlocked,
+            }
+            _security._read_access(check)
+            return result
+        except Exception as exc:
+            if getattr(exc, "security_read_authority_failure", False):
+                raise
+            _security._read_access(check)
+            raise
 
 
 @_metadata_transaction

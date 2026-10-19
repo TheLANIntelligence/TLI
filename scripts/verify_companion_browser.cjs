@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'build_work', 'section-clarity', 'companion-browser-' + new Date().toISOString().replace(/[:.]/g, '-'));
-const assets = ['style.css', 'themes.css', 'ui-foundation.css', 'native-companion.css', 'js/native-companion.js'];
+const assets = ['style.css', 'themes.css', 'ui-foundation.css', 'native-companion.css', 'js/native-companion.js','assets/companion-install.svg'];
 const sources = Object.fromEntries(assets.map(file => [file, fs.readFileSync(path.join(root, 'frontend', file), 'utf8')]));
 
 (async () => {
@@ -21,7 +21,7 @@ const sources = Object.fromEntries(assets.map(file => [file, fs.readFileSync(pat
     const url = new URL(route.request().url());
     if (url.hostname !== 'companion.test') throw new Error('Unexpected external request');
     const file = assets.find(file => '/' + file === url.pathname);
-    if (file) return route.fulfill({ contentType: file.endsWith('.css') ? 'text/css' : 'application/javascript', body: sources[file] });
+    if (file) return route.fulfill({ contentType: file.endsWith('.svg') ? 'image/svg+xml' : file.endsWith('.css') ? 'text/css' : 'application/javascript', body: sources[file] });
     if (url.pathname === '/') return route.fulfill({ contentType: 'text/html; charset=utf-8', headers: { 'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:" }, body: '<!doctype html><html lang="en" data-theme="emeraldLight"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'+assets.filter(file=>file.endsWith('.css')).map(file=>'<link rel="stylesheet" href="/'+file+'">').join('')+'</head><body data-tli-ui="anniversary" style="padding:20px;margin:0;min-width:0"><main id="panel-companion"></main><script src="/js/native-companion.js"></script></body></html>' });
     calls.push([route.request().method(), url.pathname]);
     let data;
@@ -40,24 +40,26 @@ const sources = Object.fromEntries(assets.map(file => [file, fs.readFileSync(pat
     await page.goto('https://companion.test/');
     await page.evaluate(()=>window.TLICompanion.open({step:'pair'}));
     await page.locator('#native-companion-status').filter({ hasText: 'Ready to pair securely.' }).waitFor();
+    await page.locator('#native-companion-installed').click();
     assert.equal(calls.filter(([method])=>method!=='GET').length,0,'Opening the page does not create an invitation');
     assert.equal(await page.locator('.native-companion-device img').count(), 0);
     await page.getByRole('button', { name: 'Create pairing QR', exact: true }).evaluate(button => { button.dispatchEvent(new Event('click')); button.dispatchEvent(new Event('click')); });
-    await page.getByRole('heading', { name: 'Scan with TLI Companion' }).waitFor();
+    await page.getByRole('heading', { name: 'Scan inside the TLI Android app' }).waitFor();
     assert.equal(calls.filter(([method, url]) => method === 'POST' && url.endsWith('/pairings')).length, 1);
     fs.mkdirSync(output, { recursive: true });
     await page.screenshot({ path: path.join(output, 'desktop-pairing.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.screenshot({ path: path.join(output, 'phone-pairing.png'), fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    await page.locator('#native-companion-management').evaluate(e=>{e.open=true});
     await page.locator('.native-companion-device-actions button').first().click();
     assert.equal(revoked, false);
     await page.locator('.native-companion-device-actions button').first().click();
     await page.getByText('No native phones paired yet.', { exact: true }).waitFor();
     ready = false;
     await page.getByRole('button', { name: 'Refresh connection setup' }).click();
-    await page.waitForFunction(()=>document.getElementById('native-companion-connection-copy').textContent.includes('Saving alone does not enable pairing'));
-    assert.equal(await page.getByRole('button', { name: 'Create pairing QR', exact: true }).isDisabled(), true);
+    await page.waitForFunction(()=>document.getElementById('native-companion-connection-copy').textContent.includes('Use Connect phone'));
+    assert.equal(await page.locator('#native-companion-generate').isDisabled(), true);
     assert.equal(await page.locator('.native-companion-pairing').isVisible(), false);
     await page.screenshot({ path: path.join(output, 'setup-guidance.png'), fullPage: true });
     assert.deepEqual(errors, []);

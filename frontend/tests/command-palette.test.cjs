@@ -158,6 +158,20 @@ function savedReplies(f, data = savedData('router')) {
   f.respond(async url => ({ data: url.includes('/memory') ? data.notes : url.includes('/conversation-search') ? data.chats : data.places }));
 }
 
+test('HomeLab navigation and old panel favorites stay absent from global search without writes', async () => {
+  const f=fixture(),data=savedData('router');
+  f.ctx.window.TLIUI={navigation:[{id:'panel-homelab',label:'HomeLab',aliases:'router homelab'}]};
+  data.places.places.unshift({id:'c'.repeat(32),name:'Router lab',target:'panel-homelab',kind:'panel'});
+  const original=JSON.stringify(data.places);
+  savedReplies(f,data);await f.search('router');
+  const results=f.nodes['tli-cmd-results'].children.map(n=>n.innerHTML).join('');
+  assert.doesNotMatch(results,/HomeLab|Router lab|panel-homelab/);
+  assert.match(results,/Router folder/);
+  assert.equal(f.nodes['tli-cmd-results'].children.length,3);
+  assert.ok(f.calls.every(call=>!call.options?.method||call.options.method==='GET'));
+  assert.deepEqual(f.panels,[]);assert.equal(JSON.stringify(data.places),original);
+});
+
 test('saved search starts only while open after two characters and one 300ms debounce', async () => {
   const f = fixture(); savedReplies(f);
   f.ctx.window.TLICmdPalette.open(); await tick(); assert.equal(f.actions().length, 0);

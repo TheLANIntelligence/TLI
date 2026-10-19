@@ -15,6 +15,7 @@ import uuid
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import HTTPException
 import tli_state as S
+from private_client_authority import checked_call
 
 PROTOCOL = "conversation-search-v1"
 MAX_STORE_BYTES = 16 * 1024 * 1024
@@ -29,31 +30,50 @@ _cursors = {}
 _cursor_lock = threading.RLock()
 
 
-def _read():
+def _read(check=None):
+    authorize = check or (lambda: None)
     try:
+        authorize()
         with S.CONVERSATIONS_LOCK:
+            authorize()
             try:
-                with Path(S.CONVERSATIONS_FILE).open("rb") as handle:
-                    raw = handle.read(MAX_STORE_BYTES + 1)
+                handle = Path(S.CONVERSATIONS_FILE).open("rb")
             except FileNotFoundError:
+                authorize()
                 raw = b"{}"
+            else:
+                with handle:
+                    authorize()
+                    raw = handle.read(MAX_STORE_BYTES + 1)
+                    authorize()
             if len(raw) > MAX_STORE_BYTES:
                 raise HTTPException(413, "Conversation history exceeds the 16 MiB search read limit. Recent history remains available; no saved data was changed.")
             version = hashlib.sha256(raw).hexdigest()
             data = json.loads(raw)
+            authorize()
             if isinstance(data, dict) and data.get("_tli_enc"):
                 if data.get("_tli_enc") != 1 or not isinstance(data.get("data"), str):
                     raise ValueError("Unsupported encrypted envelope")
                 blob = base64.b64decode(data["data"], validate=True)
-                data = json.loads(AESGCM(S._store_key("conversations_key.bin")).decrypt(blob[:12], blob[12:], None))
+                authorize()
+                key = S._store_key("conversations_key.bin")
+                authorize()
+                plaintext = AESGCM(key).decrypt(blob[:12], blob[12:], None)
+                authorize()
+                data = json.loads(plaintext)
+                authorize()
             if not isinstance(data, dict) or any(not isinstance(value, dict) for value in data.values()):
                 raise ValueError("Unsupported conversation structure")
             if len(data) > MAX_RECORDS:
                 raise HTTPException(413, "Conversation history exceeds the 10,000-record search limit. Recent history remains available; no saved data was changed.")
-            return data, version
+            authorize()
+        authorize()
+        return data, version
     except HTTPException:
+        authorize()
         raise
     except Exception as error:
+        authorize()
         raise HTTPException(503, "Saved conversation history could not be read. Existing files were preserved; check Data & Recovery before trying again.") from error
 
 
@@ -95,7 +115,9 @@ def _sort_date(value):
         return float("-inf")
 
 
-def _match(conversation, query, char_budget=MAX_CONVERSATION_CHARS):
+def _match(conversation, query, char_budget=MAX_CONVERSATION_CHARS, *, check=None):
+    authorize = check or (lambda: None)
+    authorize()
     title = conversation.get("title")
     title = title if isinstance(title, str) else ""
     messages = conversation.get("messages")
@@ -119,6 +141,7 @@ def _match(conversation, query, char_budget=MAX_CONVERSATION_CHARS):
         return info, inspected, 0, text_limited or malformed
     inspected_messages = 0
     for message in messages[:MAX_MESSAGES]:
+        authorize()
         if inspected >= char_budget:
             text_limited = True
             break
@@ -143,18 +166,27 @@ def _match(conversation, query, char_budget=MAX_CONVERSATION_CHARS):
     return None, inspected, inspected_messages, text_limited or malformed
 
 
-def search(user, query="", limit=20, cursor=None):
+def search(user, query="", limit=20, cursor=None, *, check=None):
+    """A supplied captured check covers reads, projections and cursor locks."""
+    authorize = check or (lambda: None)
+    operation = lambda: _search(user, query, limit, cursor, authorize)
+    return checked_call(authorize, operation) if check is not None else operation()
+
+
+def _search(user, query, limit, cursor, check):
     if not isinstance(query, str) or len(query) > 120 or any(unicodedata.category(c) == "Cc" for c in query):
         raise HTTPException(422, "Use a search query of at most 120 characters without control characters.")
     if type(limit) is not int or not 1 <= limit <= 50:
         raise HTTPException(422, "Choose a page size from 1 to 50.")
     display_query = query.strip()
     normalized = _normalize(display_query)
-    conversations, version = _read()
+    conversations, version = _read(check)
     now = time.time()
     state = {"offset": 0, "scanned": 0, "messages": 0, "chars": 0, "text_limited": False}
     if cursor:
+        check()
         with _cursor_lock:
+            check()
             found = _cursors.get(cursor)
             if not found or found["user"] != user or found["expires_at"] <= now:
                 raise HTTPException(410, "This history page expired or is unavailable. Start the search again.")
@@ -163,16 +195,23 @@ def search(user, query="", limit=20, cursor=None):
             if found["version"] != version:
                 raise HTTPException(409, "Saved conversations changed while paging. Start the search again to include the latest history.")
             state = copy.deepcopy(found["state"])
+        check()
     owners = {user, "bundled-ai"} if user == "local" else {user}
-    records = [(ident, row) for ident, row in conversations.items()
-               if isinstance(ident, str) and 1 <= len(ident) <= 256 and isinstance(row.get("user_id"), str)
-               and row["user_id"] in owners and not row.get("mesh_source_ip")]
+    records = []
+    for ident, row in conversations.items():
+        check()
+        if (isinstance(ident, str) and 1 <= len(ident) <= 256 and isinstance(row.get("user_id"), str)
+                and row["user_id"] in owners and not row.get("mesh_source_ip")):
+            records.append((ident, row))
     records.sort(key=lambda pair: (_sort_date(pair[1].get("last_updated")), pair[0]), reverse=True)
+    check()
     items, page_scanned, page_chars = [], 0, 0
     offset = state["offset"]
     while offset < len(records) and len(items) < limit and page_scanned < MAX_PAGE_CONVERSATIONS and page_chars < MAX_PAGE_CHARS:
+        check()
         ident, record = records[offset]
-        item, chars, messages, limited = _match(record, normalized, MAX_PAGE_CHARS - page_chars)
+        item, chars, messages, limited = _match(record, normalized, MAX_PAGE_CHARS - page_chars, check=check)
+        check()
         offset += 1; page_scanned += 1; page_chars += chars
         state["scanned"] += 1; state["messages"] += messages; state["chars"] += chars
         state["text_limited"] |= limited
@@ -181,15 +220,21 @@ def search(user, query="", limit=20, cursor=None):
     state["offset"] = offset
     next_cursor = None
     if offset < len(records):
+        check()
         with _cursor_lock:
+            check()
             for key, old in list(_cursors.items()):
+                check()
                 if old["expires_at"] <= now:
                     del _cursors[key]
             if len(_cursors) >= 256:
                 del _cursors[min(_cursors, key=lambda key: _cursors[key]["expires_at"])]
             next_cursor = uuid.uuid4().hex
+            check()
             _cursors[next_cursor] = {"user": user, "query": normalized, "limit": limit, "version": version,
                                      "state": copy.deepcopy(state), "expires_at": now + CURSOR_SECONDS}
+        check()
+    check()
     return {"ok": True, "protocol": PROTOCOL, "query": display_query, "items": items, "next_cursor": next_cursor,
             "coverage": {"complete": next_cursor is None and not state["text_limited"], "more_to_search": next_cursor is not None,
                          "text_limited": state["text_limited"], "scanned_conversations": state["scanned"],

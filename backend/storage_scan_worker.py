@@ -14,6 +14,7 @@ import time
 MAX_REQUEST = 16 * 1024
 MAX_RESULT = 32 * 1024 * 1024
 MAX_MEMORY = 512 * 1024 * 1024
+MAX_INVENTORY_FRAME = 512 * 1024
 PROFILES = {"quick": {"max_seconds": 15, "max_entries": 50_000, "max_depth": 18},
             "deep": {"max_seconds": 300, "max_entries": 500_000, "max_depth": 30}}
 
@@ -27,10 +28,12 @@ def canonical(value):
 
 
 def validate_request(value):
-    if not isinstance(value, dict) or set(value) - {"operation", "path", "profile", "include_excluded", "min_mb", "limit", "limits"}:
+    if not isinstance(value, dict) or set(value) - {"operation", "path", "profile", "include_excluded", "min_mb", "limit", "limits", "inventory_version"}:
         raise ValueError("Unsupported scan request")
     if value.get("operation") not in {"scan", "large_files", "duplicates", "common_folders", "drives", "paths", "path_exists"}:
         raise ValueError("Unsupported scan operation")
+    if "inventory_version" in value and (type(value["inventory_version"]) is not int or value["inventory_version"] != 1 or value["operation"] != "scan"):
+        raise ValueError("Unsupported inventory protocol")
     if value.get("profile") not in PROFILES or type(value.get("include_excluded", False)) is not bool or value.get("include_excluded") and value["profile"] != "deep":
         raise ValueError("Unsupported scan profile or exclusions")
     path = value.get("path")
@@ -106,7 +109,7 @@ def capacity(root):
                 "root_is_volume": False, "scope": "containing_volume"}
 
 
-def perform(request, control):
+def perform(request, control, inventory=None):
     import storage_scan_algorithms as algorithms
     algorithms.CONTROL = control
     operation, limits = request["operation"], request["limits"]
@@ -132,9 +135,31 @@ def perform(request, control):
     if not root.is_dir():
         raise algorithms.ScanError(400, "Choose a directory to scan.")
     if operation == "scan":
+        from storage_engines import select_engine
         before = drive_identity(root)
         capacity_before = capacity(root)
-        tree, largest, meta = algorithms._scan_tree(root, noisy_names=noisy, **limits)
+        batch, batch_bytes = [], 0
+        def flush():
+            nonlocal batch, batch_bytes
+            if batch:
+                inventory({"type": "inventory_rows", "rows": batch})
+                batch, batch_bytes = [], 0
+        def collect(row):
+            nonlocal batch_bytes
+            size = len(canonical(row)) + 1
+            if size > MAX_INVENTORY_FRAME // 2:
+                raise ValueError("Inventory row exceeds its byte limit")
+            if batch and (len(batch) >= 128 or batch_bytes + size > MAX_INVENTORY_FRAME // 2):
+                flush()
+            batch.append(row)
+            batch_bytes += size
+        if inventory is not None:
+            inventory({"type": "inventory_start", "root": str(root)})
+        engine = select_engine(root)
+        options = {"inventory_sink": collect} if inventory is not None else {}
+        tree, largest, meta = engine.scan(root, noisy_names=noisy, **limits, **options)
+        if inventory is not None:
+            flush()
         after = drive_identity(root)
         capacity_after = capacity(root)
         meta.update(capacity=capacity_after, capacity_before=capacity_before, capacity_after=capacity_after)
@@ -190,7 +215,7 @@ def main():
             if now - last[0] >= .5:
                 emit({"type": "progress", "progress": progress})
                 last[0] = now
-        result, identity = perform(request, control)
+        result, identity = perform(request, control, emit if request.get("inventory_version") == 1 else None)
         if cancelled.is_set():
             result.setdefault("meta", {}).update(partial=True, cancelled=True)
         emit({"type": "result", "result": result, "identity": identity})

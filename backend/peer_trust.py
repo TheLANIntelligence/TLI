@@ -19,6 +19,7 @@ import socket
 import ssl
 import threading
 import time
+from contextlib import contextmanager
 from functools import wraps
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlencode
@@ -313,9 +314,11 @@ def approve(review_id, fingerprint, certificate_sha256, owner, request):
                       "peer_trust": {"card": card, "grants": item["grants"], "reviewed_at": S.now_iso(), "reviewed_by": owner}})
         # This marker detects a missing security directory on subsequent starts.
         # Preserve every additive node configuration field and the existing ID.
-        if not S.MESH_DIRECTORY_PATH.exists():
-            S.save_mesh_directory(directory)
         with S._NODE_CONFIG_LOCK:
+            from node_settings import assert_available
+            assert_available(S.NODE_CONFIG_PATH)
+            if not S.MESH_DIRECTORY_PATH.exists():
+                S.save_mesh_directory(directory)
             cfg = S._security.read_json(S.NODE_CONFIG_PATH, "node configuration", 65536)
             cfg["peer_trust_established"] = True
             S._security.write_json(S.NODE_CONFIG_PATH, cfg, "node configuration")
@@ -325,8 +328,32 @@ def approve(review_id, fingerprint, certificate_sha256, owner, request):
     return {"ok": True, "protocol": PROTOCOL, "device_id": card["node_id"], "trust_state": "verified", "actions_performed": False}
 
 
-def trusted(device_id, grant=None):
-    entry = S.load_mesh_directory().get(device_id)
+@contextmanager
+def observation_access(check):
+    """Retain optional browser authority without changing peer grant decisions."""
+    S._security._read_access(check)
+    try:
+        yield
+    finally:
+        S._security._read_access(check)
+
+
+def observation_error(error, check):
+    # Browser denial and unreadable security state are not peer review results.
+    if getattr(error, "security_read_authority_failure", False):
+        raise error
+    S._security._read_access(check)
+    if check is not None and error.status_code >= 500:
+        raise error
+
+
+def trusted(device_id, grant=None, *, check=None):
+    with observation_access(check):
+        directory = S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory()
+        return _trusted_entry(device_id, directory.get(device_id), grant, check=check)
+
+
+def _trusted_entry(device_id, entry, grant=None, *, check=None):
     if not entry:
         fail(404, "peer_missing", "This computer is no longer in the directory.")
     if entry.get("status") != "allowed":
@@ -347,22 +374,29 @@ def trusted(device_id, grant=None):
             raise ValueError()
     except (HTTPException, KeyError, TypeError, ValueError):
         fail(409, "review_required", "This computer's identity, certificate or address needs an explicit trust review.")
+    S._security._read_access(check)
     if grant and grant not in trust.get("grants", []):
         fail(403, "capability_required", "This peer permission has not been reviewed on this computer.")
     return copy.deepcopy(entry), card, digest({"status": entry["status"], "trust": trust})
 
 
-def message_readiness(device_id):
+def message_readiness(device_id, *, check=None):
     """Local permission only; discovery and a local review cannot prove delivery."""
-    with LOCK:
+    with observation_access(check), LOCK:
+        S._security._read_access(check)
         try:
-            trusted(device_id, "messages")
+            if check is None:
+                trusted(device_id, "messages")
+            else:
+                trusted(device_id, "messages", check=check)
         except HTTPException as exc:
+            observation_error(exc, check)
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             code = detail.get("code", "review_required")
             message = detail.get("message", "This computer needs an explicit trust review before messaging.")
             if code == "peer_not_allowed":
-                entry = S.load_mesh_directory().get(device_id, {})
+                directory = S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory()
+                entry = directory.get(device_id, {})
                 if entry.get("status") == "blocked":
                     code = "peer_blocked"
                     message = "Blocked on this computer. Open Computers to review its public trust card and Text messages permission."
@@ -428,17 +462,24 @@ def capability(device_id):
         return {"available": False, "reason": exc.detail, "peer": None, "revision": None, "capabilities": []}
 
 
-def public_trust(device_id):
+def public_trust(device_id, *, check=None):
+    with observation_access(check):
+        return _public_trust(device_id, check=check)
+
+
+def _public_trust(device_id, *, check=None):
     try:
-        entry, card, revision = trusted(device_id)
+        entry, card, revision = trusted(device_id, check=check) if check is not None else trusted(device_id)
         result = {"trust_state": "verified", "trust_revision": revision, "origin": card["origin"],
                   "identity_fingerprint": card["identity_fingerprint"], "reviewed_grants": entry['peer_trust']['grants']}
         if card["capabilities"] == INFERENCE_CAPABILITIES:
             result["peer_profile"] = "inference_node"
         return result
-    except HTTPException:
+    except HTTPException as exc:
+        observation_error(exc, check)
         result = {"trust_state": "review_required", "trust_revision": None, "origin": None}
-        entry = S.load_mesh_directory().get(device_id, {})
+        directory = S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory()
+        entry = directory.get(device_id, {})
         if not entry.get('peer_trust') and entry.get('discovery', {}).get('capabilities') == INFERENCE_CAPABILITIES:
             result['peer_profile'] = 'inference_node'
         return result

@@ -111,9 +111,16 @@ def observe(peer_id, address, port, *, origin=None, source='legacy', interface=N
             pass  # Revoked/changed authority cannot be restored by discovery.
 
 
-def discovery(peer_id, entry=None):
+def discovery(peer_id, entry=None, *, check=None):
+    with P.observation_access(check):
+        return _discovery(peer_id, entry, check=check)
+
+
+def _discovery(peer_id, entry=None, *, check=None):
     with LOCK:
+        S._security._read_access(check)
         rows = [copy.deepcopy(row) for row in _ROUTES.get(peer_id,{}).values() if row['expires'] > time.monotonic()]
+    S._security._read_access(check)
     observed = max((row['observed_at'] for row in rows), default=None)
     if observed is None and entry:
         observed = (entry.get('discovery') or {}).get('observed_at')
@@ -137,19 +144,36 @@ def _capabilities(grants, ready=(), *, connected=False, node=False, models=None)
     return result
 
 
-def snapshot(peer_id, entry=None):
-    entry = entry if entry is not None else S.load_mesh_directory().get(peer_id,{})
-    found = discovery(peer_id, entry)
+def snapshot(peer_id, entry=None, *, check=None):
+    with P.observation_access(check):
+        return _snapshot(peer_id, entry, check=check)
+
+
+def _snapshot(peer_id, entry=None, *, check=None):
+    if entry is None:
+        directory = S.load_mesh_directory(check=check) if check is not None else S.load_mesh_directory()
+        entry = directory.get(peer_id, {})
+    found = discovery(peer_id, entry, check=check) if check is not None else discovery(peer_id, entry)
     try:
-        _, card, revision = P.trusted(peer_id)
+        current, card, revision = P.trusted(peer_id, check=check) if check is not None else P.trusted(peer_id)
+        # Grants must come from the same validated snapshot as this revision.
+        # A caller's older directory entry remains discovery evidence only.
+        if check is not None:
+            entry = current
         grants = entry.get('peer_trust',{}).get('grants',[])
     except HTTPException as error:
-        return {'protocol':PROTOCOL,'schema_version':SCHEMA_VERSION,'state':'review_required', 'online':None, 'checked_at':None, 'expires_at':None,
+        P.observation_error(error, check)
+        value = {'protocol':PROTOCOL,'schema_version':SCHEMA_VERSION,'state':'review_required', 'online':None, 'checked_at':None, 'expires_at':None,
                 'reason':error.detail, 'capabilities':_capabilities([]), 'retry_after_seconds':0,
                 'discovery':found, 'ready_grants':[], 'fresh':False}
+        if check is not None:
+            value['trust_revision'] = None
+        return value
     with LOCK:
+        S._security._read_access(check)
         cached = copy.deepcopy(_CHECKS.get(peer_id))
         flight = _INFLIGHT.get(peer_id)
+    S._security._read_access(check)
     state = 'discovered' if found['seen_recently'] else 'unknown'
     value = {'protocol':PROTOCOL,'schema_version':SCHEMA_VERSION,'state':state, 'online':None, 'checked_at':None, 'expires_at':None, 'reason':None,
              'capabilities':_capabilities(grants), 'ready_grants':[], 'fresh':False}
@@ -164,6 +188,8 @@ def snapshot(peer_id, entry=None):
     if flight and flight['revision'] == revision:
         value.update(state='checking', online=None)
     value['discovery'] = found
+    if check is not None:
+        value['trust_revision'] = revision
     return value
 
 

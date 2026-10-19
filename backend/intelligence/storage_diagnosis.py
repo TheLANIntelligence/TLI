@@ -16,6 +16,12 @@ from storage_scan_algorithms import _bytes_human, is_protected
 
 PROTOCOL = "storage-investigation-v1"
 MAX_SELECTION_NODES = 25_000
+
+
+def _display_path(value):
+    text = str(value)
+    return _markdown(text if len(text) <= 600 else text[:600] + "… [path shortened; full path is in the evidence]")
+
 _QUESTIONS = tuple(re.compile(p) for p in (
     r"why (?:is (?:my |the )?(?:[a-z]: ?)?(?:drive|disk|storage) (?:always |so )?full|does (?:my |the )?(?:[a-z]: ?)?(?:drive|disk|storage) keep filling up)",
     r"(?:my |the )?(?:[a-z]: ?)?(?:drive|disk|storage) keeps filling up(?: and i don't know why)?",
@@ -126,7 +132,7 @@ def _selected_evidence(tree, meta, selected_path):
 
 def _selection_answer(row, selection, recorded_at):
     directory = selection["kind"] == "directory"
-    lines = [f"Selected {'folder' if directory else 'file'}: {_markdown(selection['path'])}, recorded {_markdown(recorded_at or 'time unknown')}."]
+    lines = [f"Selected {'folder' if directory else 'file'}: {_display_path(selection['path'])}, recorded {_markdown(recorded_at or 'time unknown')}."]
     if selection["modified_at"]:
         lines.append(f"Recorded modified time: {_markdown(selection['modified_at'])}. This alone does not establish when storage grew.")
     logical, counted = selection["logical_bytes"], selection["counted_logical_bytes"]
@@ -154,7 +160,9 @@ def _selection_answer(row, selection, recorded_at):
     elif selection["scan_partial"]:
         lines.append("The overall scan has incomplete coverage; this selection did not report an additional coverage gap.")
     if selection["representation_limited"]:
-        lines.append(f"Some inspected paths within this selection were grouped or omitted from the retained tree ({_bytes_human(selection['omitted_bytes'])} of recorded bytes). Expanding this observation cannot recover their individual paths.")
+        lines.append(f"Some inspected paths within this selection were grouped or omitted from the retained tree ({_bytes_human(selection['omitted_bytes'])} of recorded bytes)." +
+                     (" The indexed inventory can page through recorded paths beyond that display limit." if selection.get("inventory_available") else
+                      " Expanding this observation cannot recover their individual paths."))
     if directory:
         guidance = {"path": row["path"], "size_bytes": counted, "classification": "protected", "action": "blocked",
                     "reason": "A folder summary cannot authorize removal of its contents.",
@@ -177,7 +185,21 @@ def investigate(credential, job_id, question="", baseline_id=None, selected_path
     if job["operation"] != "scan" or job["status"] not in storage_jobs.TERMINAL:
         raise HTTPException(409, "Choose a finished storage scan before investigating.")
     meta, tree = result["meta"], result["tree"]
-    selected, selection = _selected_evidence(tree, meta, selected_path) if selected_path is not None else (None, None)
+    selected, selection = None, None
+    if selected_path is not None:
+        if meta.get("inventory", {}).get("available"):
+            page = storage_jobs.inventory_query(credential, job_id, mode="item", path=selected_path, limit=1)
+            if not page["items"]:
+                raise HTTPException(404, "This path is not recorded in the indexed observation.")
+            if page["items"][0].get("kind") not in {"file", "directory"}:
+                raise HTTPException(422, "This indexed entry was excluded or unreadable and cannot support an item explanation.")
+            selected, selection = _selected_evidence(page["items"][0], meta, selected_path)
+            selection["size_reason"] = selected.get("coverage_reason", selection["size_reason"])
+            selection.update(source="indexed_inventory_v1", inventory_available=True,
+                             indexed_children=selected.get("child_count"),
+                             accounting=page["meta"].get("accounting"))
+        else:
+            selected, selection = _selected_evidence(tree, meta, selected_path)
     files = sorted((r for r in result.get("largest", []) if not r.get("hardlink_duplicate")), key=lambda r: r.get("size", 0), reverse=True)[:12]
     folders = sorted(meta.get("folder_summary", []), key=lambda r: r.get("bytes", 0), reverse=True)[:12]
     comparison = None
@@ -187,17 +209,21 @@ def investigate(credential, job_id, question="", baseline_id=None, selected_path
             raise HTTPException(409, "This scan has no comparable history receipt.")
         from intelligence.storage_history import compare
         comparison = compare(credential.owner, baseline_id, scan_id)
+        comparison["indexed_comparison"] = storage_jobs.inventory_comparison(credential, baseline_id, scan_id)
     recommendations = [recommendation(row) for row in files]
     evidence = {"job_id": job_id, "root": meta["root"], "scanned_at": job["finished_at"],
                 "host": job.get("host"), "coverage": {k: meta.get(k) for k in ("partial", "denied", "skipped", "time_limited", "entry_limited", "depth_limited", "identity_unknown")},
                 "logical_bytes": tree["size"], "allocated_bytes": tree.get("allocated_size"),
                 "largest_files": copy.deepcopy(files), "largest_folders": copy.deepcopy(folders),
-                "categories": copy.deepcopy(meta.get("categories", [])), "capacity": copy.deepcopy(meta.get("capacity")), "comparison": comparison}
+                "categories": copy.deepcopy(meta.get("categories", [])), "capacity": copy.deepcopy(meta.get("capacity")), "comparison": comparison,
+                "inventory": copy.deepcopy(meta.get("inventory")), "scanner": copy.deepcopy(meta.get("scanner"))}
     if selection is not None:
         evidence.update(selected_path=selection["path"], selection=selection)
         lines, recommendations = _selection_answer(selected, selection, job.get("finished_at"))
+        if selection.get("inventory_available"):
+            lines.append("This selection comes from the indexed observation, including paths outside the map's display limit. Hard-link bytes use the index's recorded attribution policy.")
     else:
-        lines = [f"Scan evidence for {_markdown(meta['root'])}, recorded {_markdown(job.get('finished_at') or 'time unknown')}: {_bytes_human(tree['size'])} of counted logical file sizes."]
+        lines = [f"Scan evidence for {_display_path(meta['root'])}, recorded {_markdown(job.get('finished_at') or 'time unknown')}: {_bytes_human(tree['size'])} of counted logical file sizes."]
     if meta.get("partial") and selection is None:
         lines.append("Coverage is incomplete. Inaccessible, excluded or unvisited storage may contain larger consumers.")
     lines.append("This is a recorded observation, not a live filesystem guarantee. Allocated space, logical file sizes and volume free space are different measurements.")
@@ -205,9 +231,9 @@ def investigate(credential, job_id, question="", baseline_id=None, selected_path
         files = [row for row in files if any(p in row.get("path", "").casefold() for p in ("lmstudio", "lm studio", ".gguf", ".safetensors"))]
         lines.append("Model-like paths below are review leads; filenames alone do not establish which application owns them or whether they are expendable.")
     if selection is None and folders:
-        lines.append("Largest observed folders: " + "; ".join(f"{_markdown(r['name'])} ({_bytes_human(r['bytes'])})" for r in folders[:5]) + ".")
+        lines.append("Largest observed folders: " + "; ".join(f"{_display_path(r['name'])} ({_bytes_human(r['bytes'])})" for r in folders[:5]) + ".")
     if selection is None and files:
-        lines.append("Largest retained file observations:\n" + "\n".join(f"- {_markdown(r['path'])}: {_bytes_human(r['size'])}" for r in files[:8]))
+        lines.append("Largest retained file observations:\n" + "\n".join(f"- {_display_path(r['path'])}: {_bytes_human(r['size'])}" for r in files[:8]))
     elif selection is None:
         lines.append("No matching individual file evidence is retained in this result; this does not prove that none exist.")
     if selection is not None and comparison:
@@ -222,10 +248,18 @@ def investigate(credential, job_id, question="", baseline_id=None, selected_path
     if comparison and comparison.get("file_comparison", {}).get("available"):
         changes = comparison.get("files", [])[:6]
         if changes:
-            lines.append("Observed file changes:\n" + "\n".join(f"- {_markdown(r['path'])}: {r['status'].replace('_', ' ')}" + (f", {r['delta_bytes']:+,} logical bytes" if r.get("delta_bytes") is not None else "") for r in changes))
+            lines.append("Observed file changes:\n" + "\n".join(f"- {_display_path(r['path'])}: {r['status'].replace('_', ' ')}" + (f", {r['delta_bytes']:+,} logical bytes" if r.get("delta_bytes") is not None else "") for r in changes))
         lines.append(comparison["file_comparison"].get("reason", ""))
     if comparison and comparison.get("folder_comparison", {}).get("reason"):
         lines.append(comparison["folder_comparison"]["reason"])
+    indexed_comparison = (comparison or {}).get("indexed_comparison") or {}
+    if indexed_comparison.get("available"):
+        lines.append("Indexed history evidence: " + indexed_comparison.get("reason", "Stable file identities were compared within the retained observations."))
+        changes = indexed_comparison.get("changes", indexed_comparison.get("rows", []))[:6]
+        if changes:
+            lines.append("Indexed file observations:\n" + "\n".join(
+                f"- {_display_path(row.get('path', row.get('after_path', row.get('before_path', 'Recorded file'))))}: {_markdown(str(row.get('status', 'changed')).replace('_', ' '))}"
+                for row in changes))
     capacity = (comparison or {}).get("capacity") or {}
     if capacity.get("available"):
         lines.append(f"Volume free-space change: {capacity['free_delta_bytes']:+,} bytes. " + capacity["explanation"])
@@ -235,6 +269,8 @@ def investigate(credential, job_id, question="", baseline_id=None, selected_path
     if not credential.valid():
         raise HTTPException(401, "The scan session ended. Unlock again.")
     reply = "\n\n".join(lines)
+    if len(reply) > 36_000:
+        reply = reply[:35_000] + "\n\nThis explanation is shortened. Full recorded paths remain in the evidence; incomplete coverage and cleanup review requirements still apply."
     return {"ok": True, "protocol": PROTOCOL, "local_only": True, "reply": reply, "answer": reply,
             "evidence": evidence, "recommendations": recommendations}
 

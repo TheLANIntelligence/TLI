@@ -225,6 +225,8 @@ def run(root, report_path, *, wait_for_parent_death=False):
             ports.append(sock.getsockname()[1])
 
     def call(index, method, path, expected=200, **kwargs):
+        if path.startswith('/system/pin/') and method == 'POST':
+            kwargs['headers'] = {**kwargs.get('headers', {}), 'Origin': f'https://127.0.0.1:{ports[index]}'}
         response = sessions[index].request(method, f"https://127.0.0.1:{ports[index]}"+path,
             verify=str(root / str(index) / "cert.pem"), timeout=15, allow_redirects=False, **kwargs)
         if response.status_code != expected:

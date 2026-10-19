@@ -176,6 +176,12 @@ Advanced tools. Existing stores and specialist workspaces remain available.
 Organize/Free Space and other workflow subnavigation remain available inside
 their workspaces; opening a navigation entry alone does not scan or run a device.
 
+USB and network observations require verified browser access. Locking TLI clears
+their private output. After unlocking, refresh devices explicitly; old results and
+storage choices cannot trigger follow-up work. An unavailable inventory is not
+confirmation that no drives are connected. Check the current model-storage
+destination before retrying an unconfirmed change.
+
 ---
 
 ## Dashboard
@@ -259,6 +265,22 @@ The Vault stores files, secrets, notes, and login credentials — all encrypted 
 
 Open **Smart devices** for registered devices and their supported
 actions. Available controls depend on the driver and device configuration.
+Use the local TLI browser, or HTTPS with an unlocked PIN for a remote browser.
+Lock clears private device views and pauses polling. After TLI verifies access,
+the panel reloads current inventory; discovery and device commands are never
+repeated automatically. A command already sent may still have taken effect.
+
+If the saved device list cannot be read, TLI shows it as unavailable and pauses
+setup edits. It preserves the saved host file and browser import records. An
+uncertain save may already have completed: refresh the saved list before trying
+another edit. Do not replace a damaged file with an empty list to dismiss the error.
+
+Ask TLI can check or control one named device from the authorized browser or a
+paired HTTPS Phone Companion. It distinguishes command acknowledgement from the
+fresh reading afterward. If access ends, later steps and private replies stop;
+reconnect and check the device before deliberately sending another command.
+Nothing is replayed on unlock. A new chat request is a new command; it does not
+carry the durable duplicate protection of a reviewed routine.
 
 ### Supported vendors
 
@@ -297,6 +319,9 @@ plan before **Run reviewed routine**. Every target must resolve before any step
 executes. Duplicate requests share the recorded execution; an uncertain response
 does not automatically retry. Inspect the per-step result and saved receipt for
 successful, failed and partially completed work.
+If access ends during a run, later steps stop and the locked request cannot show
+the private result. Unlock, inspect recorded results and check the devices before
+deliberately preparing another run. Returning to an uncertain run never repeats it.
 
 **Edit** updates the saved routine after checking its revision; **Duplicate**
 prepares a separate editable draft. **Archive** hides a routine from the active
@@ -306,7 +331,7 @@ prepares a current-target review, not a run. Resolve conflicting edits and
 review changed targets again. A running routine cannot be edited.
 
 Legacy trigger, enabled and cooldown fields are retained in existing records.
-This installation has no active presence, power or scheduled-trigger executor;
+This manual-routine engine has no active presence, power or scheduled-trigger executor;
 those fields do not make a routine run automatically. See
 [reviewed routines](docs/TLI_ROUTINE_REVIEW.md).
 
@@ -437,9 +462,30 @@ results before retrying. **Undo** covers only its recorded operation and checks
 for later changes; it is not a general folder restore. Free Space's Trash review
 is separate, with a 100-file cap and operating-system Trash recovery.
 
+File controls require the TLI browser: with the PIN off, use localhost directly
+on the host; remote access requires HTTPS and an unlocked PIN session. **Open**
+uses the host's application association and can launch a program. **Show in
+folder** opens the file manager to the selected item. Trash protects TLI's
+installation, saved data and Vault even when relocated, along with folders
+containing them; linked paths require inspection in your file manager.
+
+If access ends or security settings become unreadable during a move or undo,
+TLI stops subsequent files and records known results using its existing recovery
+record. If that record cannot be saved, recovery remains uncertain and requires
+manual inspection; the temporary preview cache is not a backup across restart.
+Completed changes remain in place. The private review disappears from the locked
+page, and unlocking does not repeat the action. Inspect the actual paths before
+requesting a new review or Undo; an interrupted confirmation cannot resume its
+remaining files. A host app or Trash operation already dispatched may complete
+even when its response is withheld. Do not resubmit an uncertain action blindly.
+
 AI suggestions remain written advice and do not create or approve moves.
 Opening Free Space prepares the folder; choose **Scan** there to inspect it.
 Moving files between subfolders does not establish freed disk space.
+The deeper Free Space scan projections and cleanup workflow have separate access
+contracts and remain under review. This file-control change was checked with
+temporary files and mocked host adapters; real OS launch/Trash, installed restart,
+interrupted recovery and extracted-package acceptance remain outstanding gates.
 
 ---
 
@@ -472,13 +518,31 @@ TLI can run on multiple machines and form a LAN mesh. Each device is a full peer
 
 ## Satellite Phones
 
-Add your smartphone to the mesh without running TLI on it. The phone gets a dedicated companion shell, uses the host's AI, and appears in the Mesh panel with live battery and connection status.
+The legacy browser phone flow opens a companion shell and reports battery and
+connection status in Mesh. Its satellite credential authorizes presence updates
+and removal of that same phone only. Private chat, devices and Vault have their
+own access requirements; satellite registration does not unlock them or create
+a reviewed native Companion or inference Node identity.
 
 ### Adding a phone
-1. Go to **Mesh → Add Phone** — a QR code appears (valid for 10 minutes)
+1. Open TLI in an authorized browser, then **Mesh → Add Phone** — a QR code appears (valid for 10 minutes while the issuing session remains valid)
 2. Scan the QR code or paste the URL into your phone's browser
 3. Enter a name and tap **Join Mesh**
 4. The phone redirects to the TLI companion shell and registers as a satellite
+
+Use a direct HTTPS host address reachable from the phone. Plain HTTP is accepted
+only on direct localhost, which does not provide a phone-to-computer connection.
+New join links keep the token in a URL fragment. Keep the issuing browser unlocked
+until enrollment completes; a PIN change or revoked issuing session invalidates
+the invitation. A failed or unconfirmed enrollment never retries automatically.
+Inspect the desktop phone list before generating a replacement invitation.
+
+Locking clears desktop phone cards and invitation details. Verified access can
+resume reads, but never generates a new invitation or repeats removal. Leaving
+from the phone authenticates with that phone's secret. Transport or storage
+failures preserve its saved credentials; only confirmed removal or an explicit
+invalid-credential response clears them. Damaged host registry data blocks changes
+and is preserved for recovery. Real phone, restart and recovery trials remain open.
 
 ### Companion shell tabs
 - **Chat** — AI chat with quick-prompt chips
@@ -488,32 +552,22 @@ Add your smartphone to the mesh without running TLI on it. The phone gets a dedi
 - **Status** — battery, connection type, host AI status
 
 ### Platform notes
-- **Android Chrome** — full feature set, PWA install, battery and connection reporting
-- **iOS Safari** — full feature set, tap Share → Add to Home Screen; battery reporting not available (iOS limitation)
+- **Android Chrome** — browser capabilities determine PWA installation, battery and connection reporting; verify the intended device during acceptance.
+- **iOS Safari** — the browser shell can be added to the Home Screen; battery reporting is not provided by this flow. End-to-end private feature access requires separate acceptance.
 
 ---
 
 ## Federated Chat
 
-Message TLI nodes on **other home networks** — across the internet — without any cloud account. Uses a lightweight WebSocket relay.
+The old room-code relay is retired. Starting, pairing, sending and automatic
+reconnection are unavailable. Its name-only room protocol did not provide the
+identity and encrypted-transport protections required for private communication.
 
-```
-Your TLI ──► ws://relay:9000 ◄── Friend's TLI
-```
-
-### Quick start
-
-**Enable a relay** (one party needs a publicly reachable machine or VPS):
-1. Go to **Mesh → Federated Chat → Built-in Relay** and click **Enable**
-2. The relay starts on port 9000 — click **Copy URL** and share it with your contact
-
-**Start a conversation:**
-1. Both parties enter the relay URL and save it
-2. One person clicks **Generate Code** — a 6-character room code appears
-3. Share the code, the other person enters it and clicks **Join**
-4. Chat opens
-
-The relay sees room codes and display names only — no message content is stored server-side. History is in-memory and cleared when both parties disconnect.
+After unlocking, the legacy panel can show retained process-memory history and
+status. Explicit disconnect/stop is available for cleanup; an unconfirmed stop
+remains visible for review. Saved settings are preserved. This history is not a
+durable archive. Reviewed LAN messaging and inference use separate connections.
+See the [audit](docs/TLI_AUDIT.md) for the retirement evidence and remaining work.
 
 ---
 
@@ -568,15 +622,31 @@ and effect before installing; a listing does not mean a package is reviewed or v
 |---|---|
 | Theme | Install stores the package; Apply for this session changes appearance |
 | AI Preset | Install stores the preset; Use prompt preset changes the configured prompt |
-| Script | Install stores code; Run script on host explicitly executes it |
-| App | Install adds the package; Open loads its interface |
+| Script | Install stores code; view/copy saved source after unlocking. Host execution is unavailable |
+| App | Install stores a single-file app; Open runs its local HTML/JavaScript in an isolated view |
 
 **Share on this host** adds a package to this host's registry; it does not
 publish to a public store. Registry connections use their configured addresses.
 This release adds no public marketplace or automatic routine scheduling.
 
-**More → Installed apps** opens already installed packages. Existing projects,
-registries and app storage remain available. Pin a secondary workspace if used often.
+**More → Installed apps** opens already installed single-file packages. App code
+cannot access the TLI page, its cookies or its browser storage. Host-connected
+features and external assets are unavailable; package permissions are declarations,
+not grants. The old bridge storage API is unavailable, while its saved browser
+data and original package files remain preserved. Apps needing that bridge may
+not function until a separately reviewed capability service exists. Pin a
+secondary workspace if used often.
+
+Hub validates exact package paths and refuses damaged metadata. Install/update
+and uninstall retain recovery copies under `data/hub_backups/`, with a
+`recovery.json` mapping of original paths, copy names and hashes. Uninstall removes
+the registration and moves known artifacts there, preserving extra app files.
+An interrupted or uncertain change leaves `data/hub_pending.json` and pauses Hub
+access. Do not delete this marker or retry blindly: it does not prove the change
+failed. The retained mapping describes the planned change, not its completion.
+Review the journal, current files and before/after copies with the host
+stopped before an explicit repair. Automatic reconciliation and a recovery UI
+are not implemented; physical interruption/restore acceptance remains open.
 
 ---
 
@@ -613,6 +683,9 @@ diagnostic reports are under **Help → Saved reports**.
 
 ### Built-in diagnostics
 
+These fixed diagnostics require an authorized browser session, including when
+requested in chat. Inputs are checked, and loss of access stops further results.
+
 | Tool | What it does |
 |---|---|
 | System Snapshot | CPU, RAM, disk, Python version, hostname |
@@ -625,8 +698,10 @@ diagnostic reports are under **Help → Saved reports**.
 
 ### AI-generated scripts
 Type a task description and choose a target shell to prepare a script draft.
-Review, copy or download it. Generation does not execute it. Explicit script
-execution has host access; it is not an operating-system security sandbox.
+Review and copy it. TLI does not execute these scripts on the host. Previously
+saved source remains available for private plaintext review/copy. The old script
+file-generation and deletion endpoints are also retired, preserving saved files.
+Draft warnings are advisory and do not establish that code is safe to run elsewhere.
 
 ---
 
@@ -649,6 +724,19 @@ browser appearance, account data and shared host settings have different owners.
 | Interface | General → Appearance or header View | Modern (default) or Classic, using current features |
 | Color theme | General → Appearance | Browser palette, independent of interface choice |
 | Updates | App & troubleshooting | Review update configuration and available actions |
+
+License controls in Settings require verified browser access. Locking TLI clears
+private license details; unlocking refreshes them without repeating activation or
+removal. If a change is not confirmed, refresh the details before deciding what to
+do next. An unavailable saved license is not treated as an empty license or silently
+replaced. Existing BETA access remains separate from a saved license key.
+
+Online search uses the SearXNG endpoint selected in Settings. Use its final
+HTTP(S) address, including any base path; redirects, credentials embedded in URLs
+and implicit host proxy credentials are unsupported. Search requires verified
+browser access. If retrieval fails, explicitly choose **Answer Offline** or retry
+the search; TLI does not automatically submit the question after that failure.
+Locking clears visible search receipts without deleting their saved browser data.
 
 ### Classic or Modern interface
 
@@ -679,11 +767,13 @@ recovery is unavailable. See [scope and verification](docs/TLI_SEPARATE_RECOVERY
 
 ## Security Model
 
-TLI is designed for trusted LAN use. The table below shows what each layer protects.
+TLI is designed for trusted LAN use. The table below describes individual
+mechanisms; API coverage remains under review in the
+[route-authority inventory](docs/TLI_ROUTE_AUTHORITY_INVENTORY.md).
 
 | Layer | What it does |
 |---|---|
-| PIN lock | Blocks all UI and API access until the correct PIN is entered. PBKDF2-HMAC-SHA256, 260k rounds. |
+| PIN lock | Locks the UI and participates in protected API admission; route coverage is not yet complete. PBKDF2-HMAC-SHA256, 260k rounds. |
 | Session cookie | Issued on PIN verify. HttpOnly, SameSite=Strict, 24-hour TTL. |
 | HTTPS | Optional self-signed TLS (`TLI_ENABLE_TLS=1`). Encrypts all traffic. |
 | Vault encryption | AES-256-GCM. Keys derived from vault password via PBKDF2, never written to disk. |
@@ -693,7 +783,9 @@ TLI is designed for trusted LAN use. The table below shows what each layer prote
 | Satellite join tokens | One-time-use, expire after 10 minutes. Only the host can generate them. |
 | CSP headers | `Content-Security-Policy: script-src 'self'` on every response. |
 
-**TLI is not designed for exposure to the internet.** Keep it on your LAN and behind your router firewall. The built-in relay (port 9000) is the only component intended to be internet-facing, and only when you explicitly enable it.
+**TLI is not designed for exposure to the internet.** Keep it on your LAN and
+behind your router firewall. The legacy relay is retired; this release provides
+no replacement public relay service.
 
 ---
 
@@ -762,9 +854,9 @@ configured update source and available version there.
 - If the QR code expired, generate a new one
 
 **Federated Chat — relay errors**
-- Verify the relay URL format is `ws://ip:port`
-- Confirm the relay node has the Built-in Relay enabled and port 9000 is reachable
-- Both parties must point at the same relay URL
+- The legacy relay is unavailable by design; changing its URL will not re-enable it.
+- Unlock to review retained history/status or explicitly stop an older connection.
+- An uncertain cleanup result is not confirmation that an older listener closed.
 
 **Browser extension shows "Vault is locked"**
 - Unlock the vault in TLI first — the extension cannot read credentials without an active vault session

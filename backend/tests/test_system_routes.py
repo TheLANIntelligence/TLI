@@ -12,16 +12,16 @@ import pytest
 
 
 class TestHealth:
-    def test_llm_health_reachable(self, client):
+    def test_llm_health_reachable(self, browser_client):
         """Health endpoint exists and returns JSON regardless of LM Studio state."""
-        r = client.get("/health/llm")
+        r = browser_client.get("/health/llm")
         assert r.status_code in (200, 503)
         data = r.json()
         assert isinstance(data, dict)
 
-    def test_health_report_reachable(self, client):
+    def test_health_report_reachable(self, browser_client):
         """Health report endpoint exists."""
-        r = client.get("/health/llm/report")
+        r = browser_client.get("/health/llm/report")
         assert r.status_code in (200, 503)
 
     def test_agent_ping(self, client):
@@ -41,10 +41,10 @@ class TestOnboarding:
         assert "complete" in data
         assert isinstance(data["complete"], bool)
 
-    def test_onboarding_complete_requires_auth(self, client):
-        """Marking onboarding complete requires a session (or open access mode)."""
-        r = client.post("/system/onboarding/complete")
-        # Either succeeds (PIN not enabled) or 401
+    def test_onboarding_complete_requires_auth(self, browser_client):
+        """Marking onboarding complete requires a PIN session or direct localhost."""
+        r = browser_client.post("/system/onboarding/complete")
+        # Either succeeds (PIN not enabled) or requires an unlocked browser.
         assert r.status_code in (200, 401)
 
 
@@ -77,9 +77,9 @@ class TestDiagnostics:
         data = r.json()
         assert isinstance(data, dict)
 
-    def test_whoami_endpoint(self, client):
-        """Whoami endpoint returns identity info."""
-        r = client.get("/api/diagnostics/whoami")
+    def test_whoami_endpoint(self, browser_client):
+        """Private identity info is available to a verified browser."""
+        r = browser_client.get("/api/diagnostics/whoami")
         assert r.status_code == 200
 
     def test_routes_endpoint(self, client):
@@ -91,19 +91,30 @@ class TestDiagnostics:
 
 
 class TestStatus:
-    def test_status_returns_json(self, authed_client):
+    def test_status_returns_json(self, browser_client):
         """Status endpoint returns JSON with system info."""
-        r = authed_client.get("/status")
+        r = browser_client.get("/status")
         assert r.status_code == 200
         data = r.json()
         assert isinstance(data, dict)
 
-    def test_system_probe(self, client):
-        """System probe endpoint returns basic info."""
-        r = client.get("/system/probe")
-        assert r.status_code in (200, 401)
+    def test_system_probe(self, browser_client, monkeypatch):
+        """A verified browser receives a synthetic hardware observation."""
+        from routers import system_routes
+        expected = {"cpu_cores": 4, "cpu_threads": 8, "ram_total_gb": 16.0,
+                    "ram_available_gb": 8.0, "gpu_vram_gb": None,
+                    "suggested_profile": "balanced"}
+        def probe(*, check=None):
+            assert callable(check)
+            check()
+            return expected
+        monkeypatch.setattr(system_routes, "system_probe", probe)
+        r = browser_client.get("/system/probe")
+        assert r.status_code == 200
+        assert r.json() == expected
+        assert r.headers["cache-control"] == "no-store"
 
-    def test_system_capabilities(self, client):
-        """Capabilities endpoint returns feature flags."""
-        r = client.get("/system/capabilities")
-        assert r.status_code in (200, 401)
+    def test_system_capabilities(self, browser_client):
+        """Saved device capabilities require a verified browser."""
+        r = browser_client.get("/system/capabilities")
+        assert r.status_code == 200

@@ -243,12 +243,34 @@ def validate_key(
 # ============================================
 
 _cached_result: Optional[Dict[str, Any]] = None
+_cache_unavailable = False
+
+
+def mark_cache_unavailable() -> None:
+    """An unreadable store or uncertain commit cannot retain licensed grants."""
+    global _cache_unavailable
+    _cache_unavailable = True
+
+
+def _require_cache_available() -> None:
+    if _cache_unavailable:
+        from license_store import unavailable
+        raise unavailable()
+
+
+def publish_validation(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Publish already validated committed state without a second slow check."""
+    global _cached_result, _cache_unavailable
+    _cached_result = None if BETA_MODE or result is None else dict(result)
+    _cache_unavailable = False
+    return get_status()
 
 
 def get_active_tier() -> str:
     """Return the currently active tier ('free', 'trial', 'pro'). Always 'pro' in BETA_MODE."""
     if BETA_MODE:
         return "pro"
+    _require_cache_available()
     if _cached_result and _cached_result.get("valid"):
         return _cached_result.get("tier", "free")
     return "free"
@@ -256,6 +278,7 @@ def get_active_tier() -> str:
 
 def get_status() -> Dict[str, Any]:
     """Return the full cached validation result, or a default free state."""
+    _require_cache_available()
     if _cached_result:
         return dict(_cached_result)
     return {
@@ -271,14 +294,19 @@ def get_status() -> Dict[str, Any]:
 
 def refresh_cache(stored_key: Optional[str], node_id: Optional[str]) -> Dict[str, Any]:
     """Re-validate stored_key and update the in-memory cache. Called at startup."""
-    global _cached_result
     if BETA_MODE:
         # Skip signature validation entirely — secret not required in beta
-        _cached_result = None
-        return get_status()
+        return publish_validation(None)
     if not stored_key:
-        _cached_result = None
-        return get_status()
+        return publish_validation(None)
     result = validate_key(stored_key, current_node_id=node_id)
-    _cached_result = result
-    return result
+    return publish_validation(result)
+
+
+def bootstrap_cache(load_saved, node_id: Optional[str]) -> Dict[str, Any]:
+    """Optional license damage does not prevent startup or silently grant access."""
+    try:
+        return refresh_cache(load_saved().get("key"), node_id)
+    except Exception:
+        mark_cache_unavailable()
+        return {"available": False, "valid": False}

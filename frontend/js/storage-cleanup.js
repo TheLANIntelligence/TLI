@@ -310,7 +310,15 @@
     if(dialog.open)dialog.close();
     dialog.remove();
     if(restoreFocus){
-      const target=invoker?.isConnected ? invoker : el('storage-cleanup-review')?.querySelector('summary');
+      const available=node=>{
+        if(!node?.isConnected||node.disabled)return false;
+        for(let parent=node;parent;parent=parent.parentElement||parent.parentNode)if(parent.hidden||parent.inert)return false;
+        if(typeof node.checkVisibility==='function'&&!node.checkVisibility({checkVisibilityCSS:true,checkOpacity:true}))return false;
+        return typeof node.getClientRects!=='function'||node.getClientRects().length>0;
+      };
+      // Clearing the selection can hide the button that opened this drawer.
+      // Return to a visible browsing control instead of leaving focus on body.
+      const target=[invoker,el('storage-cleanup-review')?.querySelector('summary'),el('fs-table-wrap'),el('fs-browser-files'),el('visualizerPathInput'),el('fs-locations')?.querySelector('summary')].find(available);
       target?.focus?.();
     }
   }

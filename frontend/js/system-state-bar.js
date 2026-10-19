@@ -28,6 +28,7 @@
   let _ssbState = null, _ssbReceivedAt = 0, _ssbAgeAtReceipt = null;
   let _ssbUnavailable = false, _ssbFetching = false, _ssbRevision = 0;
   let _registeredCount = null, _registeredNames = [], _inventoryAt = 0, _locked = false;
+  let _accessPaused = false, _accessMessage = '', _authEpoch = 0;
   let _storageSnapshot = null, _storageCheckedAt = null, _storageServerAt = 0, _storageUnavailable = false;
   const STALE_AFTER_MS = 30_000;
   const validPercent = value => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
@@ -75,7 +76,7 @@
     const partial = ![cpu, ram, disk].every(validPercent) || deviceCount === "--";
     const labels = { unknown:'Monitoring freshness unknown', unavailable:'Monitoring unavailable', stale:'Readings stale', current:partial ? 'Some readings unavailable' : 'Metrics current' };
     const time = age === null ? '' : ` · last check ${_fmtTs(state.probed_ts)}`;
-    const text = labels[freshness] + (freshness === 'current' ? '' : time);
+    const text = _accessMessage || labels[freshness] + (freshness === 'current' ? '' : time);
     if (message.textContent !== text) message.textContent = text;
     message.title = age === null ? 'This host did not provide a successful metrics probe time.' : 'Latest successful metrics probe: ' + new Date(state.probed_ts * 1000).toLocaleString();
     const diskEl = bar.querySelector(".ssb-metric[data-for='disk']");
@@ -140,6 +141,7 @@
       id: payload.node.id, name: payload.node.name, observedAt: validTimestamp(payload.ts) ? payload.ts * 1000 : Date.now(),
       source: 'dashboard/command-center',
     });
+    _accessPaused = false; _accessMessage = '';
     _ssbRevision++; _ssbState = state; _ssbReceivedAt = Date.now(); _ssbUnavailable = false;
     const serverNow = validTimestamp(payload.ts) ? payload.ts * 1000 : _ssbReceivedAt;
     const age = validTimestamp(state.probed_ts) ? serverNow - state.probed_ts * 1000 : null;
@@ -148,14 +150,16 @@
   }
 
   async function _fetchAndRenderSSB() {
-    if (_ssbFetching || _locked) return;
-    _ssbFetching = true; const revision = _ssbRevision;
+    if (_ssbFetching || _locked || _accessPaused) return;
+    _ssbFetching = true; const revision = _ssbRevision, authEpoch = _authEpoch;
     const options = () => ({ cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(12000) });
     try {
       let response;
       try { response = await fetch('/dashboard/command-center', options()); }
-      catch (_) { response = await fetch('/dashboard/state', options()); }
+      catch (_) { if (_locked || authEpoch !== _authEpoch) return; response = await fetch('/dashboard/state', options()); }
+      if (_locked || authEpoch !== _authEpoch) return;
       if (response.status === 404) response = await fetch('/dashboard/state', options());
+      if (await _checkAccessFailure(response, authEpoch)) return;
       if (!response.ok) throw new Error('Monitoring unavailable');
       const payload = await response.json();
       if (revision === _ssbRevision && !_acceptSSB(payload)) throw new Error('Monitoring response unavailable');
@@ -242,12 +246,12 @@
     if (!action) return;
     for (const [id, kind] of [['ac-confirm-btn', 'confirm'], ['ac-secondary-btn', 'secondary'], ['ac-dismiss-btn', 'dismiss']]) {
       const button = document.getElementById(id);
-      if (button) { button.disabled = !!_actionPending || _locked || !_actionReviewable(action); button.addEventListener('click', () => _runAction(kind, action.id)); }
+      if (button) { button.disabled = !!_actionPending || _locked || _accessPaused || !_actionReviewable(action); button.addEventListener('click', () => _runAction(kind, action.id)); }
     }
   }
 
   function _renderActionCard(action) {
-    if (_locked || _actionPending) return;
+    if (_locked || _accessPaused || _actionPending) return;
     if (action && (typeof action !== 'object' || !action.id)) return;
     if (action?.id !== _currentAction?.id) { _actionMessage = ''; _actionState = 'idle'; }
     _actionRevision++;
@@ -257,12 +261,13 @@
   }
 
   function _fetchActionCurrent() {
-    if (_locked || _actionPending) return Promise.resolve(false);
+    if (_locked || _accessPaused || _actionPending) return Promise.resolve(false);
     if (_actionFetch) return _actionFetch;
-    const revision = _actionRevision;
+    const revision = _actionRevision, authEpoch = _authEpoch;
     _actionFetch = (async () => {
       try {
         const response = await fetch('/dashboard/action/current', { credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(10000) });
+        if (await _checkAccessFailure(response, authEpoch)) return false;
         if (!response.ok) throw new Error('Suggested actions could not be checked.');
         const action = await response.json();
         if (action && (typeof action !== 'object' || !action.id)) throw new Error('Suggested action response was incomplete.');
@@ -281,32 +286,38 @@
 
   function _runAction(kind, actionId) {
     if (_actionPending) return _actionPending;
-    if (_locked || !_currentAction || _currentAction.id !== actionId) return Promise.resolve(false);
+    if (_locked || _accessPaused || !_currentAction || _currentAction.id !== actionId) return Promise.resolve(false);
     if (!_actionReviewable(_currentAction)) { _paintActionCard(); return Promise.resolve(false); }
     const reviewedAction = _currentAction;
-    const revision = ++_actionRevision;
+    const revision = ++_actionRevision, authEpoch = _authEpoch;
     _actionState = 'working';
     _actionMessage = kind === 'dismiss' ? 'Snoozing this suggestion…' : 'Waiting for the action result…';
-    let refreshAfter = false;
+    let refreshAfter = false, submitted = false, confirmedOutcome = false;
     // Reserve the operation before rendering or starting the request. SSE and
     // command-center updates cannot replace the controls while it is running.
     _actionPending = Promise.resolve().then(async () => {
       try {
-        if (_locked || revision !== _actionRevision || !_actionReviewable(_currentAction)) return false;
+        if (_locked || _accessPaused || revision !== _actionRevision || !_actionReviewable(_currentAction)) return false;
+        submitted = true;
         const response = await fetch('/dashboard/action/' + kind, {
           method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
           body:JSON.stringify({action_id:actionId}),
         });
-        const result = await response.json();
-        if (!response.ok || result?.ok !== true) {
+        if (await _checkAccessFailure(response, authEpoch, undefined, true)) return false;
+        const result = await response.json().catch(() => null);
+        if (_locked || _accessPaused || revision !== _actionRevision || authEpoch !== _authEpoch) return false;
+        const hasReceipt = result?.receipt && typeof result.receipt === 'object' && !Array.isArray(result.receipt);
+        confirmedOutcome = response.ok && typeof result?.ok === 'boolean' && (result.ok === false || kind === 'dismiss' || hasReceipt);
+        if (response.ok && result?.ok === true && kind !== 'dismiss' && !hasReceipt) throw new Error('The host returned no action receipt.');
+        if (!response.ok || result?.ok !== true || result?.receipt?.ok === false) {
           const detail = result?.receipt?.narrator_msg || result?.receipt?.error || result?.detail;
-          throw new Error(typeof detail === 'string' ? detail : 'Action failed. Review the result before retrying.');
+          throw new Error(typeof detail === 'string' ? detail : 'TLI did not confirm the action result.');
         }
         if (kind !== 'dismiss' && reviewedAction.kind === 'disk_observation'
             && (result.receipt?.navigate_to !== 'panel-visualizer' || result.receipt?.scan_path !== reviewedAction.target.path)) {
           throw new Error('The returned location does not match the reviewed drive. Nothing was opened.');
         }
-        if (_locked || revision !== _actionRevision) return false;
+        if (_locked || _accessPaused || revision !== _actionRevision) return false;
         _actionState = 'completed';
         _actionMessage = kind === 'dismiss' ? 'Suggestion snoozed. No action was run.' : result.receipt?.narrator_msg || 'Action completed.';
         if (kind !== 'secondary') { _currentAction = null; refreshAfter = true; }
@@ -318,15 +329,17 @@
         }
         return true;
       } catch (error) {
-        if (!_locked && revision === _actionRevision) {
-          _actionState = 'failed';
-          _actionMessage = error.message || 'The result was not confirmed. Check activity before retrying.';
+        if (!_locked && !_accessPaused && revision === _actionRevision) {
+          _actionState = submitted && !confirmedOutcome ? 'unknown' : 'failed';
+          _actionMessage = submitted && !confirmedOutcome
+            ? 'The action result is unknown; it may have run. Check activity and the affected device before explicitly retrying.'
+            : error.message || 'The result was not confirmed. Check activity before retrying.';
           if (typeof showToast === 'function') showToast(_actionMessage, 'error');
         }
         return false;
       } finally {
         _actionPending = null;
-        if (!_locked && revision === _actionRevision) {
+        if (!_locked && !_accessPaused && revision === _actionRevision) {
           _paintActionCard();
           document.getElementById('ac-' + kind + '-btn')?.focus();
           // An earlier queue read may still be resolving. Finish that obsolete
@@ -413,16 +426,18 @@
     if (!window.EventInterpreter) return;
 
     EventInterpreter.on("narrator_update", function (payload) {
+      if (_locked || _accessPaused) return;
       if (window.TLIDash2 && typeof window.TLIDash2.setEventMessage === "function") {
         window.TLIDash2.setEventMessage(payload);
       }
     });
 
     // Fetch initial narrator state on mount (shown while data loads)
-    fetch("/dashboard/narrator/current", { credentials: "same-origin" })
-      .then(function (r) { return r.ok ? r.json() : null; })
+    const authEpoch = _authEpoch;
+    fetch("/dashboard/narrator/current", { credentials: "same-origin", signal:AbortSignal.timeout(10000) })
+      .then(async function (r) { return await _checkAccessFailure(r, authEpoch) || !r.ok ? null : r.json(); })
       .then(function (msg) {
-        if (!msg || !msg.text) return;
+        if (_locked || _accessPaused || authEpoch !== _authEpoch || !msg || !msg.text) return;
         // Only set if TLIDash2 panel is already open; otherwise it will show on next open
         if (window.TLIDash2 && typeof window.TLIDash2.setEventMessage === "function") {
           window.TLIDash2.setEventMessage(msg);
@@ -446,16 +461,18 @@
   }
 
   function _checkReturnVisit() {
+    if (_locked || _accessPaused) return;
+    const authEpoch = _authEpoch;
     try {
       const last = parseInt(localStorage.getItem(IDLE_KEY) || "0", 10);
       if (!last) return;
       const idle = Date.now() - last;
       if (idle > IDLE_THRESHOLD_MS) {
         // STUB: would call AI path narrator; for now just fetches template narrator
-        fetch("/dashboard/narrator/current", { credentials: "same-origin" })
-          .then(function (r) { return r.ok ? r.json() : null; })
+        fetch("/dashboard/narrator/current", { credentials: "same-origin", signal:AbortSignal.timeout(10000) })
+          .then(async function (r) { return await _checkAccessFailure(r, authEpoch) || !r.ok ? null : r.json(); })
           .then(function (msg) {
-            if (!msg) return;
+            if (_locked || _accessPaused || authEpoch !== _authEpoch || !msg) return;
             if (window.TLIDash2 && typeof window.TLIDash2.setEventMessage === "function") {
               window.TLIDash2.setEventMessage(msg);
             }
@@ -488,18 +505,44 @@
     acceptSnapshot: _acceptSSB,
     getObservation: _observationSnapshot,
   };
+  function _pausePrivate(message) {
+    _authEpoch++; _accessPaused = true; _ssbRevision++; _actionRevision++;
+    _ssbState = null; _ssbAgeAtReceipt = null; _registeredCount = null; _registeredNames = []; _inventoryAt = 0;
+    _storageSnapshot = null; _storageCheckedAt = null; _storageServerAt = 0; _storageUnavailable = false;
+    _ssbUnavailable = true; _currentAction = null; _actionMessage = ''; _actionState = 'locked';
+    _accessMessage = message || 'Monitoring paused. Unlock TLI, then retry live activity.';
+    _renderSSB(); _paintActionCard(); _publishObservation();
+  }
+  async function _checkAccessFailure(response, authEpoch, data, mutation = false) {
+    if (response.status !== 401 && response.status !== 403) return false;
+    const outcomeWarning = ' After restoring access, review activity and current status before retrying; the action may already have run.';
+    if (mutation && authEpoch === _authEpoch) {
+      // Denied headers are sufficient to hide private action state; a slow or
+      // malformed error body must not retain the old action or its receipt.
+      _pausePrivate('Browser access changed. Unlock TLI before continuing.' + outcomeWarning);
+    }
+    if (data === undefined) data = await response.json().catch(() => null);
+    const detail = typeof data?.detail === 'string' ? data.detail : undefined;
+    const message = mutation ? (detail || 'Browser access changed. Unlock TLI before continuing.') + outcomeWarning : detail;
+    if (authEpoch === _authEpoch) _pausePrivate(message);
+    else if (mutation && _accessPaused && !_currentAction) {
+      // The global 401 interceptor may have cleared this operation first.
+      // Retain only the public outcome warning while recovery is still paused.
+      _accessMessage = message; _renderSSB();
+    }
+    return true;
+  }
+  window.EventInterpreter?.on('access_ready', () => {
+    if (_locked) return;
+    _accessPaused = false; _accessMessage = '';
+    _fetchAndRenderSSB(); Promise.resolve(_actionPending).finally(_fetchActionCurrent);
+  });
   if (typeof window.addEventListener === 'function') {
     window.addEventListener('tli-session-locked', () => {
-      _locked = true; _ssbRevision++; _actionRevision++;
-      _ssbState = null; _ssbAgeAtReceipt = null; _registeredCount = null; _registeredNames = []; _inventoryAt = 0;
-      _storageSnapshot = null; _storageCheckedAt = null; _storageServerAt = 0; _storageUnavailable = false;
-      _ssbUnavailable = true; _currentAction = null; _actionMessage = ''; _actionState = 'locked';
-      _renderSSB(); _paintActionCard(); _publishObservation();
+      _locked = true; _pausePrivate();
     });
     window.addEventListener('tli-session-unlocked', () => {
       _locked = false;
-      Promise.resolve(_actionPending).finally(_fetchActionCurrent);
-      _fetchAndRenderSSB();
     });
   }
 })();

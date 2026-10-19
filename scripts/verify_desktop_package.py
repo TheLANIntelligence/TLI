@@ -43,6 +43,7 @@ MARKER = "synthetic desktop package verification only"
 MAX_FILES, MAX_FILE_BYTES, MAX_TOTAL_BYTES = 5000, 128 * 1024 * 1024, 1024 * 1024 * 1024
 COMMON_ROOT = {"README.md", "START_HERE.md", "LICENSE", "SECURITY.md", "TLI_MANUAL.md"}
 PUBLIC_GUIDES = {"TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "TLI_SEAMLESS_CONNECTIONS.md", "SSE_SCHEMA.md",
+                 "TLI_TASK_AGENT.md", "TLI_SONOS.md", "TLI_HOST_VOICE.md", "TLI_BLUETOOTH.md",
                  "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                  "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                  "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
@@ -120,7 +121,9 @@ def allowed_file(path, target):
                 and (name == "llama-server" or name == "LICENSE" or name in LICENSE_NAMES
                      or bool(re.fullmatch(r"lib(?:llama|mtmd|ggml(?:-[a-z0-9-]+)?)(?:\.[0-9]+)*\.dylib", name))))
     if parts[0] == "backend":
-        return suffix == ".py" or path.as_posix() == "backend/requirements.txt" or (
+        return suffix == ".py" or path.as_posix() in {
+            "backend/requirements.txt", "backend/requirements-sonos.txt", "backend/requirements-voice.txt",
+            "backend/requirements-bluetooth.txt"} or (
             suffix == ".txt" and "prompts" in parts[1:-1])
     if parts[0] == "frontend":
         return suffix in FRONTEND_SUFFIXES

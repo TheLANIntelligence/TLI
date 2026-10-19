@@ -6,19 +6,40 @@
   const local=()=>['localhost','127.0.0.1','[::1]'].includes(location.hostname)&&!/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
   const localURL=value=>{try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&['localhost','127.0.0.1','[::1]'].includes(u.hostname)&&!u.username&&!u.password?u:null;}catch{return null;}};
   let receiptId=null,receipt=null;
-  function mount(container,{record,api,current}){
-    let preview=null,busy=false;
+  function mount(container,{record,api,current,onSettled=()=>{}}){
+    let preview=null,busy=false,pollCount=0,standaloneRestart=false;
     const button=(text,work)=>{const e=n('button',text);e.type='button';e.className='btn-outline';e.addEventListener('click',()=>{if(!current()||busy)return;Promise.resolve(work(e)).catch(error=>{if(current())result.replaceChildren(n('p',error.message));});});return e;};
     const result=n('div');result.setAttribute('role','status');
-    container.append(n('h3','Enable connections on this computer'));
+    container.append(n('p','Allow your phone to use TLI on your home network.'));
     if(!local()){container.append(n('p','Open TLI in a local desktop browser on the hosting computer to change network setup.'));return;}
-    const label=n('label','HTTPS port'),port=n('input');port.type='number';port.min='1';port.max='65535';port.value=String(record?.startup?.effective_next?.port||record?.running?.port||8443);label.append(port);container.append(label);
+    const label=n('label','HTTPS port'),port=n('input');port.type='number';port.min='1';port.max='65535';port.value=String(record?.startup?.effective_next?.port||record?.running?.port||8443);label.append(port);
+    const technical=n('details');technical.append(n('summary','Advanced connection settings'),label);container.append(technical);
     function showReceipt(value){
       if(value?.schema_version!==1||value.request_id!==receiptId||!['accepted','applying','completed','failed','uncertain'].includes(value.status)||typeof value.message!=='string')throw Error('The setup receipt was incomplete. Check the saved request before trying again.');
       receipt=value;result.replaceChildren(n('p',value.message));
-      if(value.restart_required)result.append(n('p','Review a restart to apply these settings. Unlock TLI afterward to continue this connection.'),button('Review restart & continue',e=>window.TLIHostLifecycle?.open('restart',e)));
-      result.append(button('Check saved setup request',async()=>showReceipt(await api('/api/network-setup/v1/receipt/'+receiptId))));
+      const running=value.running||record?.running,settings=value.settings;
+      // Matching listener settings cannot prove a live TLS context has loaded a
+      // replacement certificate. Keep the explicit repair restart requirement.
+      const alreadyRunning=value.action!=='repair_certificate'&&running&&settings&&['host','port','https'].every(key=>running[key]===settings[key]);
+      if(value.restart_required&&!alreadyRunning&&!standaloneRestart)result.append(n('p','Restart TLI to finish preparing this computer. After restart, open the reviewed HTTPS address and unlock again. Your setup progress will resume.'),button('Restart TLI and continue',e=>window.TLIHostLifecycle?.open('restart',e)));
+      result.append(button('Check saved setup request',()=>checkReceipt()));
       if(value.status==='failed')result.append(n('p','This request will not run again automatically. Read its result before reviewing another change.'));
+    }
+    async function checkReceipt(id=receiptId){
+      const value=await api('/api/network-setup/v1/receipt/'+id);
+      if(!current()||receiptId!==id)return;
+      showReceipt(value);
+      if(['completed','failed'].includes(value.status))onSettled();
+      return value;
+    }
+    function watchReceipt(id){
+      if(!current()||receiptId!==id||++pollCount>30)return;
+      setTimeout(async()=>{
+        if(!current()||receiptId!==id)return;
+        try{const value=await api('/api/network-setup/v1/receipt/'+id);if(!current()||receiptId!==id)return;showReceipt(value);
+          if(['accepted','applying'].includes(value.status))watchReceipt(id);else if(['completed','failed'].includes(value.status))onSettled();
+        }catch(error){if(current())result.append(n('p',error.message+' Use Check saved setup request to read the outcome. Nothing is repeated.'));}
+      },1500);
     }
     async function prepare(action,migrate=false){
       busy=true;preview=null;result.replaceChildren(n('p','Preparing a review…'));
@@ -40,32 +61,39 @@
           if(firewall.migrate_legacy){if(!Array.isArray(firewall.legacy_rules))throw Error('The reviewed older firewall rules were incomplete.');const list=n('ul');
             for(const rule of firewall.legacy_rules){const row=n('li');row.append(n('strong',rule.display_name||rule.name),n('p',`Rule ID: ${rule.name}; ${rule.direction}; ${rule.action}; enabled ${rule.enabled}; profile ${rule.profile}; ${rule.protocol} ${rule.local_port}; program ${rule.program}; remote ${rule.remote_address}.`));list.append(row);}facts.append(n('dt','Rules to replace'),n('dd',firewall.legacy_rules.length?'':'None'));facts.lastChild.append(list);}
         }
-        result.append(facts);
+        const factsDetails=n('details');factsDetails.append(n('summary','Review technical details'),facts);result.append(factsDetails);
         value.warnings.forEach(message=>result.append(n('p',String(message))));
-        if(value.certificate?.previous_fingerprint)result.append(n('p','Current certificate: '+value.certificate.previous_fingerprint));
-        if(value.certificate?.fingerprint)result.append(n('p','Reviewed certificate: '+value.certificate.fingerprint));
+        if(value.certificate?.previous_fingerprint)factsDetails.append(n('p','Current certificate: '+value.certificate.previous_fingerprint));
+        if(value.certificate?.fingerprint)factsDetails.append(n('p','Reviewed certificate: '+value.certificate.fingerprint));
         if(action==='repair_certificate')result.append(n('p','Replacing the certificate can require phones and computers to review this host again.'));
         result.append(button('Confirm '+(action==='prepare'?'network setup':action==='repair_certificate'?'certificate repair':'firewall change'),async confirm=>{
           if(preview!==value)return;
           if(value.expires_at*1000<=Date.now()){preview=null;result.replaceChildren(n('p','This review expired. Review setup again.'));return;}
           busy=true;confirm.disabled=true;preview=null;
           const bytes=crypto.getRandomValues(new Uint8Array(16)),id=[...bytes].map(v=>v.toString(16).padStart(2,'0')).join('');receiptId=id;receipt=null;
-          try{const data=await api('/api/network-setup/v1/confirm',{preview_id:value.preview_id,request_id:id});if(current())showReceipt(data);}
-          catch(error){if(current())result.replaceChildren(n('p',error.message+' The request will not be repeated.'),button('Check saved setup request',async()=>showReceipt(await api('/api/network-setup/v1/receipt/'+id))));}
+          try{const data=await api('/api/network-setup/v1/confirm',{preview_id:value.preview_id,request_id:id});if(current()){showReceipt(data);pollCount=0;if(['accepted','applying'].includes(data.status))watchReceipt(id);else onSettled();}}
+          catch(error){if(current())result.replaceChildren(n('p',error.message+' The request will not be repeated.'),button('Check saved setup request',()=>checkReceipt(id)));}
           finally{busy=false;}
         }),button('Keep current setup',()=>{preview=null;result.replaceChildren();}));
       }finally{busy=false;}
     }
-    container.append(n('p','Review secure home-network access. Saving applies at the next start; firewall changes and certificate repair have separate reviews.'),button('Review secure network setup',()=>prepare('prepare')));
+    const saved=record?.startup?.effective_next;
+    if(saved?.https!==true||saved?.host!=='0.0.0.0'||record?.certificate?.status!=='ready')container.append(button('Review secure home-network setup',()=>prepare('prepare')));
+    else if(record?.running?.https!==true||record?.running?.host!==saved.host||record?.running?.port!==saved.port){standaloneRestart=true;container.append(n('p','Secure settings are saved. Restart to use them, then unlock again to continue.'),button('Restart TLI and continue',e=>window.TLIHostLifecycle?.open('restart',e)));}
     if(record?.certificate?.status==='repair_required')container.append(button('Review certificate repair',()=>prepare('repair_certificate')));
     if(record?.certificate?.reason)container.append(n('p',record.certificate.reason));
     if(record?.firewall?.reason)container.append(n('p',record.firewall.reason));
     if(record?.firewall?.supported===false)container.append(n('p','In this operating system’s firewall, allow the TLI backend application’s HTTPS TCP port '+port.value+' and discovery UDP ports 5353 and 47474 on your trusted local network only. Keep the backend unelevated. Review these rules locally with your administrator; this flow does not change them.'));
-    if(record?.firewall?.supported){container.append(button('Review Private-network firewall access',()=>prepare('firewall')));if(record.firewall.legacy_rules?.length){const advanced=n('details');advanced.append(n('summary','Review older firewall rules'),n('p','Replace TLI’s older broad rules only through a separate explicit review.'),button('Review migration of older rules',()=>prepare('firewall',true)));container.append(advanced);}}
+    if(record?.firewall?.supported&&saved?.https===true&&record?.certificate?.status==='ready'){container.append(n('p','If Windows needs permission for phone connections, review access on Private networks and approve its administrator prompt.'),button('Review Windows network access',()=>prepare('firewall')));if(record.firewall.legacy_rules?.length){const advanced=n('details');advanced.append(n('summary','Review older firewall rules'),n('p','Replace TLI’s older broad rules only through a separate explicit review.'),button('Review migration of older rules',()=>prepare('firewall',true)));container.append(advanced);}}
     if(record?.manual_restart)container.append(n('p','This installation may require a normal launcher restart. The restart review will explain what is available.'));
     if(record?.startup?.environment_overrides?.length)container.append(n('p','Startup environment overrides: '+record.startup.environment_overrides.join(', ')+'. Check these if saved settings do not take effect.'));
     container.append(result);
-    if(receipt)showReceipt(receipt);else if(receiptId){result.append(n('p','Reading the saved setup receipt…'));void api('/api/network-setup/v1/receipt/'+receiptId).then(value=>{if(current())showReceipt(value);}).catch(error=>{if(current())result.replaceChildren(n('p',error.message),button('Check saved setup request',async()=>showReceipt(await api('/api/network-setup/v1/receipt/'+receiptId))));});}
+    if(receipt){showReceipt(receipt);if(['accepted','applying'].includes(receipt.status))watchReceipt(receiptId);}
+    else if(receiptId){
+      result.append(n('p','Reading the saved setup receipt…'));
+      void checkReceipt().then(value=>{if(value&&['accepted','applying'].includes(value.status))watchReceipt(receiptId);})
+        .catch(error=>{if(current())result.replaceChildren(n('p',error.message),button('Check saved setup request',()=>checkReceipt()));});
+    }
   }
   function mountPin(container,{api,current,onStart,onVerified,onSettled}){
     let busy=false,stage='set';const heading=n('h3','Protect this workspace with an owner PIN'),message=n('p'),form=n('div');message.setAttribute('role','status');container.append(heading,n('p','Set a PIN for this home workspace, then unlock this browser to continue. Your PIN is never included in a connection invitation.'),form,message);
@@ -87,5 +115,5 @@
       finally{busy=false;onSettled();if(current())controls();}
     });controls();
   }
-  window.TLIConnectionSetup={local,mount,mountPin,receipt:()=>receiptId,resume:id=>{receiptId=/^[a-f0-9]{32,64}$/.test(id||'')?id:null;receipt=null;},clear:()=>{receiptId=receipt=null;}};
+  window.TLIConnectionSetup={local,mount,mountPin,receipt:()=>receiptId,result:()=>receipt,resume:id=>{receiptId=/^[a-f0-9]{32,64}$/.test(id||'')?id:null;receipt=null;},suspend:()=>{receipt=null;},clear:()=>{receiptId=receipt=null;}};
 })();

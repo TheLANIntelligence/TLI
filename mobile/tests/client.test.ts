@@ -33,15 +33,15 @@ test('failed command is sent once and never automatically replayed', async () =>
 test('native connection and certificate failures mark offline; HTTP errors and cancellation do not', async () => {
   const transport = new FakeTransport(); let offline = 0;
   const client = new Client(transport, 'valid', () => {}, () => offline++);
-  for (const code of ['E_NETWORK', 'E_TLS_TRUST', 'E_LOCAL_NETWORK_PERMISSION', 'E_TIMEOUT']) {
+  for (const code of ['E_NETWORK', 'E_TLS_TRUST', 'E_IDENTITY', 'E_LOCAL_NETWORK_PERMISSION', 'E_TIMEOUT']) {
     transport.respond = async () => { throw Object.assign(new Error(code), { code }); };
     await assert.rejects(client.json('/api/intelligence/devices'), new RegExp(code));
   }
-  assert.equal(offline, 4);
+  assert.equal(offline, 5);
   transport.respond = async () => { throw Object.assign(new Error('Cancelled'), { code: 'E_CANCELLED' }); };
   await assert.rejects(client.json('/api/intelligence/devices'), /Cancelled/);
   transport.respond = async () => ({ status: 409, headers: {}, body: '{"detail":"Busy"}' });
-  await assert.rejects(client.json('/api/intelligence/devices'), /Busy/); assert.equal(offline, 4);
+  await assert.rejects(client.json('/api/intelligence/devices'), /Busy/); assert.equal(offline, 5);
 });
 test('stream subscriptions precede request, filter request IDs and are removed on completion', async () => {
   const transport = new FakeTransport();

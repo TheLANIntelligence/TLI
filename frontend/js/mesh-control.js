@@ -2,14 +2,16 @@
 (function () {
   const REFRESH_INTERVAL = 30000; // auto-refresh every 30s
   let _timer = null, _unsubscribe = null, _unsubscribeExpiry = null, _visible = false, _locked = false;
-  let _pending = false, _lastSuccess = null, _epoch = 0;
+  let _request = null, _lastSuccess = null, _epoch = 0, _ready = true;
   let _lastNodes = [], _lastRender = '';
+  const current = epoch => !_locked && _ready && epoch === _epoch;
   const project = n => window.MeshService?.projectPeer(n) || (n.is_self ? n : {...n,online:null,ready_grants:[],connection:{state:'unknown',fresh:false,ready_grants:[]}});
   const escape = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const registryId = n => n.peer_id || n.node_id || n.id;
-  const pendingDiscovery = n => !n.is_self && n.pairing_available === true;
+  const isInferenceNode = n => !n.is_self && (n.peer_profile === 'inference_node' || n.connection_state === 'inference_only');
+  const pendingDiscovery = n => !n.is_self && !isInferenceNode(n) && n.pairing_available === true;
   function discoveryEndpoint(n) {
-    if (n.is_self) return null;
+    if (n.is_self || isInferenceNode(n)) return null;
     const ip = String(n.ip || ''), parts = ip.split('.'), port = Number(n.port ?? n.tli_port ?? 8000);
     if (parts.length !== 4 || parts.some(p => !/^(0|[1-9]\d{0,2})$/.test(p) || Number(p) > 255) || !Number.isInteger(port) || port < 1 || port > 65535) return null;
     return ip + ':' + port;
@@ -40,6 +42,22 @@
   }
 
   function fmt(id) { return document.getElementById(id); }
+
+  function validHealth(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.ok === false || !Array.isArray(data.nodes)) return false;
+    return data.nodes.every(n => {
+      if (!n || typeof n !== 'object' || Array.isArray(n)) return false;
+      // Older health rows omit is_self. Missing node identity is also valid
+      // when the observation still carries a host name or address.
+      if (n.is_self !== undefined && typeof n.is_self !== 'boolean') return false;
+      const identity = ['peer_id','node_id','id','node_name','hostname','ip'];
+      if (!identity.some(key => typeof n[key] === 'string' && n[key].trim())) return false;
+      if ([...identity,'os','active_model','active_preset','ai_status','error'].some(key => n[key] != null && typeof n[key] !== 'string')) return false;
+      if (['online','ai_healthy','has_ai'].some(key => n[key] != null && typeof n[key] !== 'boolean')) return false;
+      if (['cpu_percent','ram_percent','disk_percent','ram_used_gb','ram_total_gb','disk_free_gb','uptime_seconds'].some(key => n[key] != null && (typeof n[key] !== 'number' || !Number.isFinite(n[key])))) return false;
+      return true;
+    });
+  }
 
   function fmtUptime(sec) {
     if (!sec && sec !== 0) return "—";
@@ -76,6 +94,7 @@
   }
 
   function buildNodeCard(n) {
+    const epoch = _epoch;
     n = project(n);
     const isSelf = !!n.is_self;
     const inferenceNode = !isSelf && (n.peer_profile === 'inference_node' || n.connection_state === 'inference_only');
@@ -85,7 +104,7 @@
     const name = escape(n.node_name || n.hostname || n.ip || "Unknown computer");
 
     const card = document.createElement("div");
-    card.className = "mcd-node" + (isSelf ? " self" : "") + (!online && !needsReview ? " offline" : "");
+    card.className = "mcd-node" + (isSelf ? " self" : "") + (knownOffline && !needsReview && !inferenceNode ? " offline" : "");
 
     // ── Top row ──
     const avClass = isSelf ? "self-av" : inferenceNode ? "" : (online ? "peer-av" : "offline-av");
@@ -110,16 +129,16 @@
     if (typeof registryId === 'string' && registryId.length && registryId.length <= 240) {
       const details = document.createElement('button'); details.type = 'button'; details.className = 'btn-outline';
       details.textContent = 'Device details'; details.dataset.deviceDetailsId = 'node-' + registryId;
-      details.addEventListener('click', () => window.TLIDeviceDetails?.open('node-' + registryId)); card.appendChild(details);
-      if (!isSelf && !inferenceNode && online && n.connection.ready_grants.includes('messages')) { const messages = document.createElement('button'); messages.type = 'button'; messages.className = 'btn-outline'; messages.textContent = 'Messages & files'; messages.addEventListener('click', () => window.TLIChat?.openPeer?.(registryId)); card.appendChild(messages); }
+      details.addEventListener('click', () => { if (current(epoch)) window.TLIDeviceDetails?.open('node-' + registryId); }); card.appendChild(details);
+      if (!isSelf && !inferenceNode && online && n.connection.ready_grants.includes('messages')) { const messages = document.createElement('button'); messages.type = 'button'; messages.className = 'btn-outline'; messages.textContent = 'Messages & files'; messages.addEventListener('click', () => { if (current(epoch)) window.TLIChat?.openPeer?.(registryId); }); card.appendChild(messages); }
       if (!isSelf && needsReview) {
         const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'btn-primary';
         connect.textContent = 'Connect'; connect.dataset.pairingDeviceId = registryId;
-        connect.addEventListener('click', () => window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}));
+        connect.addEventListener('click', () => { if (current(epoch)) window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}); });
         card.appendChild(connect);
       } else if (!isSelf) {
         const review=document.createElement('button');review.type='button';review.className='btn-outline';review.textContent='Review connection';
-        review.addEventListener('click',()=>window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}));card.appendChild(review);
+        review.addEventListener('click',()=>{ if (current(epoch)) window.TLIConnectDevice?.open({kind:inferenceNode?'node':'computer',deviceId:registryId}); });card.appendChild(review);
       }
     }
 
@@ -129,6 +148,7 @@
       summary.textContent=labels[n.connection?.state] || (needsReview?'Nearby · needs approval':'Saved Node · check availability');
       if(n.connection?.reason?.message)summary.textContent+=' · '+n.connection.reason.message;
       if(online&&n.connection?.ready_grants?.length)summary.textContent+=' · '+n.connection.ready_grants.map(g=>({messages:'Messages & files',observe:'Observations',coordinate:'Coordination',inference:'AI compute'}[g]||g)).join(' · ');
+      if(inferenceNode)summary.textContent+=' · Check models in Ask TLI.';
       card.appendChild(summary);
       if(inferenceNode||!online)return card;
     }
@@ -168,7 +188,7 @@
           <div class="mcd-metric-val">${val}</div>
           <div class="mcd-metric-label">${label}</div>
           ${pct != null ? `<div class="mcd-metric-bar"><div class="mcd-metric-bar-fill ${col}" style="width:${Math.min(100,pct)}%"></div></div>` : ""}
-          ${sub ? `<div style="font-size:10px;color:var(--text-soft);margin-top:3px">${sub}</div>` : ""}
+          ${sub ? `<div style="font-size:10px;color:var(--text-soft);margin-top:3px">${escape(sub)}</div>` : ""}
         </div>`;
     }
     card.appendChild(metrics);
@@ -208,7 +228,7 @@
   }
 
   function renderCached(force=false) {
-    if (_locked || document.hidden) return;
+    if (_locked || !_ready || document.hidden) return;
     const grid=fmt('mcd-grid');if(!grid)return;
     const cached=new Map((window.MeshService?.getPeers()?.peers||[]).map(peer=>[peer.id,peer]));
     const nodes=_lastNodes.map(node=>{const peer=cached.get(registryId(node));return project(peer&&!node.is_self?{...node,connection:peer.connection,online:peer.online,ready_grants:peer.ready_grants}:node);});
@@ -220,23 +240,28 @@
   }
 
   async function refresh() {
-    if(_locked||document.hidden)return;
+    if(_locked||!_ready||document.hidden)return;
     const grid = fmt("mcd-grid");
     const btn  = fmt("mcd-refresh-btn");
     const updated = fmt("mcd-last-updated");
     if (!grid) return;
-    if (_pending) return;
-    _pending = true;
+    if (_request) return;
     const epoch = _epoch;
+    const request = {controller:new AbortController()};
+    _request = request;
+    const active = () => current(epoch) && _request === request && !document.hidden;
+    const options = {cache:'no-store', credentials:'same-origin', signal:AbortSignal.any([request.controller.signal, AbortSignal.timeout(12000)])};
 
     if (btn) btn.classList.add("spinning");
 
     try {
-      const r = await fetch("/api/mesh/health", { cache: "no-store" });
+      const r = await fetch("/api/mesh/health", options);
+      if (!active()) return;
+      if (r.status === 401 || r.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
       if (!r.ok) throw new Error("HTTP " + r.status);
       const data = await r.json();
-      if (epoch !== _epoch) return;
-      if (!Array.isArray(data.nodes)) throw new Error('Incomplete computer health response');
+      if (!active()) return;
+      if (!validHealth(data)) throw new Error('Incomplete computer health response');
 
       // Older running backends already identify pairing-eligible records but
       // omit their timestamps from health. Read the local directory only when
@@ -248,17 +273,17 @@
       });
       if (hasDuplicates && data.nodes.some(pendingDiscovery) && data.nodes.some(n => discoveryEndpoint(n) && !n.last_seen)) {
         try {
-          let directory;
-          if (window.MeshService?.fetchDirectory) directory = await window.MeshService.fetchDirectory({force:true});
-          else {
-            const response = await fetch('/mesh/directory', {cache:'no-store'});
-            if (!response.ok) throw Error('Directory unavailable');
-            directory = await response.json();
-          }
+          // Keep this optional compatibility read in the same captured session.
+          const response = await fetch('/mesh/directory', options);
+          if (!active()) return;
+          if (response.status === 401 || response.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+          if (!response.ok) throw Error('Directory unavailable');
+          const directory = await response.json();
+          if (!active()) return;
           const saved = new Map((directory.devices || []).map(n => [n.device_id, n]));
           data.nodes = data.nodes.map(n => ({...n, last_seen:n.last_seen || saved.get(registryId(n))?.last_seen}));
         } catch (_) { /* The server's exact identities remain available. */ }
-        if (epoch !== _epoch) return;
+        if (!active()) return;
       }
 
       _lastNodes = data.nodes;renderCached(true);
@@ -266,30 +291,41 @@
       _lastSuccess = new Date();
       grid.classList.remove('mcd-stale');
       if (updated) updated.textContent = "Last successful check: " + _lastSuccess.toLocaleTimeString();
+      if (_visible) subscribe();
     } catch (e) {
-      if (epoch !== _epoch) return;
+      if (!active()) return;
       if (_lastSuccess) {
         renderCached();
         grid.classList.add('mcd-stale');
         if (updated) updated.textContent = 'Check unavailable. Previous results from ' + _lastSuccess.toLocaleTimeString() + ' may be out of date.';
       } else grid.textContent = 'Computer health is unavailable. Check the TLI connection, then choose Refresh.';
     } finally {
-      _pending = false;
-      if (btn) btn.classList.remove("spinning");
+      if (_request === request) {
+        _request = null;
+        if (btn) btn.classList.remove("spinning");
+      }
     }
+  }
+
+  function subscribe() {
+    if (!_ready || _locked || !_visible || document.hidden) return;
+    if(!_unsubscribe&&window.MeshService?.subscribePeers)_unsubscribe=window.MeshService.subscribePeers(()=>{if(_visible&&_lastSuccess)renderCached();});
+    if(!_unsubscribeExpiry&&window.MeshService?.subscribeExpiry)_unsubscribeExpiry=window.MeshService.subscribeExpiry(()=>{if(_visible&&_lastSuccess)renderCached();});
   }
 
   function start() {
     _visible=true;
+    if (_locked || !_ready || document.hidden) return;
     if(_lastSuccess)renderCached();
     refresh();
-    if(!_unsubscribe&&window.MeshService?.subscribePeers)_unsubscribe=window.MeshService.subscribePeers(()=>{if(_visible&&_lastSuccess)renderCached();});
-    if(!_unsubscribeExpiry&&window.MeshService?.subscribeExpiry)_unsubscribeExpiry=window.MeshService.subscribeExpiry(()=>{if(_visible&&_lastSuccess)renderCached();});
     if (!_timer) _timer = setInterval(refresh, REFRESH_INTERVAL);
   }
 
-  function stop() {
-    _visible=false;_unsubscribe?.();_unsubscribe=null;
+  function stop(keepVisible=false) {
+    if (!keepVisible) _visible=false;
+    _epoch++; _request?.controller.abort(); _request=null; _lastRender='';
+    fmt('mcd-refresh-btn')?.classList.remove('spinning');
+    _unsubscribe?.();_unsubscribe=null;
     _unsubscribeExpiry?.();_unsubscribeExpiry=null;
     if (_timer) { clearInterval(_timer); _timer = null; }
   }
@@ -299,7 +335,11 @@
     const btn = fmt("mcd-refresh-btn");
     if (btn && !btn.__mcdBound) {
       btn.__mcdBound = true;
-      btn.addEventListener("click", refresh);
+      btn.addEventListener("click", () => {
+        if (_locked) return;
+        if (!_ready) return window.EventInterpreter?.retry?.();
+        return refresh();
+      });
     }
 
     // Start/stop polling when panel is opened/closed
@@ -311,13 +351,23 @@
       }
     });
     for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event, () => {
-      _locked=true;stop(); _epoch++; _lastSuccess = null; _lastNodes=[];_lastRender='';
-      const grid = fmt('mcd-grid'); if (grid) grid.textContent = 'Unlock TLI to check connected computers.';
+      _locked=true;_ready=false;stop(true); _lastSuccess = null; _lastNodes=[];_lastRender='';
+      const grid = fmt('mcd-grid'); if (grid) { grid.replaceChildren(); grid.textContent = 'Unlock TLI to check connected computers.'; grid.classList.remove('mcd-stale'); }
       const updated = fmt('mcd-last-updated'); if (updated) updated.textContent = '';
     });
-    window.addEventListener('tli-session-unlocked',()=>{_locked=false;const panel=fmt('panel-mesh');if(panel&&!panel.hidden&&!panel.classList.contains('hidden'))start();});
+    window.addEventListener('tli-session-unlocked',()=>{
+      _locked=false;stop(true);
+      if (!_ready) { const grid=fmt('mcd-grid'); if(grid)grid.textContent='Computer access needs a fresh check. Choose Refresh after unlocking; if the PIN is off, use a clean private window on localhost.'; }
+    });
+    window.addEventListener('tli-private-observation-ready',()=>{
+      if (_locked) return;
+      const recovering = !_ready; _ready=true;
+      const panel=fmt('panel-mesh');
+      if ((recovering || !_timer) && (_visible || (panel&&!panel.hidden&&!panel.classList.contains('hidden')))) start();
+    });
     window.addEventListener('tli-peer-trust-changed',()=>{if(_visible)refresh();});
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&_visible){if(_lastSuccess)renderCached();refresh();}});
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)stop(true);else if(_visible)start();});
+    window.addEventListener('pagehide',()=>{_locked=true;_ready=false;stop();_lastSuccess=null;_lastNodes=[];_lastRender='';const grid=fmt('mcd-grid');if(grid)grid.replaceChildren();const updated=fmt('mcd-last-updated');if(updated)updated.textContent='';});
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot);

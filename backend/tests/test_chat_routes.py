@@ -42,21 +42,25 @@ class TestChatAuth:
 
 
 class TestConversations:
-    def test_list_conversations_requires_auth(self, authed_client):
+    def test_list_conversations_requires_auth(self, browser_client):
         """Conversations list returns only the session user's conversations."""
-        r = authed_client.get("/conversations")
+        r = browser_client.get("/conversations")
         assert r.status_code == 200
         data = r.json()
         assert isinstance(data, list)
 
-    def test_list_conversations_no_auth(self, client):
-        """Without PIN, conversations list is accessible."""
-        r = client.get("/conversations")
-        assert r.status_code in (200, 401)
+    def test_list_conversations_no_auth(self, app, browser_client):
+        """An enabled PIN requires actual credentials for a private read."""
+        from fastapi.testclient import TestClient
 
-    def test_get_nonexistent_conversation_is_404(self, authed_client):
+        with TestClient(app, base_url="https://testserver") as unauthenticated:
+            r = unauthenticated.get("/conversations")
+        assert r.status_code == 401
+        assert r.headers["Cache-Control"] == "no-store"
+
+    def test_get_nonexistent_conversation_is_404(self, browser_client):
         """Fetching a conversation that doesn't exist returns 404."""
-        r = authed_client.get("/conversations/conv-nonexistent-xyz-abc")
+        r = browser_client.get("/conversations/conv-nonexistent-xyz-abc")
         assert r.status_code == 404
 
     def test_delete_nonexistent_conversation_is_ok(self, authed_client):
@@ -67,10 +71,9 @@ class TestConversations:
         assert data.get("ok") is True
         assert data.get("existed") is False
 
-    def test_other_user_conversation_denied(self, app, client):
+    def test_other_user_conversation_denied(self, browser_client):
         """A conversation owned by a different user returns 403."""
         import tli_state as S
-        from routers.system_routes import require_session
 
         # Seed a conversation owned by 'owner-user'
         convs = S.load_conversations()
@@ -83,13 +86,12 @@ class TestConversations:
         }
         S.save_conversations(convs)
 
-        # Access as 'attacker-user'
-        app.dependency_overrides[require_session] = lambda: "attacker-user"
+        # The real browser session belongs to 'test-user'.
         try:
-            r = client.get("/conversations/conv-owned-by-other")
+            r = browser_client.get("/conversations/conv-owned-by-other")
             assert r.status_code == 403
+            assert r.json()["detail"] == "Access denied"
         finally:
-            app.dependency_overrides.pop(require_session, None)
             # Clean up
             convs = S.load_conversations()
             convs.pop("conv-owned-by-other", None)

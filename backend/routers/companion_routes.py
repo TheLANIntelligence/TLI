@@ -371,7 +371,7 @@ def _ai_readiness(manager, healthy, mesh_observed, streaming):
     if mesh_observed:
         return {"status": "unknown", "provider": "mesh", "detail": "A LAN peer recently advertised AI. Its current availability will be checked when you send; your TLI host is connected.", "checked_at": checked}
     if streaming:
-        return {"status": "unavailable", "provider": "bundled", "detail": "The bundled AI runtime is not confirmed running. TLI is connected; explicit controls and diagnostics remain available.", "checked_at": checked}
+        return {"status": "unavailable", "provider": "bundled", "detail": "Your computer is connected, but its AI model is not confirmed running. On your computer, open Settings → AI & chat to start or choose a model, then refresh this phone connection.", "checked_at": checked}
     # health_report() can generate text; only inspect its existing short-lived cache.
     cache = getattr(S.lm_provider, "_report_cache", {})
     try:
@@ -380,11 +380,11 @@ def _ai_readiness(manager, healthy, mesh_observed, streaming):
         if recent and isinstance(report, dict):
             available = report.get("chat_ok") is True and report.get("ok") is True
             return {"status": "available" if available else "unavailable", "provider": "lmstudio",
-                    "detail": "LM Studio recently passed a chat check; TLI is connected." if available else "The latest LM Studio check did not confirm working AI. TLI is connected; controls and saved data are separate.",
+                    "detail": "LM Studio recently passed a chat check; TLI is connected." if available else "Your computer is connected, but the latest LM Studio check did not confirm working AI. On your computer, open Settings → AI & chat to check LM Studio or choose another model, then refresh this phone connection.",
                     "checked_at": report.get("checked_at") or checked}
     except (TypeError, ValueError):
         pass
-    return {"status": "unknown", "provider": "lmstudio", "detail": "There is no recent LM Studio chat check. TLI is connected; AI readiness is unconfirmed. This connection check did not start inference.", "checked_at": checked}
+    return {"status": "unknown", "provider": "lmstudio", "detail": "Your computer is connected. AI readiness is unconfirmed because there is no recent LM Studio chat check. You can try a question; if it cannot reply, open Settings → AI & chat on your computer to check the model.", "checked_at": checked}
 
 
 def _recent_mesh_ai() -> bool:

@@ -9,8 +9,9 @@
   // backend still rejects that old request, but it must not relock a later
   // session (or clear its newly edited drafts) after lock and unlock.
   let sessionGeneration = 0;
-  window.addEventListener('tli-session-locked', () => { sessionGeneration++; });
-  window.addEventListener('tli-session-unlocked', () => { sessionGeneration++; });
+  for (const event of ['tli-session-locked','tli-session-unlocked','tli-account-changed','tli-user-changed','pagehide']) {
+    window.addEventListener(event, () => { sessionGeneration++; });
+  }
   function isLocalMCPGrantRequest(input, init) {
     // MCP grants have an independent, shorter lifetime. Their 401 must clear
     // only the inspector, not unrelated unsaved browser work. Management

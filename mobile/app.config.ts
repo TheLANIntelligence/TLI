@@ -5,7 +5,7 @@ if (variant !== 'production' && variant !== 'beta') throw new Error('TLI_APP_VAR
 const isBeta = variant === 'beta';
 
 const config: ExpoConfig = {
-  name: isBeta ? 'TLI Companion Beta' : 'TLI Companion', slug: 'tli-companion', version: '0.1.0', scheme: isBeta ? 'tli-companion-beta' : 'tli-companion',
+  name: isBeta ? 'TLI Companion Beta' : 'TLI Companion', slug: 'tli-companion', version: '0.2.0', scheme: isBeta ? 'tli-companion-beta' : 'tli-companion',
   owner: 'sergeantseven', extra: { eas: { projectId: 'd9f0d676-6556-4615-a459-3589c83e3c08' } },
   platforms: ['ios', 'android', 'web'],
   web: { bundler: 'metro', output: 'single' },

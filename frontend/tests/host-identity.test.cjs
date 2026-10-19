@@ -33,7 +33,10 @@ function integration(){
   lock(){window.dispatchEvent({type:'tli-session-locked'});},
   refresh(){load('  async function _refreshOnce()','\n  function _renderObservationSummary()','_refreshOnce');return context.subject();},
   setupRename(){load('function setupDeviceRename()','// ---------- hamburger ----------','setupDeviceRename');context.subject();},
-  loadDashboardLock(){load("  window.addEventListener('tli-session-locked', () => {\n    _sessionLocked", "  window.addEventListener('tli-session-unlocked'",null);},
+  loadDashboardLock(){
+   load('  function _clearPrivateDashboard()', '  function _showAccessPrompt()', null);
+   load("  window.addEventListener('tli-session-locked', () => {\n    _accessBlocked", "  window.addEventListener('tli-session-unlocked'",null);
+  },
  };
 }
 
@@ -70,6 +73,19 @@ test('successful explicit rename updates shared identity and every host label to
  await f.nodes.get('tli-rename-form').listeners.submit({preventDefault(){}});
  assert.equal(f.identity.get().name,'Renamed');
  for(const id of ['device-name-chip','footer-device','ndv-node-val','node-switcher-label'])assert.equal(f.nodes.get(id).textContent,'Renamed',id);
+});
+
+for(const name of ['TLI Node','Unknown'])test(`confirmed explicit rename displays ${name} while unconfirmed placeholders remain rejected`,async()=>{
+ const f=integration();f.identity.observe({id:'host-a',name:'Before',source:'status'});f.setupRename();
+ f.nodes.get('tli-rename-input').value=name;
+ f.respond(()=>response({status:'ok',nickname:name,node_id:'host-a'}));
+ await f.nodes.get('tli-rename-form').listeners.submit({preventDefault(){}});
+ assert.equal(f.requests.length,1);assert.equal(f.identity.get().name,name);assert.equal(f.identity.get().id,'host-a');
+ for(const id of ['device-name-chip','footer-device','ndv-node-val','node-switcher-label'])assert.equal(f.nodes.get(id).textContent,name,id);
+ const unconfirmed=create(()=>{},()=>100000);
+ for(const source of ['status','dashboard/command-center'])assert.equal(unconfirmed.observe({id:'host-a',name,source}),false);
+ for(const id of [undefined,'',' '.repeat(3),'x'.repeat(161),'x\nInvalid'])assert.equal(unconfirmed.observe({id,name,source:'host-rename'}),false);
+ assert.equal(unconfirmed.get().status,'unknown');
 });
 
 test('a rename response after lock cannot repaint identity or issue a second mutation',async()=>{
@@ -112,9 +128,21 @@ test('lock and unlock invalidate pending identity lookups instead of repainting 
 });
 test('invalid identities never establish host availability or turn placeholders into targets',()=>{
  const store=create(()=>{},()=>100000);
- for(const name of ['', '—', 'unknown', 'Checking…', 'x\nInjected', 'x'.repeat(161)])assert.equal(store.observe({name,source:'status'}),false);
+ for(const name of ['', '—', 'unknown', 'Checking…', 'x\nInjected', 'x\u0085Injected', 'x'.repeat(4097)])assert.equal(store.observe({name,source:'status'}),false);
  assert.equal(store.observe({name:'Studio',source:'device-selection'}),false);
  assert.equal(store.observe({name:'Studio',source:'status',observedAt:Infinity}),false);
  assert.equal(store.observe({name:'Studio',source:'status',observedAt:150000}),false);
  assert.equal(store.get().status,'unknown');
+});
+
+test('long saved Unicode names remain visible and editable without widening the identity ID bound',()=>{
+ const f=integration(),name='🎶'.repeat(200);
+ assert.equal(f.identity.observe({id:'host-a',name,source:'status'}),true);
+ for(const id of ['device-name-chip','footer-device','ndv-node-val','node-switcher-label'])assert.equal(f.nodes.get(id).textContent,name,id);
+ f.setupRename();f.nodes.get('rename-device-btn').listeners.click();
+ assert.equal(f.nodes.get('tli-rename-input').value,name);
+ const bounded=create(()=>{},()=>100000);
+ assert.equal(bounded.observe({id:'a'.repeat(161),name,source:'status'}),true);
+ assert.equal(bounded.get().id,null);
+ assert.equal(bounded.get().name,name);
 });

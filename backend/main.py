@@ -21,21 +21,25 @@ from pathlib import Path
 import release_identity
 release_identity.capture()
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 import tli_state as S
+from browser_authority import browser_control_access
 
 
 def _validate_startup():
     from update_install import require_completed_update
     from startup_config import resolve, local_only
     from security_state import validate_existing_security
+    import lm_studio_config
     require_completed_update(Path(S.BASE_DIR))
     settings = resolve(S.BASE_DIR)
     validate_existing_security()
+    # A damaged selected AI destination must never become an implicit default.
+    lm_studio_config.read(S.DATA_DIR)
     if settings["configured"] and not local_only(settings["effective_next"]["host"]) and not S.load_pin_config()["enabled"]:
         raise RuntimeError("Saved secure LAN startup requires a readable, enabled desktop PIN. Restore the matching configuration before restarting.")
     return settings["effective_next"]
@@ -94,18 +98,31 @@ app.add_middleware(
 @app.middleware("http")
 async def add_security_headers(request, call_next):
     response = await call_next(request)
-    # Only the authenticated Builder preview renderer sets this internal state.
-    # Its response policy forces an opaque sandbox even on a top-level visit.
-    # A srcdoc frame would inherit TLI's no-inline-script policy and cannot run.
+    # Only authenticated app renderers set these internal state markers. Their
+    # response sandboxes also apply on direct/top-level navigation.
     isolated_preview = getattr(request.state, "tli_isolated_app_preview", False) is True
+    isolated_installed = getattr(request.state, "tli_isolated_installed_app", False) is True
     response.headers["X-Content-Type-Options"]  = "nosniff"
-    # App iframes are same-origin — allow framing for /apps/* paths only
+    # The host may frame these opaque documents; a URL prefix alone grants nothing.
     response.headers["X-Frame-Options"] = (
-        "SAMEORIGIN" if isolated_preview or request.url.path.startswith("/apps/") else "DENY"
+        "SAMEORIGIN" if isolated_preview or isolated_installed else "DENY"
     )
     response.headers["X-XSS-Protection"]         = "1; mode=block"
     response.headers["Referrer-Policy"]          = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"]       = "camera=(), microphone=(), geolocation=()"
+    main_document = request.url.path in {"/", "/index.html"} and not isolated_preview
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(self), geolocation=()" if main_document
+        else "camera=(), microphone=(), geolocation=()"
+    )
+    if isolated_installed:
+        from installed_apps import APP_CSP, APP_HEADERS
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Permissions-Policy"] = APP_HEADERS["Permissions-Policy"]
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        if response.headers.get("Content-Security-Policy") != APP_CSP:
+            response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; frame-ancestors 'self'"
+        return response
     if isolated_preview:
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Cache-Control"] = "no-store"
@@ -113,6 +130,15 @@ async def add_security_headers(request, call_next):
         policy = response.headers.get("Content-Security-Policy", "")
         if not policy.startswith("sandbox allow-scripts;"):
             response.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; frame-ancestors 'self'"
+        return response
+    if getattr(request.state, "tli_pihole_access_page", False) is True:
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; script-src 'self'; style-src 'self'; "
+            "connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "form-action 'none'; frame-ancestors 'none'"
+        )
         return response
     # Only the fixed Companion landing route sets this internal marker.
     # Its fragment contains a short-lived invitation; preserve the stricter
@@ -143,16 +169,9 @@ async def add_security_headers(request, call_next):
 #  Initialise providers + config
 # ============================================
 
-from providers import LMStudioProvider
 from drivers import ShellyDriver, DRIVER_REGISTRY
 
-S.lm_provider = LMStudioProvider(
-    chat_url=S.LM_STUDIO_URL,
-    models_url=S.LM_STUDIO_MODELS_URL,
-    connect_timeout=S.HTTP_CONNECT_TIMEOUT,
-    read_timeout=S.HTTP_READ_TIMEOUT_GEN,
-    debug_log=S.log_debug,
-)
+S.load_lm_studio_config_from_disk()
 S.shelly_driver = ShellyDriver(
     connect_timeout=S.HTTP_CONNECT_TIMEOUT,
     read_timeout=S.HTTP_READ_TIMEOUT,
@@ -162,7 +181,6 @@ S.shelly_driver = ShellyDriver(
 # Load persisted config
 S.load_model_config_from_disk()
 S.load_system_profile_from_disk()
-S.load_lm_studio_config_from_disk()
 
 # Configure vault session persistence and restore any live sessions
 import vault_security as _vault_sec
@@ -192,12 +210,12 @@ S.log_debug("mesh", "INFO", "Node config loaded",
 import license as _L
 if not os.environ.get("TLI_LICENSE_SECRET"):
     S.log_debug("license", "WARN",
-                "TLI_LICENSE_SECRET not set — using dev fallback secret. "
-                "Set this env var before shipping a production build.")
-_stored_lic = S.load_license()
-_lic_result = _L.refresh_cache(_stored_lic.get("key"), NODE_CONFIG.node_id)
+                "TLI_LICENSE_SECRET environment variable is not set. "
+                "Signed-key validation requires an explicitly configured secret; beta access remains separate.")
+_lic_result = _L.bootstrap_cache(S.load_license, NODE_CONFIG.node_id)
 S.log_debug("license", "INFO", "License cache initialised",
-            tier=_lic_result.get("tier", "free"), valid=_lic_result.get("valid", False))
+            tier=_lic_result.get("tier"), valid=_lic_result.get("valid", False),
+            available=_lic_result.get("available", True))
 
 
 # ============================================
@@ -260,6 +278,7 @@ from routers.search_routes import router as search_router
 from routers.license_routes import router as license_router
 from routers.satellite_routes import router as satellite_router
 from routers.hub_routes import router as hub_router
+from installed_apps import router as installed_apps_router
 from routers.federation_routes import router as federation_router
 from routers.identity_routes import router as identity_router
 from routers.relay_routes import router as relay_router
@@ -274,6 +293,7 @@ app.include_router(builder_router)
 app.include_router(vault_router)
 app.include_router(satellite_router)
 app.include_router(hub_router)
+app.include_router(installed_apps_router)
 app.include_router(federation_router)
 app.include_router(mesh_router)
 app.include_router(peer_pairing_router)
@@ -335,6 +355,12 @@ from routers.mcp_routes import router as mcp_router
 app.include_router(mcp_router)
 from routers.home_assistant_routes import router as home_assistant_router
 app.include_router(home_assistant_router)
+from routers.homelab_routes import router as homelab_router
+app.include_router(homelab_router)
+from routers.pihole_routes import router as pihole_router
+app.include_router(pihole_router)
+from routers.pihole_access_routes import router as pihole_access_router
+app.include_router(pihole_access_router)
 from routers.mcp_client_routes import router as mcp_client_router
 app.include_router(mcp_client_router)
 from routers.performance_routes import router as performance_router
@@ -351,6 +377,12 @@ from routers.lan_inference_routes import router as lan_inference_router
 app.include_router(lan_inference_router)
 from routers.workspace_routes import router as workspace_router
 app.include_router(workspace_router)
+from routers.task_routes import router as task_router
+app.include_router(task_router)
+from routers.sonos_routes import router as sonos_router
+app.include_router(sonos_router)
+from routers.voice_routes import router as voice_router
+app.include_router(voice_router)
 from connection_identity import router as connection_identity_router
 app.include_router(connection_identity_router)
 from companion_auth import validate_authorization as _validate_companion_authorization
@@ -414,14 +446,20 @@ def tli_ai_chat_peer(payload: dict):
 # Add any extra aliases your frontend expects:
 
 @app.get("/devices/printers")
-def _alias_devices_printers():
+def _alias_devices_printers(check=Depends(browser_control_access)):
     from routers.printers import get_printers
-    return get_printers()
+    check()
+    result = get_printers(check=check)
+    check()
+    return result
 
 @app.get("/printers")
-def _alias_printers():
+def _alias_printers(check=Depends(browser_control_access)):
     from routers.printers import get_printers
-    return get_printers()
+    check()
+    result = get_printers(check=check)
+    check()
+    return result
 
 @app.get("/devices/printers/discover")
 def _alias_devices_printers_discover():
@@ -569,12 +607,6 @@ try:
     if os.path.isdir(S.ASSETS_DIR):
         app.mount("/assets", StaticFiles(directory=S.ASSETS_DIR), name="assets")
 
-    # TLI Apps: serve installed app files at /apps/{app_id}/…
-    # The directory is created on first run so StaticFiles never fails.
-    _apps_static_dir = os.path.join(S.DATA_DIR, "apps")
-    os.makedirs(_apps_static_dir, exist_ok=True)
-    app.mount("/apps", StaticFiles(directory=_apps_static_dir), name="tli-apps")
-
     if os.path.isdir(S.FRONTEND_DIR):
         app.mount("/", StaticFiles(directory=S.FRONTEND_DIR, html=True), name="frontend")
 except Exception as e:
@@ -650,6 +682,8 @@ async def on_startup():
 def on_shutdown():
     import host_runs
     host_runs.shutdown()
+    import voice_service
+    voice_service.shutdown()
     _auto_update.stop_auto_check()
     from storage_jobs import shutdown as _storage_jobs_shutdown
     _storage_jobs_shutdown()

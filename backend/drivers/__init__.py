@@ -2,6 +2,7 @@ from .base import DeviceDriver
 from .shelly import ShellyDriver
 from .hue import HueDriver
 from .govee import GoveeDriver
+from .govee_ble import GoveeBLEDriver
 from .wled import WledDriver
 from .yeelight import YeelightDriver
 from .sonoff import SonoffDriver
@@ -16,6 +17,7 @@ from .generic_http import GenericHttpDriver
 DRIVER_REGISTRY: dict = {
     "hue":          HueDriver(),
     "govee":        GoveeDriver(),
+    "govee_ble":    GoveeBLEDriver(),
     "wled":         WledDriver(),
     "yeelight":     YeelightDriver(),
     "sonoff":       SonoffDriver(),
@@ -29,6 +31,7 @@ __all__ = [
     "ShellyDriver",
     "HueDriver",
     "GoveeDriver",
+    "GoveeBLEDriver",
     "WledDriver",
     "YeelightDriver",
     "SonoffDriver",

@@ -34,6 +34,38 @@ function fixture(handler=async()=>({ok:true,protocol,snapshots:[summary()]})) {
 }
 async function ready(f){f.api.receiveScan(scan());await f.nodes['storage-history-load'].click();}
 
+const indexed=(extra={})=>({schema_version:1,available:true,complete:false,comparable:false,reason:'Acquisition coverage was incomplete.',reasons:['incomplete_acquisition'],folder_deltas_supported:false,atomic_snapshot:false,results_limited:false,changes:[{path:summary().root+'\\Later\\archive.zip',previous_path:summary().root+'\\Earlier\\archive.zip',file_identity:'volume-1:100:3',logical_size:170,previous_logical_size:100,logical_delta:70,status:'observed_growth',observation:'same_filesystem_identity'}],...extra});
+test('indexed identity evidence supports selected off-tree paths without enabling whole-scan or folder deltas',async()=>{
+  const data=comparison({comparable:false,reasons:['Partial tree coverage.'],totals:null,folders:[],indexed_comparison:indexed()}),f=fixture(async url=>url.endsWith('/compare')?data:{ok:true,protocol,snapshots:[summary()]});
+  await ready(f);f.api.selectPath(indexed().changes[0].path);await f.nodes['storage-history-compare'].click();
+  const result=text(f.nodes['storage-history-result']),selected=text(f.nodes['storage-history-selection']);assert.match(result,/Changes in indexed file identities/);assert.match(result,/100 B → 170 B \(\+70 B\)/);assert.match(result,/Incomplete comparison/);assert.match(result,/do not.*support folder deltas/);assert.match(selected,/100 B → 170 B/);assert.match(selected,/do not prove a rename/);assert.match(text(f.nodes['storage-history-status']),/Partial comparison ready/);assert.doesNotMatch(result,/Recorded root bytes|immediate-folder size changes/);assert.equal(f.calls.length,2);
+});
+test('indexed history refuses malformed amounts, paths, identities and unsupported schema',async()=>{
+  for(const corrupt of [c=>({...c,schema_version:2}),c=>({...c,folder_deltas_supported:true}),c=>({...c,changes:[{...c.changes[0],logical_delta:700}]}),c=>({...c,changes:[{...c.changes[0],path:'C:\\Outside\\x.zip'}]}),c=>({...c,changes:[c.changes[0],c.changes[0]]}),c=>({...c,changes:[{...c.changes[0],previous_path:summary().root+'\\..\\outside'}]})]){
+    const f=fixture(async url=>url.endsWith('/compare')?comparison({indexed_comparison:corrupt(indexed())}):{ok:true,protocol,snapshots:[summary()]});await ready(f);await f.nodes['storage-history-compare'].click();const result=text(f.nodes['storage-history-result']);assert.match(result,/Indexed comparison could not be validated/);assert.doesNotMatch(result,/170 B|Changes in indexed file identities/);
+  }
+});
+test('expired indexed history retains saved summary evidence and explains the exact index limitation',async()=>{
+  const f=fixture(async url=>url.endsWith('/compare')?comparison({indexed_comparison:{available:false,complete:false,reason:'Both full indexes must still be retained by this session.'}}):{ok:true,protocol,snapshots:[summary()]});await ready(f);await f.nodes['storage-history-compare'].click();const result=text(f.nodes['storage-history-result']);assert.match(result,/Both full indexes must still be retained/);assert.match(result,/changed by \+50 B/);assert.doesNotMatch(result,/Changes in indexed file identities/);
+});
+test('saved identity path changes remain visible after indexes expire without asserting a rename',async()=>{
+  const row={path:'Later/archive.zip',before_path:'Earlier/archive.zip',after_path:'Later/archive.zip',before_bytes:100,after_bytes:100,delta_bytes:0,status:'same_identity_different_path',identity_matched:true};
+  const f=fixture(async url=>url.endsWith('/compare')?comparison({file_comparison:{available:true,complete:true},files:[row],indexed_comparison:{available:false,complete:false,reason:'Indexes expired.'}}):{ok:true,protocol,snapshots:[summary()]});await ready(f);f.api.selectPath(summary().root+'\\Later\\archive.zip');await f.nodes['storage-history-compare'].click();
+  for(const box of ['storage-history-result','storage-history-selection']){const result=text(f.nodes[box]);assert.match(result,/Recorded filesystem identity at a different path: Earlier\/archive.zip → Later\/archive.zip/);assert.match(result,/100 B → 100 B \(0 B\)/);assert.match(result,/does not prove a rename/);assert.doesNotMatch(result,/newly observed at 100 B/);}
+});
+test('replacement at a retained path is a path-size difference and remains available in partial comparisons',async()=>{
+  const row={path:'archive.zip',before_bytes:100,after_bytes:150,delta_bytes:50,status:'different_identity_at_path'};
+  const f=fixture(async url=>url.endsWith('/compare')?comparison({comparable:false,reasons:['Incomplete acquisition.'],totals:null,folders:[],file_comparison:{available:true,complete:false},files:[row]}):{ok:true,protocol,snapshots:[summary()]});await ready(f);f.api.selectPath(summary().root+'\\archive.zip');await f.nodes['storage-history-compare'].click();
+  for(const box of ['storage-history-result','storage-history-selection']){const result=text(f.nodes[box]);assert.match(result,/Different filesystem identity at archive.zip/);assert.match(result,/Recorded path size 100 B → 150 B \(\+50 B\)/);assert.match(result,/not measured growth of one file/);assert.doesNotMatch(result,/logical size changed by|newly observed at/);}
+  assert.match(text(f.nodes['storage-history-status']),/Partial comparison ready/);
+});
+test('saved identity rows reject traversal paths, inconsistent bytes and unconfirmed identity matches',async()=>{
+  const original={path:'Later/archive.zip',before_path:'Earlier/archive.zip',after_path:'Later/archive.zip',before_bytes:100,after_bytes:120,delta_bytes:20,status:'same_identity_different_path',identity_matched:true};
+  for(const change of [{before_path:'../outside.zip'},{after_path:'Other/archive.zip'},{delta_bytes:700},{identity_matched:false},{before_path:'Later/archive.zip'}]){
+    const row={...original,...change},f=fixture(async url=>url.endsWith('/compare')?comparison({file_comparison:{available:true,complete:true},files:[row]}):{ok:true,protocol,snapshots:[summary()]});await ready(f);f.api.selectPath(summary().root+'\\Later\\archive.zip');await f.nodes['storage-history-compare'].click();assert.doesNotMatch(text(f.nodes['storage-history-result']),/Recorded filesystem identity at a different path|120 B/);assert.match(text(f.nodes['storage-history-selection']),/no supported change row/);
+  }
+});
+
 test('history performs no background requests; old or invalid scans cannot save or compare',()=>{
   const f=fixture();assert.equal(f.calls.length,0);assert.equal(f.nodes['storage-history-save'].disabled,true);
   for(const data of [{tree:{}},scan({protocol:'old'}),scan({scan_id:'forged'})]){

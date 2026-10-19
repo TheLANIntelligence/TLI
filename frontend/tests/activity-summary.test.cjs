@@ -155,6 +155,76 @@ test('401 access failure clears private event rows even without a global fetch i
   assert.equal(f.nodes['activity-groups'].children.length, 0); assert.equal(f.nodes['activity-count'].textContent, ''); assert.match(f.nodes['activity-error'].textContent, /Unlock TLI/);
 });
 
+test('403 activity access denial clears private rows and preserves the server recovery explanation',async()=>{
+  const f=setup();await f.refresh();
+  f.ctx.fetch=async()=>({ok:false,status:403,json:async()=>({detail:'Use an authorized browser on localhost.'})});await f.refresh();
+  assert.equal(f.nodes['activity-groups'].children.length,0);assert.equal(f.nodes['activity-history'].children.length,0);
+  assert.match(f.nodes['activity-error'].textContent,/authorized browser/);assert.equal(f.nodes['activity-review'].disabled,true);
+});
+
+test('locked activity cannot read or review and unlock alone sends no request',async()=>{
+  const f=setup();await f.refresh();f.events['tli-session-locked']();
+  const count=f.calls.length;await f.refresh();await f.nodes['activity-review'].click();assert.equal(f.calls.length,count);
+  f.events['tli-session-unlocked']();assert.equal(f.calls.length,count);await f.refresh();assert.equal(f.calls.length,count+1);
+});
+
+test('confirmed access reloads visible activity without reviewing it and coalesces pending reads', async () => {
+  let finish;
+  const f = setup(() => new Promise(resolve => { finish = resolve; }));
+  f.nodes['panel-dashboard2'].hidden = false;
+  f.events['tli-session-locked']();
+  f.events['tli-private-observation-ready']();
+  assert.equal(f.calls.length, 0, 'A ready notification cannot override a current lock');
+  f.events['tli-session-unlocked']();
+  f.events['tli-private-observation-ready']();
+  f.events['tli-private-observation-ready']();
+  assert.equal(f.calls.length, 1, 'One visible summary read recovers after authorized access');
+  assert.equal(f.calls[0][0], '/dashboard/activity-summary');
+  assert.equal(f.calls[0][1].method, undefined, 'Recovery cannot acknowledge activity');
+  finish(snapshot());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.nodes['activity-groups'].children.length, 1);
+  assert.equal(f.nodes['activity-catchup'].dataset.state, 'ready');
+});
+
+test('confirmed access defers hidden activity and a later lock discards the recovery read', async () => {
+  let finish;
+  const f = setup(() => new Promise(resolve => { finish = resolve; }));
+  f.events['tli-private-observation-ready']();
+  assert.equal(f.calls.length, 0, 'Do not load an inactive dashboard');
+  f.nodes['panel-dashboard2'].hidden = false;
+  f.ctx.document.hidden = true;
+  f.events['tli-private-observation-ready']();
+  assert.equal(f.calls.length, 0, 'Do not load a hidden browser tab');
+  f.ctx.document.hidden = false;
+  f.events['tli-private-observation-ready']();
+  assert.equal(f.calls.length, 1);
+  f.events['tli-session-locked']();
+  finish(snapshot());
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.nodes['activity-groups'].children.length, 0);
+  assert.equal(f.nodes['activity-review'].disabled, true);
+});
+
+test('access confirmed while the browser is hidden loads activity once on return unless locked again', async () => {
+  for (const relock of [false, true]) {
+    const f = setup();
+    f.nodes['panel-dashboard2'].hidden = false;
+    f.events['tli-session-locked']();
+    f.events['tli-session-unlocked']();
+    f.ctx.document.hidden = true;
+    await f.events['tli-private-observation-ready']();
+    assert.equal(f.calls.length, 0);
+    if (relock) f.events['tli-session-locked']();
+    f.ctx.document.hidden = false;
+    await f.events.visibilitychange();
+    await f.events.visibilitychange();
+    assert.equal(f.calls.length, relock ? 0 : 1);
+    assert.equal(f.nodes['activity-groups'].children.length, relock ? 0 : 1);
+    assert.ok(f.calls.every(([, options]) => !options.method));
+  }
+});
+
 function narratorFixture(handler) {
   const nodes = {}, events = {}, calls = [];
   const create = tag => {
@@ -212,6 +282,8 @@ function setupFeed(handler=async () => ({ok:true})) {
       addEventListener:(name, fn) => events[name] = fn, dispatchEvent:()=>{}},
     MutationObserver:class {observe(){}}, EventSource:class {constructor(){sources.push(this);} close(){}},
     fetch:async (url, options) => {calls.push([url, options]); const body = await handler(); return {ok:body.ok, json:async () => body};}});
+  let alertToken = null;
+  ctx.window.TLIShell = {alertOperations:{capture:()=>({}),isCurrent:()=>true,canBegin:()=>!alertToken,begin:()=>alertToken?null:(alertToken={}),current:token=>token===alertToken,settle:async token=>{if(token===alertToken)alertToken=null;}}};
   vm.runInContext(interpreterSource, ctx);
   vm.runInContext(feedSource, ctx);
   events.DOMContentLoaded();
@@ -227,7 +299,7 @@ test('live feed preserves repeats, nodes and escalation across reconnect IDs', (
   assert.match(f.nodes['nd-feed'].children[0].innerHTML, /host 3/);
   assert.doesNotMatch(f.nodes['nd-feed'].children[0].innerHTML, /<img/);
 });
-test('feed action failure stays retryable and duplicate submissions execute once', async () => {
+test('feed dismissal uncertainty requires alert review and duplicate submissions execute once', async () => {
   let finish;
   const f = setupFeed(() => new Promise(resolve => finish = resolve));
   f.emit({id:'action', title:'An alert', ts:Date.now()/1000,
@@ -236,6 +308,8 @@ test('feed action failure stays retryable and duplicate submissions execute once
   const first = button.click(); await button.click();
   assert.equal(f.calls.length, 1);
   finish({ok:false}); await first;
-  assert.equal(button.disabled, false);
-  assert.match(button.textContent, /Failed/);
+  assert.equal(button.disabled, true);
+  assert.match(button.textContent, /Not confirmed.*review Alerts/);
+  await button.click();
+  assert.equal(f.calls.length, 1, 'An uncertain dismissal cannot be repeated from the old activity button');
 });

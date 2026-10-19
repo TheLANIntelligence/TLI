@@ -213,13 +213,25 @@ def operation_access(request: Request, owner: str):
         # Enabling PIN protection invalidates this original open-local authority.
         def valid():
             return owner == "local" and not S.load_pin_config()["enabled"]
+    failure = None
     def check():
+        nonlocal failure
+        if failure is not None:
+            raise failure from None
         try:
             allowed = valid()
-        except Exception:
-            allowed = False
+        except Exception as error:
+            # Credential/PIN store damage is unavailable security, not an
+            # expired login. Keep the failure for this operation even if a
+            # later read succeeds, so an error handler cannot resume it.
+            status = error.status_code if isinstance(error, HTTPException) and error.status_code in (401, 403, 503) else 503
+            detail = ("Original access could not be verified because security state is unavailable. Existing files were preserved."
+                      if status == 503 else "The original access expired, was revoked or is no longer permitted. Remaining steps were not run.")
+            failure = HTTPException(status, detail, headers={"Cache-Control": "no-store"})
+            raise failure from None
         if not allowed:
-            raise HTTPException(401, "Execution stopped because the original access expired, was locked or was revoked. Remaining steps were not run.")
+            failure = HTTPException(401, "Execution stopped because the original access expired, was locked or was revoked. Remaining steps were not run.", headers={"Cache-Control": "no-store"})
+            raise failure
         additional = getattr(request.state, "tli_run_check", None)
         if additional:
             additional()

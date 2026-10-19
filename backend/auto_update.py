@@ -309,16 +309,19 @@ def check(update_url=None, *, automatic=False):
     return get_status()
 
 
-def apply():
+def apply(*, check=None):
     """Prepare a package. This never changes installed code or stops the host."""
     global _state, _progress, _error
+    if check: check()
     with _lock:
+        if check: check()
         if _state != UpdateState.AVAILABLE or not _info.get("can_prepare"):
             return False
         manifest = dict(_info)
         _state, _progress, _error = UpdateState.DOWNLOADING, 0, ""
     try:
-        threading.Thread(target=_apply_pipeline, args=(manifest,), daemon=True).start()
+        if check: check()
+        threading.Thread(target=_apply_pipeline, args=(manifest,), kwargs={"check": check}, daemon=True).start()
     except Exception as error:
         with _lock:
             _state, _error = UpdateState.ERROR, f"Could not start the download: {error}"
@@ -326,25 +329,34 @@ def apply():
     return True
 
 
-def _apply_pipeline(manifest):
+def _apply_pipeline(manifest, *, check=None):
     global _state, _progress, _error, _ready_path
     job = None
     try:
+        if check: check()
         import update_install
         updates = _updates_dir()
+        if check: check()
         updates.mkdir(parents=True, exist_ok=True)
         job = updates / ("job-" + uuid.uuid4().hex)
         job.mkdir()
         archive = job / "release.zip"
         sha, downloaded = hashlib.sha256(), 0
+        if check: check()
         with _open_url(manifest["download_url"], 120) as response:
+            if check: check()
             total = int(response.headers.get("Content-Length", 0))
             if total < 0 or total > MAX_DOWNLOAD_BYTES:
                 raise ValueError("The update package exceeds the download limit.")
             if total and shutil.disk_usage(updates).free < total * 2 + 256 * 1024 * 1024:
                 raise ValueError("Free more disk space before downloading this update.")
+            if check: check()
             with archive.open("xb") as output:
-                while chunk := response.read(1024 * 1024):
+                while True:
+                    if check: check()
+                    chunk = response.read(1024 * 1024)
+                    if check: check()
+                    if not chunk: break
                     downloaded += len(chunk)
                     if downloaded > MAX_DOWNLOAD_BYTES:
                         raise ValueError("The update package exceeds the download limit.")
@@ -355,19 +367,25 @@ def _apply_pipeline(manifest):
             if total and downloaded != total:
                 raise ValueError("The download was incomplete. Check your connection and try again.")
         with _lock:
+            if check: check()
             _state, _progress = UpdateState.VERIFYING, 85
         if sha.hexdigest() != manifest["sha256"]:
             raise ValueError("The download checksum does not match this release. No application files were changed.")
         with _lock:
             _state, _progress = UpdateState.PREPARING, 90
         package = job / "package"
-        inventory = update_install.extract_archive(archive, package, expected_version=manifest["version"], expected_platform=_platform_name())
+        inventory = update_install.extract_archive(archive, package, expected_version=manifest["version"], expected_platform=_platform_name(),
+                                                   **({"check": check} if check else {}))
         update_install.require_full_release(inventory, _platform_name())
+        if check: check()
         _write_json(package / "update-target.json", {"target": str(Path(S.BASE_DIR).resolve())})
+        fingerprint = update_install._hash(package / "TLI_RELEASE.json", check=check)[1]
+        if check: check()
         _write_json(updates / "prepared.json", {"version": manifest["version"], "folder": job.name,
-                    "sha256": manifest["sha256"], "notes": manifest.get("notes", "")})
+                    "sha256": manifest["sha256"], "manifest_sha256": fingerprint, "notes": manifest.get("notes", "")})
         archive.unlink()
         with _lock:
+            if check: check()
             _state, _progress, _ready_path = UpdateState.READY, 100, str(package)
     except Exception as error:
         with _lock:
@@ -376,8 +394,30 @@ def _apply_pipeline(manifest):
             shutil.rmtree(job, ignore_errors=True)
 
 
-def open_prepared_folder():
+def prepared_for_install(*, check):
+    """Return only the fixed staged-job identity; validate every file at review."""
+    import host_control as H
+    import update_install
+    check()
     with _lock:
+        check()
+        status = get_status()
+        check()
+        if not status["can_open"] or _updates_dir() != Path(S.BASE_DIR).resolve() / "data" / "updates":
+            raise ValueError("Prepare a verified update in this installation before reviewing installation.")
+        receipt = H.read_json(update_install._no_links(_updates_dir() / "prepared.json"), 256 * 1024)
+        check()
+        package = {key: receipt.get(key) for key in ("folder", "version", "manifest_sha256")}
+        if package["version"] != status["latest_version"] or str(_updates_dir() / str(package["folder"]) / "package") != _ready_path:
+            raise ValueError("The prepared update changed. Check for updates and review it again.")
+    check()
+    return package
+
+
+def open_prepared_folder(*, check=None):
+    if check: check()
+    with _lock:
+        if check: check()
         status = get_status()
         if not status["can_open"]:
             raise ValueError("No verified update folder is ready. Check for updates first.")
@@ -386,7 +426,9 @@ def open_prepared_folder():
         if path.resolve() != path or path.parent.parent != updates or not (path / "TLI_RELEASE.json").is_file():
             raise ValueError("The prepared update folder is no longer available. Download it again.")
     args = ["explorer.exe", str(path)] if sys.platform == "win32" else ["open" if sys.platform == "darwin" else "xdg-open", str(path)]
+    if check: check()
     subprocess.Popen(args, shell=False, **hidden_process_kwargs())
+    if check: check()
 
 
 def auto_check_on_startup():

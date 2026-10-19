@@ -300,6 +300,16 @@ test('phone review moves the same controls into one native dialog and Escape res
   assert.equal(dialog.isConnected,false);assert.equal(f.calls.length,0);
 });
 
+test('closing phone review falls back to visible browsing when clearing makes its opener unavailable', () => {
+  for(const unavailable of ['hidden','disabled','css']){
+    const f=fixture(),{box,section,invoker}=drawerSetup(f),browser=f.element('div');
+    f.nodes['fs-table-wrap']=browser;f.document.body.append(browser);f.api.openReview();const dialog=f.all.find(e=>e.tag==='dialog');
+    if(unavailable==='css')invoker.checkVisibility=()=>false;else invoker[unavailable]=true;
+    box.hidden=true;dialog.handlers.cancel({preventDefault(){}});
+    assert.equal(section.parentNode,box);assert.equal(f.document.activeElement,browser);assert.equal(dialog.isConnected,false);assert.equal(f.calls.length,0);
+  }
+});
+
 test('locking an open phone drawer restores original DOM and clears selected private paths', () => {
   const f=fixture(),{box,section}=drawerSetup(f);f.api.choice(file('C:\\private-drawer')).querySelector('input').change(true);
   f.api.openReview();const dialog=f.all.find(e=>e.tag==='dialog');f.emit('tli-session-locked');

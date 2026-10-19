@@ -266,12 +266,13 @@ def test_new_routes_and_old_memory_routes_enforce_ownership(authed_client):
     assert client.get('/api/intelligence/images/missing').status_code == 404
 
 
-def test_bundled_history_cannot_read_or_delete_other_owners(authed_client):
+def test_bundled_history_cannot_read_or_delete_other_owners(browser_client, monkeypatch):
+    monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
     ident = ai_routes._get_or_create_conv(None, user_id="another-user")
     ai_routes._save_turn(ident, "user", "Private conversation")
-    assert authed_client.get('/api/ai/conversations/' + ident).status_code == 404
-    assert not any(c["id"] == ident for c in authed_client.get('/api/ai/conversations').json()["conversations"])
-    authed_client.delete('/api/ai/conversations')
+    assert browser_client.get('/api/ai/conversations/' + ident).status_code == 404
+    assert not any(c["id"] == ident for c in browser_client.get('/api/ai/conversations').json()["conversations"])
+    assert browser_client.delete('/api/ai/conversations').status_code == 200
     assert ident in S.load_conversations()
     with pytest.raises(HTTPException):
         ai_routes._get_or_create_conv(ident, user_id="test-user")
@@ -304,18 +305,25 @@ def test_context_budget_preserves_primary_instructions_and_never_silently_cuts_q
 def test_new_private_routes_require_authentication(client, monkeypatch):
     monkeypatch.setattr(S, "load_pin_config", lambda: {"enabled": True})
     for path in ("/api/intelligence/devices", "/api/intelligence/diagnostics", "/api/intelligence/memory", "/api/intelligence/images", "/api/ai/conversations"):
-        assert client.get(path).status_code == 401
+        assert client.get("https://testserver" + path).status_code == 401
     with pytest.raises(HTTPException) as error:
         context.build(None, "check", report_id="somebody-elses-report")
     assert error.value.status_code == 401
 
 
-def test_phone_entrypoint_retains_companion_and_exposes_full_tools(client):
-    mobile = client.get('/', headers={"User-Agent": "Mozilla iPhone Mobile"})
-    assert "TLI Companion" in mobile.text
-    assert "Open diagnostics, memory &amp; image tools" in mobile.text
-    assert "Device context &amp; diagnostics" not in mobile.text
-    assert '/js/intelligence.js' in client.get('/?desktop=1', headers={"User-Agent": "iPhone"}).text
+def test_phone_entrypoint_uses_shared_workspace_and_retains_explicit_legacy_companion(client):
+    desktop = client.get('/')
+    assert desktop.status_code == 200
+    assert '/js/intelligence.js' in desktop.text
+    assert 'name="viewport"' in desktop.text
+    for path in ('/', '/?desktop=1', '/companion'):
+        mobile = client.get(path, headers={"User-Agent": "Mozilla iPhone Mobile"})
+        assert mobile.status_code == 200
+        assert mobile.content == desktop.content
+    legacy = client.get('/companion/legacy')
+    assert legacy.status_code == 200
+    assert "TLI Companion" in legacy.text
+    assert "Open diagnostics, memory &amp; image tools" in legacy.text
 
 
 def test_empty_model_stream_reports_failure(client, monkeypatch):

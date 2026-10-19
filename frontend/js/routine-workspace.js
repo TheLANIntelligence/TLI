@@ -14,13 +14,14 @@
     value !== null || !['device', 'value', 'device_id', 'capability'].includes(key)));
   const sameSteps = (one, two) => Array.isArray(one) && Array.isArray(two) && stable(one.map(cleanStep)) === stable(two.map(cleanStep));
   let active = false, locked = false, epoch = 0, read = null, mutation = null;
+  let accessReady = true, resumeAfterUnlock = false;
   let caps = null, saved = null, receipts = null, checked = '', draft = null, preview = null, saveCandidate = null;
   let runReview = null, outcome = null, notice = '', failed = false, departure = null, backgroundRequest = false;
   let savedQuery = '', savedLimit = 30, legacyLimit = 30, resumeVisible = false;
   let showArchived = false, archiveReview = null, pendingOpen = null;
   const favoriteKey = 'tli.routine-favorites.v1', favoriteMounts = new Set(), favoriteTickets = new WeakMap();
   let favoriteEpoch = 0;
-  const alive = token => active && !locked && token === epoch;
+  const alive = token => active && !locked && accessReady && token === epoch;
   const busy = () => !!read || !!mutation;
 
   function requestId() {
@@ -30,10 +31,11 @@
   }
   function button(label, action, primary = false) {
     const b = node('button', label, primary ? 'btn-primary' : 'btn-outline'); b.type = 'button'; b.disabled = busy();
+    const buttonEpoch = epoch;
     b.addEventListener('click', () => {
-      if (b.disabled || busy() || locked || !active) return;
-      return Promise.resolve().then(() => { if (!locked && active && !busy()) return action(); }).catch(error => {
-        if (active && !locked) { notice = error.message; failed = true; paint(); }
+      if (b.disabled || busy() || !alive(buttonEpoch)) return;
+      return Promise.resolve().then(() => { if (alive(buttonEpoch) && !busy()) return action(); }).catch(error => {
+        if (alive(buttonEpoch)) { notice = error.message; failed = true; paint(); }
       });
     }); return b;
   }
@@ -104,7 +106,7 @@
   async function api(path, method = 'GET', body, signal) {
     const requestEpoch = epoch;
     const response = await fetch('/actions' + path, { method, cache: 'no-store', headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
-    if (response.status === 401) { if (alive(requestEpoch)) window.dispatchEvent(new CustomEvent('tli-session-locked')); throw new Error('Unlock TLI to continue.'); }
+    if (response.status === 401 || response.status === 403) { if (alive(requestEpoch)) window.dispatchEvent(new CustomEvent('tli-session-locked')); throw new Error('Unlock TLI to continue.'); }
     const data = await response.json().catch(() => null);
     if (!response.ok) throw Object.assign(new Error(typeof data?.detail === 'string' ? data.detail : 'Request failed (' + response.status + ').'), { status: response.status });
     return data;
@@ -373,7 +375,7 @@
     document.getElementById('routine-workspace')?.replaceChildren();
   }
   function open() {
-    if (locked) return; if (active) { paint(); consumePendingOpen(); return; } active = true;
+    if (locked || !accessReady) return; if (active) { paint(); consumePendingOpen(); return; } active = true;
     notice = backgroundRequest ? 'An earlier request may have completed on the host. Inspect saved routines and recorded results before preparing another run.' : 'Loading saved routines…';
     if (backgroundRequest) { backgroundRequest = false; failed = true; paint(); } else { paint(); refresh(); }
   }
@@ -382,7 +384,7 @@
     const actionId = pendingOpen; pendingOpen = null; reviewRun(actionId);
   }
   function openSaved(actionId) {
-    if (!id(actionId) || locked || document.hidden) return;
+    if (!id(actionId) || locked || !accessReady || document.hidden) return;
     window.switchPanel?.('panel-automations');
     pendingOpen = actionId; open();
   }
@@ -411,7 +413,7 @@
     if (!mount) return;
     const ticket = {}; favoriteTickets.set(mount, ticket);
     favoriteMounts.add(mount); mount.replaceChildren(); mount.hidden = true;
-    if (locked || document.hidden) return;
+    if (locked || !accessReady || document.hidden) return;
     const favorites = favoriteIds();
     if (!favorites.length) { mount.append(node('p', 'Pin a saved routine in Devices to keep it here.', 'routine-muted')); return; }
     mount.hidden = false;
@@ -419,7 +421,7 @@
     try {
       const response = await fetch('/actions/list', { method: 'GET', cache: 'no-store' });
       if (token !== favoriteEpoch || favoriteTickets.get(mount) !== ticket || locked || document.hidden) return;
-      if (response.status === 401) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
+      if (response.status === 401 || response.status === 403) { window.dispatchEvent(new CustomEvent('tli-session-locked')); return; }
       const data = await response.json(); if (token !== favoriteEpoch || favoriteTickets.get(mount) !== ticket || locked || document.hidden) return;
       if (!response.ok || !validSaved(data)) throw new Error('Saved routines are unavailable.');
       mount.replaceChildren();
@@ -429,17 +431,27 @@
         if (!action || action.archived === true) continue;
         const card = node('article', null, 'routine-favorite'); card.append(node('strong', action.name), node('p', action.enabled === false ? 'Saved as disabled' : action.steps.length + ' steps', 'routine-muted'));
         const review = node('button', 'Review and run', 'btn-outline'); review.type = 'button'; review.disabled = action.enabled === false;
-        review.addEventListener('click', () => { if (!review.disabled) openSaved(action.id); }); card.append(review); mount.append(card);
+        review.addEventListener('click', () => { if (!review.disabled && token === favoriteEpoch && favoriteTickets.get(mount) === ticket) openSaved(action.id); }); card.append(review); mount.append(card);
       }
       if (!mount.children.length) mount.append(node('p', 'Your pinned routines are archived or unavailable. Review them in Devices.', 'routine-muted'));
     } catch { if (token === favoriteEpoch && favoriteTickets.get(mount) === ticket && !locked) mount.replaceChildren(node('p', 'Favorite routines could not be loaded. Open Devices to refresh them.', 'routine-muted')); }
   }
-  window.TLIManualRoutines = { onOpen: open, onClose: () => close(), refresh, openSaved };
+  window.TLIManualRoutines = { onOpen: open, onClose: () => { resumeAfterUnlock = false; close(); }, refresh, openSaved };
   window.TLIRoutineFavorites = { render: renderFavorites, clear: clearFavorites };
-  window.addEventListener('tli-session-locked', () => { locked = true; close(true); });
+  window.addEventListener('tli-session-locked', () => {
+    resumeAfterUnlock ||= active;
+    locked = true; accessReady = false; close(true);
+  });
   window.addEventListener('tli-session-unlocked', () => { locked = false; });
+  window.addEventListener('tli-private-observation-ready', () => {
+    if (locked || accessReady) return;
+    accessReady = true;
+    if (resumeAfterUnlock && !document.hidden) { resumeAfterUnlock = false; open(); }
+    if (!document.hidden) for (const mount of favoriteMounts) if (mount.isConnected !== false) renderFavorites(mount);
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { resumeVisible = active; close(true); }
+    else if (resumeAfterUnlock && !locked && accessReady) { resumeAfterUnlock = false; open(); }
     else if (resumeVisible && !locked) {
       resumeVisible = false; const root = document.getElementById('routine-workspace'); if (!root) return;
       const b = node('button', 'Reload saved routines', 'btn-outline'); b.type = 'button'; b.addEventListener('click', open);
@@ -448,5 +460,5 @@
   });
   window.addEventListener('storage', event => { if (event.key === favoriteKey) { clearFavorites(); if (active) paint(); changed(); } });
   window.addEventListener('pagehide', () => close(true));
-  document.addEventListener('tli-panel-switched', event => { if (active && (event.detail?.panelId || event.detail?.panel || event.detail?.id) !== 'panel-automations') close(); });
+  document.addEventListener('tli-panel-switched', event => { if ((event.detail?.panelId || event.detail?.panel || event.detail?.id) !== 'panel-automations') { resumeAfterUnlock = false; if (active) close(); } });
 })();

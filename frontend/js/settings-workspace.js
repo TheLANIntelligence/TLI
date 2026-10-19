@@ -51,10 +51,10 @@
     let active = 'general', pending = false;
     const clear = document.getElementById('settings-find-clear');
     const companion = make('article', null, 'settings-section'); companion.id = 'settings-section-companion';
-    companion.append(make('h3', 'Phone Companion', 'settings-section-title'));
+    companion.append(make('h3', 'TLI on your phone', 'settings-section-title'));
     const companionBody = make('div', null, 'settings-section-body');
-    companionBody.append(make('p', 'Connect the native iPhone or Android app, review this host’s secure network setup and manage paired phones.'));
-    const companionOpen = make('button', 'Open Phone Companion', 'btn-outline'); companionOpen.type = 'button'; companionOpen.id = 'settings-open-companion';
+    companionBody.append(make('p', 'Take your conversations, questions and ideas with you. Guided Android setup connects to the workspace on this computer.'));
+    const companionOpen = make('button', 'Connect phone', 'btn-outline'); companionOpen.type = 'button'; companionOpen.id = 'settings-open-companion';
     function openCompanion() {
       if (window.TLICompanion?.open) return window.TLICompanion.open();
       if (typeof window.switchPanel === 'function') window.switchPanel('panel-companion');

@@ -67,9 +67,9 @@ function harness(guard = new ChatSendGuard()) {
     transport, client, guard, updates, ids, errors,
     get starts() { return starts; }, get settled() { return settled; },
     changeConversation() { current = false; },
-    run(context: ChatContext = {}, options: { bootstrap?: Bootstrap; message?: string } = {}) {
+    run(context: ChatContext = {}, options: { bootstrap?: Bootstrap; message?: string;runRequest?:Parameters<typeof sendChat>[0]['runRequest'] } = {}) {
       return sendChat({ client, guard, bootstrap: options.bootstrap || bootstrap, deviceId: 'phone', conversationId: 'existing', message: options.message ?? 'Please explain this.', context,
-        isCurrent: () => current,
+        isCurrent: () => current,...(options.runRequest?{runRequest:options.runRequest}:{}),
         onStart: assistant => { starts++; updates.push(assistant); },
         onUpdate: assistant => updates.push(assistant), onConversation: id => ids.push(id),
         onError: error => errors.push(error), onSettled: () => { settled++; },
@@ -104,6 +104,9 @@ test('legacy JSON chat resolves only its completed response using the existing r
   await h.run({}, { bootstrap: { ...bootstrap, chat: { path: '/chat', streaming: false } } });
   assert.equal(h.transport.requests[0]!.path, '/chat');
   assert.deepEqual(h.ids, ['shared']); assert.equal(h.updates.at(-1)?.state, 'complete'); assert.equal(h.updates.at(-1)?.host, undefined);
+});
+test('JSON replies preserve actual executing host receipts without substituting the selected host',async()=>{
+  for(const host of ['Home',{name:'Home'}]){const h=harness();h.transport.respond=async()=>({...response,body:JSON.stringify({reply:'Answer',conversation_id:'shared',model_used:'Qwen',brain_used:'LM Studio',host,inference_host:{id:'worker',name:'Reviewed worker'}})});await h.run({},{bootstrap:{...bootstrap,chat:{path:'/chat',streaming:false}}});assert.equal(h.updates.at(-1)?.host,'Home');assert.equal(h.updates.at(-1)?.inference_host?.name,'Reviewed worker');}
 });
 
 test('provider failure rejects the caller, keeps partial content, and sends nothing again automatically', async () => {
@@ -324,4 +327,20 @@ test('case revision conflict and forced duplicate send make one POST and preserv
   const first = h.run({ case_ref: caseRef }); await assert.rejects(h.run({ case_ref: caseRef }), /already in progress/);
   pending.resolve({ status: 409, headers: {}, body: JSON.stringify({ detail: 'Case changed after review' }) }); await assert.rejects(first, /Case changed/);
   assert.equal(h.transport.requests.filter(r => r.method === 'POST').length, 1); assert.equal(h.updates.at(-1)!.state, 'interrupted');
+});
+
+for(const streaming of [true,false])test('document preflight preserves the chosen '+(streaming?'bundled':'LM Studio')+' provider for an accepted host run',async()=>{
+  const h=harness(),accepted:Record<string,unknown>[]=[];
+  h.transport.respond=async request=>{assert.equal(request.path,'/api/ai/documents/capabilities');return {...response,body:JSON.stringify({ok:true,protocol:'tli-document-questions-v1'})};};
+  await h.run({documents:[{name:'plan.md',text:'A selected plan'}]},{bootstrap:{...bootstrap,chat:{path:streaming?'/api/ai/chat/stream':'/chat',streaming}},runRequest:async(payload,path,event)=>{assert.equal(h.transport.requests.length,1);assert.equal(path,streaming?'/api/ai/chat/stream':'/chat');accepted.push(payload);event({type:'delta',text:'Document answer'});event({type:'done'});}});
+  assert.equal(accepted.length,1);assert.equal(accepted[0]!.brain,streaming?undefined:'lmstudio');assert.equal(h.updates.at(-1)!.state,'complete');
+});
+test('unsupported document capability and conflicting LAN context never submit a host run',async()=>{
+  for(const lan of [false,true]){const h=harness();h.transport.respond=async()=>({...response,body:JSON.stringify({ok:true,protocol:'old'})});let accepted=0;
+    await assert.rejects(h.run({documents:[{name:'plan.md',text:'Plan'}],...(lan?{lan_inference:{peer_id:'peer',trust_revision:'a'.repeat(64),resource_id:'b'.repeat(64),resource_revision:'c'.repeat(64)}}:{})},{runRequest:async()=>{accepted++;}}));assert.equal(accepted,0);assert.equal(h.transport.requests.length,lan?0:1);}
+});
+test('a reviewed LAN selection can send when the home bootstrap reports local AI unavailable',async()=>{
+  const h=harness(),selection={peer_id:'peer',trust_revision:'a'.repeat(64),resource_id:'b'.repeat(64),resource_revision:'c'.repeat(64)};
+  await h.run({lan_inference:selection},{bootstrap:{...bootstrap,ai:{status:'unavailable',provider:'bundled',detail:'Stopped',checked_at:'2026-10-12T00:00:00Z'},chat:{path:'/chat',streaming:false}}});
+  assert.equal(h.transport.requests[0]!.path,'/api/ai/chat/stream');assert.deepEqual(JSON.parse(h.transport.requests[0]!.body!).lan_inference,selection);assert.equal(h.updates.at(-1)!.state,'complete');
 });

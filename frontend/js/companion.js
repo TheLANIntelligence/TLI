@@ -9,9 +9,12 @@
     // Keep join tokens while avoiding a mobile root → Companion redirect loop.
     const query = new URLSearchParams(window.location.search);
     query.set("desktop", "1");
-    window.location.replace("/?" + query.toString());
+    window.location.replace("/?" + query.toString() + (window.location.hash || ''));
     return;
   }
+
+  let _leaving = false, _left = false;
+  const _pairCurrent = () => !_left && localStorage.getItem('sat_node_id') === SAT_ID && localStorage.getItem('sat_secret') === SAT_SECRET;
 
   // ── DOM refs ──────────────────────────────────────────────────
   const dot        = document.getElementById("comp-dot");
@@ -156,6 +159,7 @@
 
   // ── Heartbeat ─────────────────────────────────────────────────
   async function _beat() {
+    if (!_pairCurrent() || _leaving) return;
     const payload = {
       node_id:  SAT_ID,
       secret:   SAT_SECRET,
@@ -173,10 +177,13 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      if (r.status === 403) { _leave(false); return; }
+      const data = await r.json().catch(() => null);
+      if (!_pairCurrent() || _leaving) return;
+      if (r.status === 403 && data?.detail?.code === 'satellite_credential_invalid') { await _leave(false); return; }
+      if (!r.ok || data?.ok !== true) { dot.className = 'comp-dot warn'; return; }
       dot.className = "comp-dot online";
     } catch (_) {
-      dot.className = "comp-dot warn";
+      if (_pairCurrent() && !_leaving) dot.className = "comp-dot warn";
     }
   }
   _beat();
@@ -396,16 +403,21 @@
   // ── Scenes ────────────────────────────────────────────────────
   const SCENE_ICONS = ["⚡","🌙","🎮","☀️","🎬","🏠","🔆","🌅","🎵","✦"];
   let _scenesLoaded = false;
+  let _scenesRead = 0;
 
   async function _loadScenes() {
     if (_scenesLoaded) return;
     const list = document.getElementById("scenes-list");
     if (!list) return;
+    const read = ++_scenesRead;
     list.innerHTML = "<div class='spinner'></div>";
     try {
       const r = await fetch("/homepower/scenes");
-      const data = await r.json();
-      const scenes = data.scenes || [];
+      const data = await r.json().catch(() => null);
+      if (read !== _scenesRead) return;
+      if (!r.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : `Scene list unavailable (${r.status}).`);
+      if (!Array.isArray(data?.scenes)) throw new Error('The saved scene list could not be read.');
+      const scenes = data.scenes;
       if (!scenes.length) {
         list.innerHTML = "<div class='empty'><div class='empty-icon'>✦</div>No phone scenes saved.<br>Existing phone scenes appear here. Desktop routines in Devices are managed separately.</div>";
         _scenesLoaded = true;
@@ -444,8 +456,10 @@
       list.innerHTML = "";
       list.appendChild(grid);
       _scenesLoaded = true;
-    } catch {
-      list.innerHTML = "<div class='empty'><div class='empty-icon'>⚠️</div>Could not load scenes.</div>";
+    } catch (error) {
+      if (read !== _scenesRead) return;
+      _scenesLoaded = false;
+      list.textContent = 'Could not load scenes. ' + error.message + ' Refresh after resolving the problem; no scene was run.';
     }
   }
 
@@ -606,6 +620,7 @@
 
   // ── Status ────────────────────────────────────────────────────
   async function _loadStatus() {
+    if (!_pairCurrent() || _leaving) return;
     document.getElementById("st-name").textContent = SAT_NAME;
     document.getElementById("st-satid").textContent = SAT_ID;
     if (_bat) {
@@ -625,30 +640,35 @@
       if (conn) document.getElementById("st-conn").textContent =
         (conn.type && conn.type !== "unknown" ? conn.type : conn.effectiveType) || "Unknown";
     } catch (_) {}
-    try {
-      const r = await fetch("/system/summary");
-      const d = await r.json();
-      const aiEl = document.getElementById("st-ai");
-      if (aiEl) {
-        const aiStatus = d.ai?.status || "unknown";
-        aiEl.textContent = aiStatus;
-        aiEl.className = "stat-val " + (aiStatus === "running" ? "good" : "warn");
-      }
-      const devEl = document.getElementById("st-devcount");
-      if (devEl) devEl.textContent = d.devices?.count ?? "—";
-      const nodeEl = document.getElementById("st-node");
-      if (nodeEl) nodeEl.textContent = d.node?.name || d.name || "TLI Node";
-    } catch (_) {}
+    // The hardware summary never supplied AI/device/node status. This phone's
+    // presence credential does not authorize private host observations.
+    for (const id of ["st-ai", "st-devcount", "st-node"]) {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = "Not confirmed"; el.className = "stat-val"; }
+    }
   }
 
   // ── Leave mesh ────────────────────────────────────────────────
-  function _leave(callApi = true) {
-    if (callApi) fetch(`/mesh/satellite/${SAT_ID}`, { method: "DELETE" }).catch(() => {});
-    localStorage.removeItem("sat_node_id");
-    localStorage.removeItem("sat_secret");
-    localStorage.removeItem("sat_name");
-    localStorage.removeItem(HIST_KEY);
-    window.location.href = "/?desktop=1";
+  async function _leave(callApi = true) {
+    if (!_pairCurrent() || _leaving) return;
+    _leaving = true; if (leaveBtn) leaveBtn.disabled = true;
+    try {
+      if (callApi) {
+        const response = await fetch('/mesh/satellite/self-remove', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({node_id:SAT_ID,secret:SAT_SECRET})});
+        const data = await response.json().catch(() => null);
+        if (!_pairCurrent()) return;
+        if (!response.ok || data?.ok !== true || data.removed !== true) throw new Error(typeof data?.detail === 'string' ? data.detail : data?.detail?.message || 'The host did not confirm disconnection.');
+      }
+      if (!_pairCurrent()) return;
+      _left = true;
+      localStorage.removeItem("sat_node_id");
+      localStorage.removeItem("sat_secret");
+      localStorage.removeItem("sat_name");
+      localStorage.removeItem(HIST_KEY);
+      window.location.href = "/?desktop=1";
+    } catch (error) {
+      if (_pairCurrent()) toast('Disconnection not confirmed. ' + error.message + ' Your saved pairing is retained. No retry was sent.', 7000, 'error');
+    } finally { _leaving = false; if (leaveBtn && _pairCurrent()) leaveBtn.disabled = false; }
   }
   leaveBtn?.addEventListener("click", () => {
     if (confirm("Leave the TLI mesh?\n\nYou can rejoin by scanning a new QR code from the TLI Mesh panel.")) _leave();

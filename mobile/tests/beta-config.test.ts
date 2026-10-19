@@ -38,7 +38,7 @@ test('default and explicit production configuration keep the existing app identi
     assert.equal(config.name, 'TLI Companion'); assert.equal(config.scheme, 'tli-companion');
     assert.equal(config.ios.bundleIdentifier, 'com.thelegatointelligence.companion');
     assert.equal(config.android.package, 'com.thelegatointelligence.companion');
-    assert.equal(config.slug, 'tli-companion'); assert.equal(config.version, '0.1.0');
+    assert.equal(config.slug, 'tli-companion'); assert.equal(config.version, JSON.parse(readFileSync(join(appRoot, 'package.json'), 'utf8')).version);
     assert.equal(config.extra.eas.projectId, 'd9f0d676-6556-4615-a459-3589c83e3c08');
     assert.ok(nativeSchemes(config).ios.includes('tli-companion'));
   }
@@ -71,13 +71,14 @@ test('beta is an internal release with remote increments and Android transport t
   const eas = JSON.parse(readFileSync(join(appRoot, 'eas.json'), 'utf8'));
   assert.equal(eas.cli.appVersionSource, 'remote');
   assert.deepEqual(eas.build.development, { developmentClient: true, distribution: 'internal', node: '22.16.0' });
-  assert.deepEqual(eas.build.preview, { distribution: 'internal', node: '22.16.0', android: { buildType: 'apk', gradleCommand: ':tli-transport:testReleaseUnitTest :app:assembleRelease' } });
+  assert.deepEqual(eas.build.preview, { distribution: 'internal', node: '22.16.0', android: { buildType: 'apk', gradleCommand: ':tli-transport:testReleaseUnitTest :tli-preview:testReleaseUnitTest :app:assembleRelease' } });
   assert.deepEqual(eas.build.simulator, { extends: 'preview', ios: { simulator: true } });
   assert.deepEqual(eas.build.production, { autoIncrement: true, node: '22.16.0' });
   const beta = { ...eas.build[eas.build.beta.extends], ...eas.build.beta };
   assert.equal(beta.distribution, 'internal'); assert.equal(beta.autoIncrement, true); assert.equal(beta.developmentClient, false);
   assert.equal(beta.env.TLI_APP_VARIANT, 'beta'); assert.equal(beta.android.buildType, 'apk');
   assert.match(beta.android.gradleCommand, /:tli-transport:testReleaseUnitTest/);
+  assert.match(beta.android.gradleCommand, /:tli-preview:testReleaseUnitTest/);
   assert.equal(eas.submit, undefined);
 });
 

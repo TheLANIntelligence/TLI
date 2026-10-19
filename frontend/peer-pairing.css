@@ -27,10 +27,7 @@
 .connect-device-dialog details { border-top: 1px solid var(--border); padding-top: 12px; }
 .connect-device-dialog summary { cursor: pointer; margin-bottom: 10px; }
 .connect-device-phone #native-companion-settings { width: 100%; padding: 0; }
-.connect-device-phone .native-companion-overview, .connect-device-phone .native-companion-steps,
-.connect-device-phone #native-companion-step-access, .connect-device-phone #native-companion-step-connection,
-.connect-device-phone #native-companion-startup-details, .connect-device-phone #native-companion-host-start,
-.connect-device-phone #native-companion-remote { display: none; }
+.connect-device-phone .native-companion-overview, .connect-device-phone .native-companion-steps { display: none; }
 #tli-connect-device-review:not(:empty), #tli-connect-device-verification:not(:empty) { border-top: 1px solid var(--border); padding-top: 18px; }
 #tli-connections-advanced { margin-bottom: 16px; }
 .connection-review-facts { display: grid; gap: 4px; margin: 8px 0; overflow-wrap: anywhere; }

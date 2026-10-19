@@ -4,6 +4,7 @@
    ============================================================= */
 (function () {
   'use strict';
+  const panelHidden = id => id === 'panel-homelab' || window.TLIUI?.isPanelHidden?.(id) === true;
   async function requestResult(path, options) {
     const response = await fetch(path, options);
     const result = await response.json().catch(() => null);
@@ -14,7 +15,7 @@
     return result;
   }
   function openPanel(panel) {
-    if (typeof switchPanel !== 'function' || !document.getElementById(panel)) throw new Error('This panel is unavailable.');
+    if (panelHidden(panel) || typeof switchPanel !== 'function' || !document.getElementById(panel)) throw new Error('This panel is unavailable.');
     switchPanel(panel);
   }
   // ── Static commands ─────────────────────────────────────────
@@ -29,7 +30,7 @@
     'panel-hub': 'apps community',
     'panel-printshop': 'printers scanners',
   };
-  const NAV_ITEMS = Array.from(document.querySelectorAll('.sidebar-nav [data-panel-target]')).map(button => {
+  const NAV_ITEMS = Array.from(document.querySelectorAll('.sidebar-nav [data-panel-target]')).filter(button => !panelHidden(button.dataset.panelTarget)).map(button => {
     const panel = button.dataset.panelTarget;
     const label = button.querySelector('span').textContent.trim();
     return { id: 'nav-' + panel, label, sub: 'Open ' + label,
@@ -38,7 +39,7 @@
   function navigation() {
     const catalog = window.TLIUI?.navigation;
     if (!Array.isArray(catalog)) return NAV_ITEMS;
-    return catalog.map(item => ({ id: 'nav-' + item.id, label: item.label, sub: item.purpose || 'Open ' + item.label,
+    return catalog.filter(item => !panelHidden(item.id)).map(item => ({ id: 'nav-' + item.id, label: item.label, sub: item.purpose || 'Open ' + item.label,
       aliases: [NAV_ALIASES[item.id] || '', ...(Array.isArray(item.aliases) ? item.aliases : [item.aliases || ''])].join(' '),
       cat: 'Navigate', action: () => {
         if (item.id === 'saved-notes') {
@@ -204,7 +205,7 @@
       } },
       { label: 'Favorites', url: '/api/intelligence/places', parse(data) {
         if (data.ok !== true || data.protocol !== 'saved-places-v1' || !Array.isArray(data.places)) throw new Error('Unsupported');
-        const matches = data.places.slice(0, 100).filter(n => /^[a-f0-9]{32}$/i.test(n.id || '') && _contains(query, n.name, n.target));
+        const matches = data.places.slice(0, 100).filter(n => !(n.kind === 'panel' && panelHidden(n.target)) && /^[a-f0-9]{32}$/i.test(n.id || '') && _contains(query, n.name, n.target));
         return { limited: data.places.length > 100 || matches.length > SEARCH_LIMIT,
           commands: matches.slice(0, SEARCH_LIMIT).map(n => {
             const id = n.id;

@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 import pytest
+import requests
 
 import auto_update as U
 
@@ -63,7 +64,7 @@ def _leaf(folder, authority, number, *, wrong_hostname=False, expired=False):
 
 
 @pytest.fixture
-def tls_lab(tmp_path, monkeypatch):
+def tls_lab(tmp_path, monkeypatch, stdlib_opener_open):
     """No test can connect beyond its own ephemeral IPv4 loopback listeners."""
     servers, threads, allowed, connections, contexts = [], [], set(), [], []
     authorities = {name: _authority(tmp_path, name) for name in ("bundled", "platform", "untrusted")}
@@ -77,6 +78,9 @@ def tls_lab(tmp_path, monkeypatch):
 
     monkeypatch.setattr(socket, "create_connection", owned_connect)
     monkeypatch.setattr(urllib.request, "getproxies", lambda: {})
+    # The suite blocks urllib before collection. Restore only this transport
+    # after installing the owned-address guard and prohibiting host proxies.
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", stdlib_opener_open)
     monkeypatch.setattr(certifi, "where", lambda: str(authorities["bundled"][2]))
 
     def platform_trust(*names):
@@ -211,3 +215,27 @@ def test_http_downgrade_and_initial_http_url_are_refused_before_connecting(tls_l
     assert initial.requests == ["/redirect"]
     assert plaintext.requests == []
     assert all(address[1] != plaintext.server_port for address in connections)
+
+
+@pytest.mark.parametrize("url", ["https://192.0.2.1:443", "https://127.0.0.1:1"])
+def test_tls_fixture_refuses_unowned_destinations(tls_lab, url):
+    _, _, connections, _ = tls_lab
+    with pytest.raises(pytest.fail.Exception, match="unowned connection"):
+        _read(url)
+    assert connections == []
+
+
+def test_tls_fixture_ignores_host_proxy_settings(tls_lab, monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://192.0.2.1:3128")
+    monkeypatch.setenv("https_proxy", "http://192.0.2.1:3128")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("no_proxy", "")
+    start, _, connections, _ = tls_lab
+    server = start()
+    assert _read(server.url + "/downloads.json")
+    assert connections == [("127.0.0.1", server.server_port)]
+
+
+def test_update_transport_is_blocked_outside_owned_fixture():
+    with pytest.raises(requests.ConnectionError, match="Live network disabled"):
+        _read("https://192.0.2.1/downloads.json")

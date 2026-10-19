@@ -13,6 +13,15 @@ spec = importlib.util.spec_from_file_location("desktop_package_verifier", Path(_
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
 VERSION = "1.4.1-beta"
+OPTIONAL_SETUP_INPUTS = {
+    "backend/requirements-sonos.txt": b"synthetic-sonos==1\r\n",
+    "backend/requirements-voice.txt": b"synthetic-voice==2\n",
+    "docs/TLI_TASK_AGENT.md": b"Reviewed task setup\n",
+    "docs/TLI_SONOS.md": b"Reviewed speaker setup\n",
+    "docs/TLI_HOST_VOICE.md": b"Reviewed voice setup\n",
+    "backend/requirements-bluetooth.txt": b"bleak==3.0.2; sys_platform == 'win32'\n",
+    "docs/TLI_BLUETOOTH.md": b"Bluetooth setup and experimental profile limits\n",
+}
 
 
 def test_failed_child_reports_bounded_output_tail():
@@ -121,6 +130,17 @@ def test_complete_inventory_and_fresh_extraction(tmp_path, target):
         verifier.extract_fresh(archive, destination)
 
 
+@pytest.mark.parametrize("target", ["windows", "macos"])
+@pytest.mark.parametrize("name,raw", OPTIONAL_SETUP_INPUTS.items())
+def test_explicit_optional_setup_input_is_verified_and_extracted_unchanged(tmp_path, target, name, raw):
+    archive = write_zip(tmp_path, target, changes={name: raw})
+    result = verifier.inspect_archive(archive, target, VERSION)
+    assert result["release_inventory_verified"] is True
+    destination = tmp_path / "installation"
+    verifier.extract_fresh(archive, destination)
+    assert (destination / name).read_bytes() == raw
+
+
 @pytest.mark.parametrize("name", ["../escape.py", "/absolute.py", "backend/../escape.py", "backend\\escape.py",
                                  "backend/C:drive.py", "backend/NUL.py", "backend/ambiguous. ", "backend//double.py"])
 def test_rejects_unsafe_paths_before_extraction(tmp_path, name):
@@ -132,7 +152,11 @@ def test_rejects_unsafe_paths_before_extraction(tmp_path, name):
 
 @pytest.mark.parametrize("name", ["backend/data/conversations.json", "backend/.env", "backend/models/model.gguf",
                                  "backend/tests/test_private.py", "scripts/developer.py", "frontend/private.key",
-                                 "docs/PRIVATE_ACCEPTANCE.md", "TLI_Start.sh", "backend/ai/runtime/libggml.dylib"])
+                                 "docs/PRIVATE_ACCEPTANCE.md", "TLI_Start.sh", "backend/ai/runtime/libggml.dylib",
+                                 "backend/requirements-private.txt", "backend/requirements-voice-dev.txt",
+                                 "backend/routers/requirements-sonos.txt", "backend/data/requirements-voice.txt",
+                                 "docs/TLI_HOST_VOICE_PRIVATE.md", "docs/archive/TLI_SONOS.md",
+                                 "backend/requirements-bluetooth-private.txt", "data/bluetooth/devices.json"])
 def test_rejects_private_developer_and_opposite_platform_files(tmp_path, name):
     with pytest.raises(verifier.PackageError, match="private, developer-only or wrong-platform"):
         verifier.inspect_archive(write_zip(tmp_path, extra=[(name, b"fixture")]), "windows", VERSION)
@@ -232,22 +256,45 @@ def test_current_platform_package_survives_safe_source_snapshot(tmp_path, monkey
     assert verifier.PUBLIC_GUIDES == packager.PUBLIC_GUIDES == snapshot.PUBLIC_GUIDES
     original = tmp_path / "original"
     original.mkdir()
-    for name, raw in fixture_files(target).items():
+    for name, raw in {**fixture_files(target), **OPTIONAL_SETUP_INPUTS}.items():
         path = original / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(raw)
-    for name in ("data/private.json", "backend/ai/memory/private.py", "backend/ai/runtime/private-notes.txt", "TLI_RELEASE.json"):
+    excluded = ("data/private.json", "backend/ai/memory/private.py", "backend/ai/runtime/private-notes.txt", "TLI_RELEASE.json",
+                "backend/requirements-private.txt", "backend/requirements-voice-dev.txt",
+                "backend/routers/requirements-sonos.txt", "backend/data/requirements-voice.txt",
+                "docs/TLI_HOST_VOICE_PRIVATE.md", "docs/archive/TLI_SONOS.md",
+                "backend/models/voice/model.bin", "data/voice/generated.wav")
+    for name in excluded:
         path = original / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("PRIVATE_CANARY_DO_NOT_SHIP")
     frozen = snapshot.create_snapshot(original)
-    monkeypatch.setattr(packager, "ROOT", Path(frozen["snapshot_root"]))
+    source = Path(frozen["snapshot_root"])
+    for name, raw in OPTIONAL_SETUP_INPUTS.items():
+        assert (source / name).read_bytes() == raw
+    assert all(not (source / name).exists() for name in excluded)
+    monkeypatch.setattr(packager, "ROOT", source)
     archive = Path(frozen["workspace"]) / "desktop.zip"
     packager.build(archive, platform=target)
     result = verifier.inspect_archive(archive, target, VERSION)
     assert result["release_inventory_verified"]
     with zipfile.ZipFile(archive) as bundle:
         assert not any(b"PRIVATE_CANARY_DO_NOT_SHIP" in bundle.read(name) for name in bundle.namelist())
+        for name, raw in OPTIONAL_SETUP_INPUTS.items():
+            assert bundle.read(name) == raw
+        inventory = {row["path"]: row for row in json.loads(bundle.read(verifier.MANIFEST_NAME))["files"]}
+        for name, raw in OPTIONAL_SETUP_INPUTS.items():
+            assert inventory[name]["size"] == len(raw)
+            assert inventory[name]["sha256"] == hashlib.sha256(raw).hexdigest()
+    destination = tmp_path / "installation"
+    verifier.extract_fresh(archive, destination)
+    for name, raw in OPTIONAL_SETUP_INPUTS.items():
+        assert (destination / name).read_bytes() == raw == (original / name).read_bytes()
+    for name in excluded:
+        if name != verifier.MANIFEST_NAME:  # Generated inventory replaces no source file.
+            assert not (destination / name).exists()
+        assert (original / name).read_text() == "PRIVATE_CANARY_DO_NOT_SHIP"
 
 
 def test_asset_references_resolve_queries_and_css_but_reject_missing_or_escape(tmp_path):

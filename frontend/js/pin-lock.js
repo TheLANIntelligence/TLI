@@ -2,7 +2,7 @@
    TLI PIN Lock
    - Checks /system/pin/status on load.
    - If PIN is enabled and no valid session → show lock screen.
-   - Session stored in sessionStorage (auto-clears on tab close).
+   - The server cookie authorizes access; sessionStorage is only a UI hint.
    - Lock button in header re-locks the session.
    ============================================================= */
 (function () {
@@ -39,15 +39,15 @@
     setTimeout(() => { const i = _lockInput(); if (i) i.focus(); }, 120);
   });
 
-  function _hideLock() {
+  function _hideLock(detail) {
     const s = _lockScreen();
     if (s) { s.classList.add("hidden"); s.setAttribute("aria-hidden", "true"); }
     document.body.style.overflow = "";
     const b = _lockBtn();
     if (b) b.hidden = false;
-    // Resume authenticated views only after confirmed PIN verification or an
-    // explicit server response that PIN protection is disabled.
-    window.dispatchEvent(new CustomEvent('tli-session-unlocked'));
+    // A successful explicit PIN check can recover paused reads. PIN-disabled
+    // status alone cannot: each private view still needs server authorization.
+    window.dispatchEvent(new CustomEvent('tli-session-unlocked', { detail }));
   }
 
   function _accessUnavailable(message) {
@@ -94,6 +94,8 @@
     const errEl = _lockError();
     const pin = input ? input.value : "";
     if (!pin) { if (errEl) errEl.textContent = "Enter your PIN."; return; }
+    // Do not retain the submitted secret in the DOM on a lost or stale reply.
+    if (input) input.value = "";
     ++_generation;
     // Old unauthenticated polls may finish while this new PIN is being checked.
     // Only an explicit lock or security recovery may cancel this attempt.
@@ -113,7 +115,7 @@
         _setUnlocked(true);
         if (input) input.value = "";
         if (errEl) errEl.textContent = "";
-        _hideLock();
+        _hideLock({ source: 'pin-verification' });
       } else {
         _accessUnavailable(typeof result?.detail === 'string' ? result.detail : r.ok ? 'TLI did not confirm the PIN. Access remains locked.' : `The PIN could not be verified (${r.status}). Access remains locked.`);
         if (input) { input.value = ""; input.focus(); }
@@ -153,7 +155,7 @@
       _setUnlocked(true);
       const error = _lockError(); if (error) error.textContent = '';
       document.querySelectorAll('.tli-pin-nudge').forEach(nudge => nudge.remove());
-      _hideLock();
+      _hideLock({ source: 'pin-verification' });
       return true;
     } catch (error) {
       if (verificationGeneration === _verificationGeneration) _setUnlocked(false);
@@ -200,7 +202,7 @@
     el.className = "tli-pin-nudge";
     el.innerHTML =
       '<div class="tli-pin-nudge-title">No PIN set</div>' +
-      '<div class="tli-pin-nudge-body">TLI is open to anyone on your LAN. Set a PIN in Settings to restrict access.</div>' +
+      '<div class="tli-pin-nudge-body">Without a PIN, protected private controls are limited to this TLI computer. Set a PIN in Settings to protect browser access.</div>' +
       '<div class="tli-pin-nudge-actions">' +
         '<button id="tli-pin-nudge-go" class="btn btn-sm btn-primary">Go to Settings</button>' +
         '<button id="tli-pin-nudge-dismiss" class="btn btn-sm btn-ghost">Dismiss</button>' +

@@ -32,8 +32,10 @@ ROOT_FILES = {
     "Uninstall_TLI.bat", "TLI_Uninstall.ps1", "Uninstall_TLI.command", "Uninstall_TLI.sh",
 }
 BACKEND_DIRS = {"ai", "builder", "cleanup", "drivers", "game_configs", "intelligence", "providers", "routers", "tests"}
-BACKEND_FILES = {"requirements.txt", "requirements-test.txt", "pytest.ini", "tli_backend.spec", "run_backend_dev.bat"}
+BACKEND_FILES = {"requirements.txt", "requirements-test.txt", "requirements-sonos.txt", "requirements-voice.txt", "requirements-bluetooth.txt",
+                 "pytest.ini", "tli_backend.spec", "run_backend_dev.bat"}
 PUBLIC_GUIDES = {"TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "TLI_SEAMLESS_CONNECTIONS.md", "SSE_SCHEMA.md",
+                "TLI_TASK_AGENT.md", "TLI_SONOS.md", "TLI_HOST_VOICE.md", "TLI_BLUETOOTH.md",
                 "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",
@@ -110,8 +112,8 @@ def _file_allowed(rel: Path) -> bool:
             suffix in SOURCE_EXTENSIONS or name in {"package.json", "expo-module.config.json"}))
     if parts[0] == "scripts":
         if parts[1:2] == ("fixtures",):
-            return rel.as_posix() in {"scripts/fixtures/tli_answer_quality.json", "scripts/fixtures/tli_answer_extensions.json", "scripts/fixtures/tli_answer_development.json", "scripts/fixtures/tli_dependable_computers_quality.json"}
-        return suffix in {".py", ".cjs", ".js", ".json", ".html", ".css", ".ts"} or rel.as_posix() in {
+            return rel.as_posix() in {"scripts/fixtures/tli_answer_quality.json", "scripts/fixtures/tli_answer_extensions.json", "scripts/fixtures/tli_answer_development.json", "scripts/fixtures/tli_dependable_computers_quality.json", "scripts/fixtures/update_install_1_4_5.py"}
+        return suffix in {".py", ".cjs", ".js", ".mjs", ".json", ".html", ".css", ".ts"} or rel.as_posix() in {
             "scripts/verify_windows_launcher.ps1", "scripts/tests/TliLauncherTests.cs"}
     return False
 

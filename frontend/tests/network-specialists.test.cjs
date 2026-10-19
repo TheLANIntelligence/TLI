@@ -5,6 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const read = file => fs.readFileSync(path.join(__dirname, '../js', file), 'utf8');
 const tick = () => new Promise(resolve => setImmediate(resolve));
+const connection = (ready_grants = ['messages'], values = {}) => ({state:'connected', fresh:true, online:true,
+  checked_at:new Date().toISOString(), expires_at:new Date(Date.now()+90000).toISOString(), ready_grants, ...values});
 function fixture() {
   const nodes = {}, events = {}, calls = [];
   let handler = async () => ({ ok: true });
@@ -35,13 +37,14 @@ function fixture() {
   }
   const window = { addEventListener: (type, fn) => (events[type] ||= []).push(fn), confirm: () => false, location: { origin: 'https://synthetic.invalid' } };
   const ctx = vm.createContext({ window, document: { readyState: 'complete', getElementById: id => nodes[id] || null, createElement: element, createTextNode: text => Object.assign(element('#text'), { textContent: text }), querySelectorAll: () => [], querySelector: () => null, addEventListener: (type, fn) => (events[type] ||= []).push(fn) },
-    Date, Set, Map, AbortController, TextDecoder, TextEncoder, console: { warn() {}, error() {}, log() {} }, setInterval() { return 1; }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
+    Date, Set, Map, AbortController, AbortSignal, TextDecoder, TextEncoder, console: { warn() {}, error() {}, log() {} }, setInterval() { return 1; }, clearInterval() {}, setTimeout() {}, clearTimeout() {},
     fetch: async (url, options = {}) => { calls.push({ url, options }); return handler(url, options); },
     $: id => nodes[id], currentDeviceId: 'synthetic-host', debugLog() {}, showToast() {}, confirm: () => true,
     escapeHtml: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
   });
   function add(id, tag, value = '') { const el = element(tag); el.id = id; el.value = value; return el; }
   const json = (data, status = 200) => ({ ok: status === 200, status, json: async () => data });
+  vm.runInContext(read('mesh-service.js'), ctx);
   return { nodes, events, calls, ctx, window, element, add, json, handler(fn) { handler = fn; }, load(file, transform = s => s) { vm.runInContext(transform(read(file)), ctx); } };
 }
 
@@ -50,8 +53,9 @@ test('Mesh retains distinct same-name computers and uses stable identity for dup
   const rows = [{ peer_id: 'a', node_name: 'Office' }, { peer_id: 'b', node_name: 'Office' }, { peer_id: 'a', node_name: 'Renamed' }];
   assert.deepEqual(Array.from(f.window.testMesh.uniqueNodes(rows), row => row.peer_id), ['a', 'b']);
   const unknown = f.window.testMesh.buildNodeCard({ node_name: 'Unknown' });
-  assert.ok(unknown.children.some(child => /health is unavailable/.test(child.textContent)));
-  const missingAI = f.window.testMesh.buildNodeCard({ online: true, node_name: '<img onerror=alert(1)>' });
+  assert.ok(unknown.children.some(child => /Connection not checked/.test(child.textContent)));
+  assert.doesNotMatch(unknown.className, /offline/);
+  const missingAI = f.window.testMesh.buildNodeCard({ online: true, connection:connection(), node_name: '<img onerror=alert(1)>' });
   assert.ok(missingAI.children.some(child => child.textContent === 'AI availability unknown'));
   assert.ok(missingAI.innerHTML.includes('&lt;img'));
 });
@@ -65,15 +69,20 @@ test('Computer details bind to raw registry identity even when offline and never
 });
 
 for (const profile of [{ peer_profile: 'inference_node' }, { connection_state: 'inference_only' }]) {
-  test('Compute-only Node health cards have no full-host controls or invented availability: ' + JSON.stringify(profile), () => {
+  test('Compute-only Node cards retain identity navigation without host metrics or invented availability: ' + JSON.stringify(profile), async () => {
     const f = fixture();
+    const navigations=[];
+    f.window.TLIDeviceDetails={open:id=>navigations.push(['details',id])};
+    f.window.TLIConnectDevice={open:target=>navigations.push(['connection',target.kind,target.deviceId])};
     f.load('mesh-control.js', s => s.replace('  function boot() {', '  window.testMesh = {buildNodeCard};\n  function boot() {'));
     for (const online of [null, false, true]) {
       const card = f.window.testMesh.buildNodeCard({ peer_id: 'compute-node', node_name: '<img src=x>', online,
         cpu_percent: 90, ram_percent: 75, uptime_seconds: 99, has_ai: true, ai_healthy: true, ...profile });
       assert.match(card.innerHTML, /Compute-only Node/); assert.match(card.innerHTML, /&lt;img src=x&gt;/);
       assert.doesNotMatch(card.className, /offline/); assert.doesNotMatch(card.innerHTML, /mcd-status-dot|Reported online|Not reachable|Status unavailable/);
-      assert.equal(card.querySelectorAll('button').length, 0);
+      assert.deepEqual(card.querySelectorAll('button').map(button=>button.textContent), ['Device details','Review connection']);
+      for (const button of card.querySelectorAll('button')) await button.click();
+      assert.deepEqual(navigations.splice(0), [['details','node-compute-node'],['connection','node','compute-node']]);
       assert.equal(card.querySelectorAll('.mcd-metrics').length, 0); assert.equal(card.querySelectorAll('.mcd-uptime').length, 0);
       assert.match(card.children.map(child => child.textContent).join(' '), /Check models in Ask TLI/);
       assert.doesNotMatch(card.children.map(child => child.textContent).join(' '), /health is unavailable|AI Running|Model files reported/);
@@ -85,10 +94,25 @@ for (const profile of [{ peer_profile: 'inference_node' }, { connection_state: '
 test('full-host health cards retain details, messages and reported metrics alongside compute-only Nodes', () => {
   const f = fixture();
   f.load('mesh-control.js', s => s.replace('  function boot() {', '  window.testMesh = {buildNodeCard};\n  function boot() {'));
-  const card = f.window.testMesh.buildNodeCard({ peer_id: 'full-host', node_name: 'Office', online: true, cpu_percent: 12 });
+  const card = f.window.testMesh.buildNodeCard({ peer_id: 'full-host', node_name: 'Office', online: true, connection:connection(), cpu_percent: 12 });
   assert.deepEqual(card.querySelectorAll('button').map(child => child.textContent), ['Device details', 'Messages & files', 'Review connection']);
   assert.equal(card.querySelectorAll('.mcd-metrics').length, 1); assert.match(card.innerHTML, /Reported online/);
   assert.doesNotMatch(card.innerHTML, /Compute-only Node/); assert.equal(f.calls.length, 0);
+});
+
+test('discovery and expired receipts cannot expose host metrics or enable messaging', () => {
+  const f=fixture();f.load('mesh-control.js',s=>s.replace('  function boot() {','  window.testMesh = {buildNodeCard};\n  function boot() {'));
+  for(const receipt of [undefined,connection(['messages'],{expires_at:'2000-01-01T00:00:00Z'})]) {
+    const card=f.window.testMesh.buildNodeCard({peer_id:'saved',online:true,last_seen:new Date().toISOString(),cpu_percent:12,connection:receipt});
+    assert.deepEqual(card.querySelectorAll('button').map(button=>button.textContent),['Device details','Review connection']);
+    assert.equal(card.querySelectorAll('.mcd-metrics').length,0);assert.doesNotMatch(card.className,/offline/);
+    assert.doesNotMatch(card.innerHTML,/Reported online/);
+  }
+  const withoutMessages=f.window.testMesh.buildNodeCard({peer_id:'saved',connection:connection(['observe'])});
+  assert.equal(withoutMessages.querySelectorAll('button').some(button=>button.textContent==='Messages & files'),false);
+  const unreachable=f.window.testMesh.buildNodeCard({peer_id:'saved',connection:connection([],{state:'unreachable',online:false})});
+  assert.match(unreachable.className,/offline/);assert.match(unreachable.innerHTML,/Not reachable/);
+  assert.equal(f.calls.length,0);
 });
 
 test('Mesh failed refresh preserves the previous cards and marks them out of date', async () => {

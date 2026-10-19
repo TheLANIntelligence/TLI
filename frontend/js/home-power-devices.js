@@ -103,33 +103,50 @@
   }
 
   // ---------- API ----------
+  let libraryAvailable = false, savingDevice = false, libraryRead = 0;
+
+  async function hpRequest(url, options) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
+    if (!data || typeof data !== 'object') throw new Error('The host returned an invalid response.');
+    return data;
+  }
+
   async function hpGetDevices() {
-    try {
-      const r = await fetch("/homepower/devices");
-      if (!r.ok) return [];
-      const d = await r.json();
-      return d.devices || [];
-    } catch { return []; }
+    const data = await hpRequest('/homepower/devices');
+    if (!Array.isArray(data.devices)) throw new Error('The saved device library could not be read.');
+    return data.devices;
   }
 
   async function hpSaveDevice(device) {
-    const r = await fetch("/homepower/devices/save", {
+    const result = await hpRequest("/homepower/devices/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ device }),
     });
-    return r.json();
+    if (result.ok !== true) throw new Error('The host did not confirm that the device was saved.');
+    return result;
   }
 
   async function hpDeleteDevice(device_id) {
-    const r = await fetch(`/homepower/devices/${encodeURIComponent(device_id)}`, { method: "DELETE" });
-    return r.json();
+    const result = await hpRequest(`/homepower/devices/${encodeURIComponent(device_id)}`, { method: "DELETE" });
+    if (result.ok !== true) throw new Error('The host did not confirm that the device was removed.');
+    return result;
   }
 
   async function hpGetStatus(device_id) {
-    const r = await fetch(`/homepower/devices/${encodeURIComponent(device_id)}/status`);
-    if (!r.ok) return null;
-    return r.json();
+    return hpRequest(`/homepower/devices/${encodeURIComponent(device_id)}/status`);
+  }
+
+  function libraryUnavailable(message) {
+    libraryAvailable = false;
+    const list = _el('hp-device-list');
+    if (list) {
+      list.textContent = 'Device library unavailable. ' + message + ' Refresh after resolving the problem before making changes.';
+      list.setAttribute('role', 'status');
+    }
+    const add = _el('hp-add-btn'); if (add) add.disabled = true;
   }
 
   // ---------- render device list ----------
@@ -171,29 +188,57 @@
     // Status buttons
     el.querySelectorAll(".hp-status-btn").forEach(btn => {
       btn.addEventListener("click", async () => {
+        if (btn.disabled) return;
         const id = btn.dataset.deviceId;
+        btn.disabled = true;
         btn.textContent = "…";
-        const st = await hpGetStatus(id);
-        btn.textContent = st?.summary || (st?.ok === false ? "Error" : "?");
-        setTimeout(() => { btn.textContent = "Status"; }, 3000);
+        try {
+          const st = await hpGetStatus(id);
+          btn.textContent = st?.summary || (st?.ok === false ? "Status unavailable" : "?");
+        } catch (error) {
+          btn.textContent = 'Status unavailable';
+          showToast('Device status unavailable: ' + error.message, 'error');
+        } finally {
+          btn.disabled = false;
+          setTimeout(() => { btn.textContent = "Status"; }, 3000);
+        }
       });
     });
 
     // Delete buttons
     el.querySelectorAll(".hp-delete-btn").forEach(btn => {
       btn.addEventListener("click", async () => {
+        if (btn.disabled || !libraryAvailable) return;
         const id = btn.dataset.deviceId;
         if (!confirm(`Remove device "${id}"?`)) return;
-        await hpDeleteDevice(id);
-        await refreshDeviceList();
-        showToast("Device removed.", "ok");
+        btn.disabled = true;
+        try {
+          await hpDeleteDevice(id);
+          await refreshDeviceList();
+          showToast("Device removed.", "ok");
+        } catch (error) {
+          libraryRead++;
+          libraryUnavailable(error.message);
+          showToast('Device removal unconfirmed. ' + error.message + ' Refresh the library before trying again.', 'error');
+        } finally { btn.disabled = false; }
       });
     });
   }
 
   async function refreshDeviceList() {
-    const devices = await hpGetDevices();
-    renderDeviceList(devices);
+    const read = ++libraryRead;
+    libraryAvailable = false;
+    const add = _el('hp-add-btn'); if (add) add.disabled = true;
+    const list = _el('hp-device-list'); if (list) list.textContent = 'Checking device library…';
+    try {
+      const devices = await hpGetDevices();
+      if (read !== libraryRead) return;
+      libraryAvailable = true;
+      renderDeviceList(devices);
+      if (add) add.disabled = savingDevice;
+    } catch (error) {
+      if (read === libraryRead) libraryUnavailable(error.message);
+    }
   }
 
   // ---------- init ----------
@@ -213,6 +258,7 @@
 
     if (addBtn) {
       addBtn.addEventListener("click", async () => {
+        if (savingDevice || !libraryAvailable) return;
         const vendor = vendorSel.value;
         const ip     = (_el("hp-ip-input")?.value || "").trim();
         const name   = (_el("hp-name-input")?.value || "").trim();
@@ -236,6 +282,7 @@
         };
 
         addBtn.textContent = "Saving…";
+        savingDevice = true;
         addBtn.disabled = true;
         try {
           const resp = await hpSaveDevice(device);
@@ -249,10 +296,13 @@
             showToast("Failed to add device.", "error");
           }
         } catch (e) {
-          showToast("Network error: " + e, "error");
+          libraryRead++;
+          libraryUnavailable(e.message);
+          showToast("Device save unconfirmed. " + e.message + " Refresh the library before trying again.", "error");
         } finally {
+          savingDevice = false;
           addBtn.textContent = "Add to Library";
-          addBtn.disabled = false;
+          addBtn.disabled = !libraryAvailable;
         }
       });
     }

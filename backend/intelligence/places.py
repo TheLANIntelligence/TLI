@@ -25,7 +25,7 @@ PANELS = frozenset({
     "panel-printshop", "panel-usb", "panel-homeauto", "panel-automations",
     "panel-tli-chat", "panel-troubleshooting", "panel-performance", "panel-reports",
     "panel-installed-apps", "panel-advanced", "panel-tools", "panel-scripts",
-    "panel-builder", "panel-hub",
+    "panel-builder", "panel-hub", "panel-homelab",
 })
 MAX_PLACES = 100
 MAX_STORE_BYTES = 512 * 1024

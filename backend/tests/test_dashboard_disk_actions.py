@@ -20,7 +20,7 @@ def clock(monkeypatch):
     monkeypatch.setattr(dp, "_refresh_narrator", lambda: None)
     monkeypatch.setattr(dp, "log_debug", lambda *args: None)
     monkeypatch.setattr(dp.S, "load_node_config", lambda: SimpleNamespace(node_id="host-a", node_name="Synthetic host"))
-    monkeypatch.setattr(dp, "_dispatch_handler", lambda _: pytest.fail("Unexpected action dispatch"))
+    monkeypatch.setattr(dp, "_dispatch_handler", lambda _, **kwargs: pytest.fail("Unexpected action dispatch"))
     return now
 
 
@@ -71,7 +71,7 @@ def test_missing_cleared_invalid_stale_withdraw_only_disk(clock, change):
 def test_snooze_survives_refresh_clear_reappearance_but_not_other_target(clock):
     dp._score_disk_actions(observation(clock[0], {"C:\\": 99, "L:\\": 96}))
     first = dp.get_top_action()
-    dp.post_action_dismiss(dp.DismissRequest(action_id=first["id"], snooze_minutes=1))
+    dp.post_action_dismiss(dp.DismissRequest(action_id=first["id"], snooze_minutes=1), check=lambda: None)
     assert dp.get_top_action()["target"]["path"] == "L:\\"
     clock[0] += 5
     dp._score_disk_actions(observation(clock[0], {}))
@@ -104,7 +104,7 @@ def test_older_observation_cannot_revive_or_replace_current_target(clock):
 
 def test_host_change_cannot_inherit_drive_snooze(clock):
     dp._score_disk_actions(observation(clock[0], {"C:\\": 99}))
-    dp.post_action_dismiss(dp.DismissRequest(action_id=dp.get_top_action()["id"]))
+    dp.post_action_dismiss(dp.DismissRequest(action_id=dp.get_top_action()["id"]), check=lambda: None)
     clock[0] += 5
     dp._score_disk_actions(observation(clock[0], {"C:\\": 99}, host={"id":"host-b", "name":"Other synthetic host"}))
     assert dp.get_top_action()["target"]["host_id"] == "host-b"
@@ -127,7 +127,7 @@ def test_poll_refreshes_same_band_and_failure_withdraws(clock, monkeypatch):
     clock[0] += 5
     dp._poll_once()
     assert dp.get_top_action() is None
-    state = dp.get_dashboard_state()
+    state = dp.get_dashboard_state(check=lambda: None)
     assert state["probe_error"] and state["probed_ts"] == 1005
 
 
@@ -145,7 +145,7 @@ def test_confirm_refresh_race_removes_only_reviewed_action_identity(clock, monke
     monkeypatch.setattr(dp, "_narrator_policy", NarratorPolicy())
     dp._score_disk_actions(observation(clock[0], {"C:\\": 96, "L:\\": 99}))
     action = dp.get_top_action()
-    def navigate(handler):
+    def navigate(handler, **kwargs):
         clock[0] += 5
         dp._score_disk_actions(observation(clock[0], {"C:\\": 97, "L:\\": 100}))
         return {"ok": True, "navigate_to": "panel-visualizer", "scan_path": handler.split(":", 1)[1]}

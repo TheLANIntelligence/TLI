@@ -2,7 +2,7 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {fixture,job,envelope,scan,root}=require('./helpers/free-space-fixture.cjs');
 const completed=(data=scan(),j=job())=>fixture(async url=>url.endsWith('/results')?envelope(j,data):envelope(j));
 test('navigation and quick-folder selection prepare only; every tool tab is request-free',async()=>{
- const f=fixture();f.window.TLIVisualizer.scanPath(root);await f.presets[0].click();for(const tab of f.tabs)await tab.click();assert.equal(f.calls.length,0);assert.equal(f.nodes.visualizerPathInput.value,root);assert.match(f.nodes.visualizerStatus.textContent,/no scan has run/);
+ const f=fixture();f.window.TLIVisualizer.scanPath(root);await f.presets[0].click();for(const tab of f.tabs)await tab.click();assert.equal(f.calls.length,0);assert.equal(f.nodes.visualizerPathInput.value,root);assert.equal(f.nodes.visualizerStatus.textContent,'');assert.equal(f.nodes['fs-empty'].hidden,false);
 });
 test('drive picker consumes actual byte fields, unknown readings and hostile labels as text',async()=>{
  const f=fixture(async()=>({drives:[{mountpoint:'C:\\',label:'<img src=x>',total_bytes:100,free_bytes:10,percent_used:90},{mountpoint:'Z:\\',label:'Offline'}]}));await f.api.loadDrives();assert.equal(f.nodes['vis4-drives'].children.length,2);assert.match(f.nodes['vis4-drives'].textContent,/<img src=x>/);assert.match(f.nodes['vis4-drives'].textContent,/10 B free \/ 100 B/);assert.match(f.nodes['vis4-drives'].textContent,/Usage unknown/);assert.doesNotMatch(f.nodes['vis4-drives'].textContent,/undefined/);await f.nodes['vis4-drives'].children[0].click();assert.equal(f.calls.length,1);assert.equal(f.nodes.visualizerPathInput.value,'C:\\');
@@ -19,6 +19,16 @@ test('root path helper retains Windows and POSIX roots',()=>{
 });
 test('explicit scan uses HTTP-safe secure IDs and guards duplicate starts',async()=>{
  let resolve;const f=fixture(()=>new Promise(r=>resolve=r));f.api.prepare(root);const pending=f.api.start();f.api.start();assert.equal(f.calls.length,1);const p=f.calls[0].body;assert.equal(p.operation,'scan');assert.equal(p.profile,'quick');assert.equal(p.include_excluded,false);assert.match(p.request_id,/^[a-f0-9]{32}$/);resolve(envelope(job({status:'running',result_available:false})));await pending;assert.equal(f.api.getState().job.status,'running');assert.equal(f.nodes.visualizerScanBtn.disabled,true);
+});
+
+test('pending and running scans use one progress surface and keep the original target visible',async()=>{
+ let resolve;const f=fixture(()=>new Promise(r=>resolve=r));f.api.prepare(root);f.nodes['fs-locations'].open=true;
+ f.nodes.visualizerStatus.textContent='Location selected; no scan has run.';
+ const pending=f.api.start();assert.equal(f.nodes['fs-locations'].open,false);assert.equal(f.nodes['fs-empty'].hidden,true);assert.equal(f.nodes['fs-job'].hidden,false);assert.equal(f.nodes.visualizerStatus.textContent,'');
+ resolve(envelope(job({status:'running',result_available:false})));await pending;
+ assert.equal(f.nodes['fs-empty'].hidden,true);assert.match(f.nodes['fs-job-title'].textContent,/Scanning C:/);
+ f.api.prepare('E:\\');assert.equal(f.nodes['fs-empty'].hidden,true);assert.match(f.nodes['fs-job-title'].textContent,/Scanning C:/);assert.equal(f.nodes.visualizerStatus.textContent,'');
+ assert.equal(f.calls.length,1);
 });
 test('Deep inclusion resets on Quick; invalid large-file minimum starts nothing',async()=>{
  const f=completed();f.api.prepare(root);f.nodes['fs-profile'].value='deep';await f.nodes['fs-profile'].emit('change');assert.equal(f.nodes['fs-include-excluded'].disabled,false);f.nodes['fs-include-excluded'].checked=true;f.nodes['fs-profile'].value='quick';await f.nodes['fs-profile'].emit('change');assert.equal(f.nodes['fs-include-excluded'].checked,false);f.nodes['vis4-largefiles-minmb'].value='50001';await f.api.start('large_files');assert.equal(f.calls.length,0);assert.match(f.nodes.visualizerStatus.textContent,/50,000/);
@@ -100,7 +110,7 @@ test('changing drives hides the old map and actions immediately without scanning
  f.api.prepare(root);await f.api.start();const original=f.api.getState().observation,rows=f.nodes.visualizerTableBody.children[0],choice=rows.querySelector('input'),map=f.nodes['vis4-treemap-container'].querySelector('.fs-map-item');
  await map.emit('contextmenu');const menu=f.document.getElementById('fs-entry-menu'),reveal=menu.querySelectorAll('button').find(b=>b.textContent==='Show in File Explorer');await choice.emit('change');assert.equal(changes,1);
  const requests=f.calls.length,scopeChanges=f.scopes.length;f.api.prepare('E:\\');
- assert.equal(f.calls.length,requests);assert.equal(f.scopes.length,scopeChanges);assert.equal(f.nodes['storage-results'].hidden,true);assert.equal(f.nodes['fs-empty'].hidden,false);assert.match(f.nodes['fs-empty-title'].textContent,/Scan E:\\ to see/);assert.equal(f.nodes.visualizerScanBtn.textContent,'Scan E:\\');assert.equal(f.nodes.visualizerDetailsBar.hidden,true);assert.equal(f.nodes.visualizerTableBody.children.length,0);assert.equal(f.document.getElementById('fs-entry-menu'),null);assert.equal(f.window.visualizerV4,null);
+ assert.equal(f.calls.length,requests);assert.equal(f.scopes.length,scopeChanges);assert.equal(f.nodes['storage-results'].hidden,true);assert.equal(f.nodes['fs-empty'].hidden,false);assert.match(f.nodes['fs-empty-title'].textContent,/Scan E:\\ to see/);assert.equal(f.nodes.visualizerScanBtn.textContent,'Scan');assert.equal(f.nodes.visualizerScanBtn.getAttribute('aria-label'),'Scan E:\\');assert.equal(f.nodes.visualizerDetailsBar.hidden,true);assert.equal(f.nodes.visualizerTableBody.children.length,0);assert.equal(f.document.getElementById('fs-entry-menu'),null);assert.equal(f.window.visualizerV4,null);
  await reveal.click();await map.click();await choice.emit('change');await f.nodes.visualizerSendToFilesBtn.click();assert.equal(f.calls.length,requests);assert.equal(changes,1);assert.equal(f.api.getState().selected,null);assert.equal(f.nodes['fs-handoff'].open,false);
  f.api.prepare(root);assert.equal(f.calls.length,requests);assert.equal(f.api.getState().observation,original);assert.equal(f.nodes['storage-results'].hidden,false);assert.equal(f.nodes.visualizerScanBtn.textContent,'Scan again');assert.equal(f.nodes['vis4-summary'].children[0].children[0].textContent,root);assert.match(f.nodes.visualizerTableBody.textContent,/a.txt/);
 });
@@ -112,8 +122,8 @@ test('typing a different location has the same scope guard and case-equivalent r
 });
 
 test('finishing a scan after selecting another drive retains its result without showing it under the new drive',async()=>{
- let resolve;const f=fixture(async url=>url.endsWith('/results')?envelope(job(),scan()):new Promise(r=>resolve=r));f.api.prepare(root);const pending=f.api.start();f.api.prepare('E:\\');assert.match(f.nodes.visualizerScanBtn.textContent,/Scanning C:/);
- resolve(envelope(job()));await pending;assert.equal(f.api.getState().observation.root,root);assert.equal(f.nodes['storage-results'].hidden,true);assert.equal(f.nodes.visualizerTableBody.children.length,0);assert.equal(f.nodes.visualizerScanBtn.textContent,'Scan E:\\');assert.match(f.nodes.visualizerStatus.textContent,/Select that location/);assert.equal(f.scopes.length,0);
+ let resolve;const f=fixture(async url=>url.endsWith('/results')?envelope(job(),scan()):new Promise(r=>resolve=r));f.api.prepare(root);const pending=f.api.start();f.api.prepare('E:\\');assert.equal(f.nodes.visualizerScanBtn.textContent,'Scanning…');assert.match(f.nodes.visualizerScanBtn.getAttribute('aria-label'),/Scanning C:/);
+ resolve(envelope(job()));await pending;assert.equal(f.api.getState().observation.root,root);assert.equal(f.nodes['storage-results'].hidden,true);assert.equal(f.nodes.visualizerTableBody.children.length,0);assert.equal(f.nodes.visualizerScanBtn.textContent,'Scan');assert.equal(f.nodes.visualizerScanBtn.getAttribute('aria-label'),'Scan E:\\');assert.match(f.nodes.visualizerStatus.textContent,/Select that location/);assert.equal(f.scopes.length,0);
  f.api.prepare(root);assert.equal(f.nodes['storage-results'].hidden,false);assert.equal(f.calls.length,2);assert.match(f.nodes.visualizerTableBody.textContent,/a.txt/);
 });
 

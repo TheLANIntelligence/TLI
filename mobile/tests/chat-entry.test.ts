@@ -7,7 +7,7 @@ import { parsePairingCode } from '../src/protocol';
 import { redirectPairingLink, takePairingLink } from '../src/pairing-link';
 
 type Element = { type: unknown; props: Record<string, any> };
-type HarnessOptions = { paired?: boolean; replacement?: boolean; reviewedCode?: boolean; incoming?: string; pendingPairing?: boolean; pair?: (raw: string, name: string) => Promise<void> };
+type HarnessOptions = { paired?: boolean; replacement?: boolean; reviewedCode?: boolean; changedCertificate?: boolean; changedIdentity?: boolean; incoming?: string; pendingPairing?: boolean; pair?: (raw: string, name: string) => Promise<void> };
 
 /** Execute actual TSX navigation and button callbacks with inert platform views.
  * This covers entry decisions, not React Native layout, router internals or TLS.
@@ -16,7 +16,7 @@ function screen(path: string, options: HarnessOptions = {}) {
   const routes: string[] = [], updates: unknown[] = [];
   let hook = 0, refHook = 0, effectHook = 0;
   const values: unknown[] = [], refs: {current:unknown}[] = [], dependencies: unknown[][] = [], effects: (()=>void)[] = [];
-  const code = { raw: 'synthetic-reviewed-bundle', value: { node_name: 'Study', node_id: 'study', origin: 'https://study.invalid', certificate_der: 'synthetic-certificate' } };
+  const code = { raw: 'synthetic-reviewed-bundle', value: { node_name: 'Study', node_id: options.changedIdentity ? 'other-study' : 'study', origin: 'https://study.invalid', certificate_der: options.changedCertificate ? 'changed-certificate' : 'synthetic-certificate' } };
   const pairing = options.paired ? { node_name: 'Study', node_id: 'study', origin: 'https://study.invalid', certificate_der: 'synthetic-certificate' } : null;
   const Tabs = Object.assign(() => undefined, { Screen: 'TabScreen' });
   const jsx = (type: unknown, props: Record<string, any>): Element => ({ type, props: props || {} });
@@ -45,6 +45,7 @@ function screen(path: string, options: HarnessOptions = {}) {
     if (name.endsWith('/src/ui')) return ui;
     if (name.endsWith('/src/protocol')) return { parsePairingCode };
     if (name.endsWith('/src/pairing-link')) return { takePairingLink };
+    if (name.endsWith('/src/app-update-info')) return { AppUpdateInfo: 'AppUpdateInfo' };
     assert.ok(name in modules, `Unexpected screen dependency ${name}`);
     return modules[name];
   } });
@@ -68,19 +69,37 @@ test('unpaired tab entry requests pairing without starting it', () => {
   assert.equal(tree.type, 'Redirect'); assert.equal(tree.props.href, '/pair'); assert.deepEqual(routes, []);
 });
 
-test('paired tabs open Chat and expose Chat, Today and Home once, with the landing alias hidden', () => {
+test('paired tabs open Chat and expose Chat, Library and More while preserving older routes', () => {
   const { tree, Tabs } = screen('(tabs)/_layout.tsx', { paired: true });
   assert.equal(tree.type, Tabs); assert.equal(tree.props.initialRouteName, 'ask');
   const tabs = Array.from(tree.props.children as Element[]);
   assert.deepEqual(tabs.filter(node => node.props.options.href !== null).map(node => [node.props.name, node.props.options.title]),
-    [['ask', 'Chat'], ['today', 'Today'], ['home', 'Home']]);
+    [['ask', 'Chat'], ['library', 'Library'], ['tools', 'More']]);
   const aliases = tabs.filter(node => node.props.options.href === null);
-  assert.equal(aliases.length, 1); assert.equal(aliases[0]!.props.name, 'index');
+  assert.deepEqual(aliases.map(node => node.props.name), ['today', 'home', 'index']);
 });
 
 test('root URL redirects to the existing Chat controller', () => {
   const { tree } = screen('(tabs)/index.tsx', { paired: true });
   assert.equal(tree.type, 'Redirect'); assert.equal(tree.props.href, '/ask');
+});
+
+test('pairing keeps public app updates available before connection and manual entry behind Advanced', () => {
+  const initial = screen('pair.tsx');
+  assert.ok(find(initial.tree, node => node.type === 'AppUpdateInfo'));
+  assert.equal(find(initial.tree, node => node.props.accessibilityLabel === 'Pairing bundle'), undefined);
+  find(initial.tree, node => node.type === 'Button' && node.props.title === 'Advanced connection')!.props.onPress();
+  initial.flushEffects();
+  assert.ok(find(initial.tree, node => node.props.accessibilityLabel === 'Pairing bundle'));
+  assert.deepEqual(initial.routes, []);
+});
+
+test('changed certificate and installation warnings remain visible without opening connection details', () => {
+  const reviewed = screen('pair.tsx', { paired: true, replacement: true, reviewedCode: true, changedCertificate: true, changedIdentity: true });
+  assert.ok(find(reviewed.tree, node => node.type === 'Notice' && typeof node.props.children === 'string' && node.props.children.includes('certificate has changed')));
+  assert.ok(find(reviewed.tree, node => node.type === 'Notice' && typeof node.props.children === 'string' && node.props.children.includes('different TLI installation')));
+  assert.ok(find(reviewed.tree, node => node.type === 'Button' && node.props.title === 'Connection details'));
+  assert.deepEqual(reviewed.routes, []);
 });
 
 for (const [label, paired, replacement, destination] of [

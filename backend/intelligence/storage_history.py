@@ -80,6 +80,8 @@ def _file_valid(row):
         return False
     if any(row.get(key) is not None and (not isinstance(row[key], str) or len(row[key]) > 128) for key in ("extension", "category")):
         return False
+    if any(row.get(key) is not None and (not isinstance(row[key], str) or not 0 < len(row[key]) <= 160) for key in ("file_identity", "volume_identity")):
+        return False
     return all(row.get(key) is None or isinstance(row[key], (str, int, float)) and not isinstance(row[key], bool)
                for key in ("modified_at", "created_at"))
 
@@ -175,6 +177,14 @@ def _public(snapshot, folders=False):
 
 def _capture_details(snapshot, tree, meta):
     snapshot["accounting"] = {key: meta.get(key, 0) for key in ("hardlinks_skipped", "identity_unknown")}
+    scanner = meta.get("scanner")
+    if isinstance(scanner, dict):
+        snapshot["acquisition"] = {key: scanner[key] for key in ("engine", "mft", "fallback_reason", "observation_semantics") if key in scanner}
+    inventory = meta.get("inventory")
+    if isinstance(inventory, dict):
+        snapshot["indexed_evidence"] = {key: inventory[key] for key in (
+            "version", "available", "indexed_count", "acquisition_complete", "accounting", "expires_at", "atomic_snapshot") if key in inventory}
+        snapshot["indexed_evidence"]["retention"] = "Full indexed paths expire with the source session/job; this saved summary does not preserve them."
     capacity = meta.get("capacity")
     if _capacity_valid(capacity):
         snapshot["capacity"] = {key: capacity[key] for key in ("total", "used", "free", "root_is_volume")}
@@ -189,7 +199,7 @@ def _capture_details(snapshot, tree, meta):
         if not _file_valid(source_row) or source_row.get("size_known") is False:
             invalid = True
             continue
-        row = {key: source_row[key] for key in ("path", "bytes", "logical_size", "allocated_size", "modified_at", "created_at", "extension", "category", "hardlink_duplicate") if key in source_row}
+        row = {key: source_row[key] for key in ("path", "bytes", "logical_size", "allocated_size", "modified_at", "created_at", "extension", "category", "hardlink_duplicate", "file_identity", "volume_identity") if key in source_row}
         size = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
         if used + size > MAX_FILE_SUMMARY_BYTES:
             break
@@ -465,13 +475,45 @@ def _compare_files(baseline, current, *, partial=False):
     new = {os.path.normcase(row["path"].replace("\\", "/")): row for row in current["files"]}
     complete = not partial and baseline["file_coverage"]["complete"] and current["file_coverage"]["complete"]
     rows = []
+    def identities(paths):
+        found = {}
+        for path, row in paths.items():
+            if row.get("file_identity") and row.get("volume_identity"):
+                found.setdefault((row["volume_identity"], row["file_identity"]), []).append(path)
+        return found
+    old_ids, new_ids = identities(old), identities(new)
+    matched = set()
+    for identity in old_ids.keys() & new_ids.keys():
+        # Multiple aliases in either bounded summary cannot establish which name
+        # moved. Never infer a rename from a hash or from same-size contents.
+        if len(old_ids[identity]) != 1 or len(new_ids[identity]) != 1:
+            continue
+        before_path, after_path = old_ids[identity][0], new_ids[identity][0]
+        if before_path == after_path or before_path in new or after_path in old:
+            continue
+        previous, latest = old[before_path], new[after_path]
+        if previous.get("created_at") != latest.get("created_at"):
+            continue
+        before_bytes = previous.get("logical_size", previous["bytes"])
+        after_bytes = latest.get("logical_size", latest["bytes"])
+        rows.append({"path": latest["path"], "before_path": previous["path"], "after_path": latest["path"],
+                     "before_bytes": before_bytes, "after_bytes": after_bytes, "delta_bytes": after_bytes - before_bytes,
+                     "status": "same_identity_different_path", "identity_matched": True,
+                     "extension": latest.get("extension"), "modified_at": latest.get("modified_at"),
+                     "hardlink_duplicate": bool(latest.get("hardlink_duplicate"))})
+        matched.update((before_path, after_path))
     paths = old.keys() & new.keys() if partial else old.keys() | new.keys()
     for path in paths:
+        if path in matched:
+            continue
         old_row, new_row = old.get(path), new.get(path)
         before = old_row.get("logical_size", old_row["bytes"]) if old_row else None
         after = new_row.get("logical_size", new_row["bytes"]) if new_row else None
         delta = after - before if before is not None and after is not None else None
         status = ("added" if complete else "newly_observed") if before is None else ("removed" if complete else "not_observed") if after is None else "grew" if delta > 0 else "shrank" if delta < 0 else "unchanged"
+        if old_row and new_row and old_row.get("file_identity") and new_row.get("file_identity") and (
+                old_row.get("volume_identity"), old_row["file_identity"]) != (new_row.get("volume_identity"), new_row["file_identity"]):
+            status = "different_identity_at_path"
         if status == "unchanged":
             continue
         row = new_row or old_row
@@ -485,6 +527,8 @@ def _compare_files(baseline, current, *, partial=False):
         reason = "Added and removed refer to paths present in one complete observation; a rename or move can look like removal. File deltas are logical sizes and must not be added to folder deltas."
     else:
         reason = "Only retained file paths can be compared. Newly observed or absent paths may have crossed the selection threshold; creation or deletion is not established."
+    if old_ids and new_ids:
+        reason += " Recorded volume/file identities distinguish a changed name from replacement at a path where possible; identities can be reused, and live observations are not atomic snapshots. Hard-link alias changes do not establish renames."
     return {"files": rows[:MAX_FILES], "files_limited": len(rows) > MAX_FILES,
             "file_comparison": {"available": True, "complete": complete,
                 "reason": reason}}

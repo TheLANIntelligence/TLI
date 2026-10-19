@@ -28,7 +28,7 @@ test('manual setup is distinct from verified remote acceptance and links are fix
 });
 
 test('network failures do not claim the VPN is missing, the phone is on Wi-Fi or AI is offline', () => {
-  for(const code of ['E_NO_ROUTE','E_OFFLINE','E_TIMEOUT','E_NETWORK']){const issue=connectionIssue({code});assert.match(issue.detail,/private-network/);assert.doesNotMatch(issue.detail,/VPN is (?:off|disconnected)|AI is (?:offline|unavailable)/);}
+  for(const code of ['E_NO_ROUTE','E_OFFLINE','E_TIMEOUT','E_NETWORK']){const issue=connectionIssue({code});assert.match(issue.detail,/home Wi-Fi/);assert.doesNotMatch(issue.detail,/VPN is (?:off|disconnected)|AI is (?:offline|unavailable)|computer is asleep|firewall (?:blocked|is blocking)/);}
 });
 
 test('connection check reads paired identity and preferences without re-pairing, configuration or mutations', async () => {

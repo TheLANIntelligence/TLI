@@ -26,7 +26,8 @@ def setup(tmp_path, monkeypatch):
     A._INFLIGHT.clear()
     app = FastAPI(); app.include_router(A.router)
     app.dependency_overrides[require_session] = lambda: "alice"
-    with TestClient(app) as api:
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                    headers={"Origin": "http://localhost"}) as api:
         api.cookies.set("tli_session", "routine-fixture-session")
         yield api, calls, devices
     A._INFLIGHT.clear()
@@ -47,6 +48,18 @@ def review(api, ident, request="run-one"):
     assert result.status_code == 200
     body = result.json()
     return {"request_id": request, "expected_revision": body["revision"], "expected_targets": body["target_revision"]}
+
+
+def browser_receipts(headers=None):
+    """Use the captured fixture cookie through actual receipt dependencies."""
+    from companion_auth import validate_authorization
+    app = FastAPI()
+    app.include_router(A.router)
+    app.middleware("http")(validate_authorization)
+    assert not app.dependency_overrides
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                    cookies={"tli_session": "routine-fixture-session"}) as api:
+        return api.get("/actions/receipts", headers=headers)
 
 
 @pytest.mark.parametrize("raw", [b"{broken", b"null", b"[]", b'{"actions":[],"triggers":null}',
@@ -156,7 +169,7 @@ def test_lock_between_steps_preserves_first_outcome_and_skips_the_rest(setup, mo
                 from fastapi import HTTPException
                 raise HTTPException(401, "Session locked")
         return check
-    monkeypatch.setattr(companion_auth, "operation_access", bind)
+    monkeypatch.setattr("browser_authority.operation_access", bind)
     ident = saved(api)
     store = A._load_json(A._paths()[0], {"actions": [], "triggers": []})
     store["actions"][0]["steps"] *= 2
@@ -166,10 +179,11 @@ def test_lock_between_steps_preserves_first_outcome_and_skips_the_rest(setup, mo
         calls.append(kw); authorized[0] = False
         return {"ok": True}
     monkeypatch.setitem(A._CTX, "shelly_driver", SimpleNamespace(turn_on=execute))
-    result = api.post(f"/actions/run/{ident}", json=body).json()
-    assert not result["ok"] and len(calls) == 1
+    response = api.post(f"/actions/run/{ident}", json=body)
+    assert response.status_code == 401 and "results" not in response.json()
+    result = A._read_request_receipts()[-1]
+    assert result["kind"] == "action_run" and not result["ok"] and len(calls) == 1
     assert result["results"][0]["ok"] and result["results"][1]["skipped"]
-    assert result["receipt_saved"]
 
 
 def test_target_change_after_first_step_does_not_retarget_remaining_steps(setup, monkeypatch):
@@ -230,16 +244,18 @@ def test_revocation_during_target_revalidation_prevents_driver_call(setup, monke
             if not allowed[0]:
                 raise HTTPException(401, "Session revoked")
         return check
-    def prepare(steps):
-        result = original(steps)
+    def prepare(steps, **kwargs):
+        result = original(steps, **kwargs)
         prepared_calls[0] += 1
         if prepared_calls[0] == 2:
             allowed[0] = False
         return result
-    monkeypatch.setattr(companion_auth, "operation_access", bind)
+    monkeypatch.setattr("browser_authority.operation_access", bind)
     monkeypatch.setattr(A, "_prepare_steps", prepare)
-    result = api.post(f"/actions/run/{ident}", json=body).json()
-    assert not calls and not result["ok"] and result["receipt_saved"]
+    response = api.post(f"/actions/run/{ident}", json=body)
+    assert response.status_code == 401 and "results" not in response.json()
+    result = A._read_request_receipts()[-1]
+    assert result["kind"] == "action_run" and not calls and not result["ok"]
     assert result["results"][0]["skipped"]
     assert "revoked" in result["results"][0]["error"]
 
@@ -248,7 +264,7 @@ def test_unreadable_receipts_block_reviewed_execution_and_report_failure(setup):
     api, calls, _ = setup
     ident = saved(api); body = review(api, ident)
     path = A._paths()[1]; path.write_bytes(b"{broken receipt")
-    assert api.get("/actions/receipts").status_code == 503
+    assert browser_receipts().status_code == 503
     assert api.post(f"/actions/run/{ident}", json=body).status_code == 503
     assert not calls and path.read_bytes() == b"{broken receipt"
 
@@ -257,10 +273,10 @@ def test_receipt_save_failure_does_not_lie_about_device_result(setup, monkeypatc
     api, calls, _ = setup
     ident = saved(api); body = review(api, ident)
     original = A._append_receipt
-    def append(row):
+    def append(row, **kwargs):
         if row["kind"] == "action_run":
             raise OSError("disk full")
-        return original(row)
+        return original(row, **kwargs)
     monkeypatch.setattr(A, "_append_receipt", append)
     result = api.post(f"/actions/run/{ident}", json=body).json()
     assert result["ok"] and result["receipt_saved"] is False and len(calls) == 1
@@ -272,11 +288,13 @@ def test_auth_and_legacy_reader_compatibility(setup):
     api, _, _ = setup
     ident = saved(api)
     original = A._paths()[0].read_bytes()
-    assert A.actions_list()["actions"][0]["id"] == ident
+    assert A.actions_list(check=lambda: None)["actions"][0]["id"] == ident
     assert A._paths()[0].read_bytes() == original
     def denied():
         raise HTTPException(401, "Locked")
     api.app.dependency_overrides[require_session] = denied
     for url in ["/actions/list", "/actions/receipts", "/actions/capabilities", f"/actions/{ident}/review"]:
-        assert api.get(url).status_code == 401
+        response = (browser_receipts({"Authorization": "Bearer invalid"})
+                    if url == "/actions/receipts" else api.get(url))
+        assert response.status_code == 401
     assert api.post("/actions/preview", json=draft()).status_code == 401

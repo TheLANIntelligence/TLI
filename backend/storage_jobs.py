@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import secrets
 import threading
 import time
@@ -28,6 +29,25 @@ _lock = threading.RLock()
 _jobs = {}
 _requests = {}
 _active = None
+_inventory_stores = {}
+
+
+def _inventory_store():
+    from storage_inventory import StorageInventory
+    directory = str(Path(S.DATA_DIR) / "storage_indexes")
+    with _lock:
+        if directory not in _inventory_stores:
+            _inventory_stores[directory] = StorageInventory(directory, ttl_seconds=TTL)
+        return _inventory_stores[directory]
+
+
+def _drop_index(job):
+    if job.get("inventory_id"):
+        try:
+            _inventory_store().delete(job["access"].key, job["inventory_id"])
+        except (OSError, ValueError):
+            pass  # Expiration/recovery retries cleanup; never expose stale data.
+        job.pop("inventory_id", None)
 
 
 def now_iso():
@@ -103,6 +123,7 @@ def _prune():
     now = time.time()
     for ident, job in list(_jobs.items()):
         if ident != _active and (job["expiry"] <= now or not job["access"].valid()):
+            _drop_index(job)
             del _jobs[ident]
     for key, row in list(_requests.items()):
         if row["expiry"] <= now:
@@ -115,7 +136,9 @@ def _evict(needed=0, *, reserve=0):
         choices = [j for j in retained() if j["id"] != _active]
         if not choices:
             break
-        del _jobs[min(choices, key=lambda j: j["created"])["id"]]
+        victim = min(choices, key=lambda j: j["created"])
+        _drop_index(victim)
+        del _jobs[victim["id"]]
 
 
 def _get(credential, ident):
@@ -221,6 +244,30 @@ def _validate_result(operation, frame):
 def _work(job):
     global _active
     stopped = False
+    indexed = {"writer": None, "seconds": 0.0, "failure": None, "root": None}
+    def index_checkpoint():
+        if job["cancel"].is_set() or not job["access"].valid():
+            raise ValueError("Inventory session ended")
+    def inventory(frame):
+        if indexed["failure"]:
+            return
+        started = time.perf_counter()
+        try:
+            index_checkpoint()
+            if frame["type"] == "inventory_start":
+                indexed["root"] = frame["root"]
+                indexed["writer"] = _inventory_store().begin(job["access"].key, frame["root"], scan_id=job["id"])
+            elif indexed["writer"] is not None:
+                indexed["writer"].add_rows(frame["rows"], checkpoint=index_checkpoint)
+        except (OSError, ValueError) as error:
+            # A full/unavailable index does not turn successful filesystem
+            # observations into a complete inventory or erase the legacy tree.
+            indexed["failure"] = type(error).__name__
+            if indexed["writer"] is not None:
+                indexed["writer"].abort()
+                indexed["writer"] = None
+        finally:
+            indexed["seconds"] += time.perf_counter() - started
     try:
         if job["cancel"].is_set() or not job["access"].valid():
             frame = {"type": "cancelled", "worker_stopped": True}
@@ -232,16 +279,44 @@ def _work(job):
                     job["progress"].update(value)
                     job["updated_at"] = now_iso()
                     if value.get("phase") == "stopping": job["status"] = "cancelling"
-            frame = process.run(job["request"], job["cancel"], progress, job["access"].valid)
+            options = {"inventory": inventory} if job["request"].get("inventory_version") else {}
+            frame = process.run(job["request"], job["cancel"], progress, job["access"].valid, **options)
         stopped = frame.get("worker_stopped") is True
         if not stopped:
             raise RuntimeError("Worker termination remains unconfirmed")
         valid = job["access"].valid()
+        prepared_result = None
+        if valid and frame["type"] == "result":
+            prepared_result = _validate_result(job["operation"], frame)
+            if job["operation"] == "scan":
+                meta = prepared_result["meta"]
+                identity = frame["identity"]
+                stable = identity["before"] == identity["after"] and identity["before"].get("status") == "known"
+                meta["volume_observation"] = {"status": "known" if stable else "changed" if identity["before"] != identity["after"] else "unknown",
+                                              "fingerprint": identity["before"].get("fingerprint") if stable else None}
+                if not stable:
+                    meta.update(partial=True, identity_changed=identity["before"] != identity["after"])
+                receipt = {"version": 1, "available": False, "reason": indexed["failure"] or "Inventory evidence was not returned by the reader."}
+                writer = indexed["writer"]
+                if writer is not None and not job["cancel"].is_set() and not meta.get("cancelled"):
+                    try:
+                        if os.path.normcase(os.path.normpath(meta["root"])) != os.path.normcase(os.path.normpath(indexed["root"])):
+                            raise ValueError("Inventory scope mismatch")
+                        progress({"phase": "indexing"})
+                        started = time.perf_counter()
+                        receipt = {**writer.finalize(meta, checkpoint=index_checkpoint), "version": 1, "available": True}
+                        indexed["seconds"] += time.perf_counter() - started
+                        job["inventory_id"] = job["id"]
+                        indexed["writer"] = None
+                    except (OSError, ValueError) as error:
+                        receipt = {"version": 1, "available": False, "reason": type(error).__name__}
+                receipt["indexing_seconds"] = round(indexed["seconds"], 6)
+                meta["inventory"] = receipt
         with _lock:
             if not valid or frame["type"] == "cancelled":
                 job["status"] = "cancelled"
             elif frame["type"] == "result":
-                result = _validate_result(job["operation"], frame)
+                result = prepared_result
                 if job["cancel"].is_set():
                     result.setdefault("meta", {}).update(partial=True, cancelled=True)
                 if job["operation"] == "scan":
@@ -268,7 +343,16 @@ def _work(job):
             job.update(status="failed" if stopped else "cancelling", error={"code": "scan_failed" if stopped else "stop_unconfirmed",
                        "message": "The scan result could not be confirmed. No files were changed." if stopped else "The worker stop is not confirmed. New scans remain blocked; check the host."})
     finally:
+        if indexed["writer"] is not None:
+            try:
+                indexed["writer"].abort()
+            except (OSError, ValueError):
+                pass
         with _lock:
+            if not job["result_available"] or job["cancel"].is_set() or not job["access"].valid():
+                _drop_index(job)
+                if job.get("result"):
+                    job["result"].setdefault("meta", {})["inventory"] = {"version": 1, "available": False, "reason": "The scan ended or its session was revoked."}
             job.update(updated_at=now_iso(), worker_stopped=stopped)
             if stopped:
                 job["finished_at"] = now_iso()
@@ -287,6 +371,8 @@ def start(credential, values, *, internal=False):
     if not credential.valid(): raise HTTPException(401, "Unlock before starting a scan.")
     request = dict(values)
     request_id = request.pop("request_id")
+    if request.get("operation") == "scan":
+        request["inventory_version"] = 1
     request.setdefault("limits", PROFILES[request["profile"]].copy())
     if len(canonical(request)) + 1 > 16 * 1024:
         raise HTTPException(413, "The scan request is too large.")
@@ -341,6 +427,64 @@ def results(credential, ident):
         return {"ok": True, "protocol": PROTOCOL, "job": _public(job), "result": copy.deepcopy(job["result"])}
 
 
+def inventory_query(credential, ident, *, mode="children", path=None, q="", extension="", sort="size", order="desc", offset=0, limit=100):
+    """Read recorded evidence only; this endpoint never opens a scanned path."""
+    with _lock:
+        job = _get(credential, ident)
+        if job["operation"] != "scan" or not job["result_available"] or not job.get("inventory_id"):
+            raise HTTPException(409, "This scan has no available indexed inventory.")
+        index_id, root = job["inventory_id"], job["path"]
+    try:
+        page = _inventory_store().query(credential.key, index_id, mode=mode, path=path,
+                                        search=q, extension=extension, sort=sort,
+                                        descending=order == "desc", offset=offset, limit=limit)
+    except ValueError as error:
+        from storage_inventory import InventoryNotFound
+        raise HTTPException(410 if isinstance(error, InventoryNotFound) else 422,
+                            "The indexed observation expired or this query is unsupported.") from None
+    except OSError:
+        raise HTTPException(503, "The indexed observation is unavailable.") from None
+    with _lock:
+        _get(credential, ident)  # Recheck revocation/expiry after the disk query.
+    response = {"ok": True, "protocol": "storage-inventory-v1", "version": 1,
+                "job_id": ident, "root": root, "items": page["rows"],
+                "total": page["total"], "offset": page["offset"], "limit": page["limit"],
+                "has_more": page["has_more"], "next_offset": page.get("next_offset", page["offset"] + len(page["rows"])),
+                "meta": {**page["summary"], "query_truncated": page.get("query_truncated", page["has_more"]),
+                         "response_limited": page.get("response_limited", False),
+                         "returned": len(page["rows"]), "query_total": page["total"]}}
+    if len(canonical(response)) > 1024 * 1024:
+        raise HTTPException(413, "This inventory page exceeds its byte limit. Choose a smaller page.")
+    return response
+
+
+def inventory_comparison(credential, baseline_scan_id, current_scan_id):
+    """Enrich history only while both session-owned source indexes still exist."""
+    with _lock:
+        if not credential.valid():
+            raise HTTPException(401, "The scan session ended. Unlock again.")
+        _prune()
+        retained = {j.get("result", {}).get("meta", {}).get("saved_scan", {}).get("scan_id"): j["inventory_id"]
+                    for j in _jobs.values() if j.get("result") and j.get("inventory_id") and j["access"].key == credential.key}
+        before, after = retained.get(baseline_scan_id), retained.get(current_scan_id)
+    if not before or not after:
+        return {"available": False, "complete": False,
+                "reason": "Both full indexes must still be retained by this session. Saved summaries remain available after indexes expire."}
+    try:
+        comparison = _inventory_store().compare(credential.key, before, after, limit=100)
+    except (OSError, ValueError):
+        return {"available": False, "complete": False, "reason": "Indexed comparison evidence is unavailable."}
+    with _lock:
+        _get(credential, after)
+        try:
+            _get(credential, before)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            return {"available": False, "complete": False, "reason": "The baseline index expired during comparison. Saved summaries remain available."}
+    return comparison
+
+
 def cancel(credential, ident):
     with _lock:
         job = _get(credential, ident)
@@ -381,6 +525,10 @@ def shutdown():
         active = _jobs.get(_active)
         if active: active["cancel"].set()
     if active: active["done"].wait(5)
+    with _lock:
+        for job in _jobs.values():
+            if job["id"] != _active:
+                _drop_index(job)
 
 
 def _revoke(matches):
@@ -394,6 +542,7 @@ def _revoke(matches):
                 job["cancel"].set()
                 job.update(status="cancelling", updated_at=now_iso(), result=None, result_available=False, bytes=0)
             else:
+                _drop_index(job)
                 del _jobs[ident]
         for key in list(_requests):
             if key[0] in keys: del _requests[key]

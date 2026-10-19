@@ -23,6 +23,28 @@ REVIEW_SECONDS = 600
 _plans = {}
 
 
+def _access(check):
+    if check is not None:
+        try:
+            check()
+        except Exception as error:
+            # PIN/security-state unavailability is also a loss of captured
+            # authority. Distinguish it from unrelated operation failures.
+            error.file_authority_failure = True
+            raise
+
+
+def _checked(check, operation):
+    _access(check)
+    try:
+        result = operation()
+    except Exception:
+        _access(check)
+        raise
+    _access(check)
+    return result
+
+
 def _routes():
     from routers import file_routes
     return file_routes
@@ -131,10 +153,15 @@ def _load():
     return value
 
 
-def _save(value):
+def _save(value, *, check=None):
+    _access(check)
     if len(json.dumps(value).encode("utf-8")) > 16 * 1024 * 1024:
         raise HTTPException(409, "File-operation history is full. Keep the existing record and resolve older undo entries before making more changes.")
-    security_state.write_json(S.LAST_FILE_OP_PATH, value, "file-operation record")
+    _access(check)
+    boundary = (lambda: _access(check)) if check is not None else None
+    security_state.write_json(S.LAST_FILE_OP_PATH, value, "file-operation record", before_commit=boundary)
+    # The caller must account for this completed reservation before rechecking.
+    # Later saves retain known effects internally even after browser access ends.
 
 
 def _records(saved):
@@ -176,7 +203,8 @@ def _undo_entries(record):
     return entries
 
 
-def _prepare(kind, payload, user, saved):
+def _prepare(kind, payload, user, saved, *, check=None):
+    _access(check)
     pairs, plan = [], {}
     if kind == "undo":
         record = _find(saved, user, payload.get("operation_id"))
@@ -185,10 +213,11 @@ def _prepare(kind, payload, user, saved):
         pairs = _undo_entries(record)
         ident = record.get("id") or "legacy"
     else:
-        base = _base(payload["path"])
+        base = _checked(check, lambda: _base(payload["path"]))
         ident = None
         if kind == "organize":
             for folder, names in payload["actions"].items():
+                _access(check)
                 dest = base / _subfolder(folder)
                 for name in names:
                     pairs.append({"source": str(base / _component(name)), "destination": str(dest / name)})
@@ -198,12 +227,15 @@ def _prepare(kind, payload, user, saved):
         else:
             prefix = _component(payload["prefix"])
             names = []
+            _access(check)
             with os.scandir(base) as scan:
                 for scanned, entry in enumerate(scan):
+                    _access(check)
                     if scanned >= 10000:
                         raise ValueError("Folder has too many entries for one bounded rename review.")
                     if entry.is_file(follow_symlinks=False) or entry.is_symlink() or getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0) & 0x400:
                         names.append(entry.name)
+                    _access(check)
                     if len(names) > MAX_FILES:
                         raise ValueError(f"Review at most {MAX_FILES} files at a time.")
             names.sort()
@@ -215,6 +247,7 @@ def _prepare(kind, payload, user, saved):
         raise ValueError(f"Review at most {MAX_FILES} files at a time.")
     rows, sources, destinations = [], set(), set()
     for pair in pairs:
+        _access(check)
         row = {"source": pair["source"], "destination": pair["destination"], "status": "ready", "reason": "", "size": None}
         try:
             source, destination = Path(pair["source"]), Path(pair["destination"])
@@ -223,7 +256,7 @@ def _prepare(kind, payload, user, saved):
             if _key(source) in sources or _key(destination) in destinations:
                 raise ValueError("A source or destination appears more than once in this plan.")
             sources.add(_key(source)); destinations.add(_key(destination))
-            signature = _inspect(source)
+            signature = _checked(check, lambda: _inspect(source))
             row.update(size=signature["size"], identity=signature)
             if kind == "undo" and (not pair.get("expected") or signature != pair["expected"]):
                 raise ValueError("Undo identity is missing or the file changed. Existing files were preserved; inspect them manually.")
@@ -232,10 +265,12 @@ def _prepare(kind, payload, user, saved):
             elif _key(source) == _key(destination):
                 raise ValueError("Case-only renames require your file manager.")
             else:
-                _destination(destination)
+                _checked(check, lambda: _destination(destination))
         except (OSError, ValueError) as error:
+            _access(check)
             row.update(status="blocked", reason=str(error))
         rows.append(row)
+    _access(check)
     return rows, plan, ident
 
 
@@ -254,23 +289,37 @@ def _response(kind, payload, rows, plan, *, preview, **extra):
     return response
 
 
-def _exclusive_move(source, destination, expected):
+def _exclusive_move(source, destination, expected, *, check=None):
     """Never use replace/shutil.move: destination creation must be exclusive."""
-    if _inspect(source) != expected:
+    if _checked(check, lambda: _inspect(source)) != expected:
         raise ValueError("File changed after preview; it was not moved.")
-    _destination(destination)
+    _checked(check, lambda: _destination(destination))
+    _access(check)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    _tree(destination.parent)
-    _protected(destination.parent)
-    if os.name == "nt":
-        os.rename(source, destination)  # MoveFileEx without replacement on Windows.
-    else:
-        # link() is exclusive on POSIX; rename() would overwrite a raced target.
-        os.link(source, destination, follow_symlinks=False)
-        before_unlink = source.lstat()
-        if any(_signature(before_unlink)[key] != expected[key] for key in ("device", "inode", "size", "mtime_ns")) or stat.S_ISLNK(before_unlink.st_mode):
-            raise ValueError("File changed during the move. Both paths were preserved for manual review.")
-        os.unlink(source)
+    _checked(check, lambda: _tree(destination.parent))
+    _checked(check, lambda: _protected(destination.parent))
+    _access(check)
+    attempted = False
+    try:
+        if os.name == "nt":
+            attempted = True
+            os.rename(source, destination)  # MoveFileEx without replacement on Windows.
+        else:
+            # link() is exclusive on POSIX; rename() would overwrite a raced target.
+            attempted = True
+            os.link(source, destination, follow_symlinks=False)
+            _access(check)
+            before_unlink = _checked(check, source.lstat)
+            if any(_signature(before_unlink)[key] != expected[key] for key in ("device", "inode", "size", "mtime_ns")) or stat.S_ISLNK(before_unlink.st_mode):
+                raise ValueError("File changed during the move. Both paths were preserved for manual review.")
+            _access(check)
+            os.unlink(source)
+    except Exception as error:
+        if getattr(error, "file_authority_failure", False):
+            error.file_move_attempted = attempted
+        raise
+    # Completing identity bookkeeping is internal after a dispatched move. A
+    # revoked caller must not hide this known result from its recovery receipt.
     after = _inspect(destination)
     if os.path.lexists(source) or any(after[key] != expected[key] for key in ("device", "inode", "size", "mtime_ns")):
         raise ValueError("Move outcome could not be confirmed. Inspect both paths before retrying.")
@@ -292,7 +341,8 @@ def _new_record(kind, user, ident, payload, rows, saved):
                         for row in rows], "previous_operations": history}
 
 
-def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
+def _execute(kind, payload, user, rows, plan, ident, saved, operation_id, *, check=None):
+    _access(check)
     invalid = any(row["status"] == "blocked" for row in rows)
     if invalid or not any(row["status"] == "ready" for row in rows):
         for row in rows:
@@ -308,9 +358,17 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
     else:
         record = _new_record(kind, user, ident, payload, rows, saved)
         journal = record
-    _save(journal)  # Writable recovery evidence is required before any directory or file changes.
+    try:
+        _save(journal, check=check)  # Reserve recovery evidence before filesystem changes.
+    except Exception as error:
+        # A denied pre-commit check made no reservation and leaves the preview
+        # usable. Other write errors can be ambiguous; never replay that token.
+        if not getattr(error, "file_authority_failure", False):
+            error.file_operation_uncertain = True
+        raise
     stopped = False
     persistence_error = False
+    access_error = None
     for index, row in enumerate(rows):
         if row["status"] == "unchanged":
             continue
@@ -319,7 +377,8 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
             continue
         source, destination = Path(row["source"]), Path(row["destination"])
         try:
-            signature = _exclusive_move(source, destination, row["identity"])
+            _access(check)
+            signature = _exclusive_move(source, destination, row["identity"], check=check)
             row.update(status="undone" if kind == "undo" else "moved" if kind == "organize" else "renamed", reason="")
             if kind == "undo":
                 entries[index]["entry"].update(undo_status="undone", restored_identity=signature)
@@ -327,14 +386,23 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
                 record["moves"].append({"src": str(source), "dst": str(destination), "identity": signature, "undo_status": "available"})
             else:
                 record["renames"].append({"old": str(source), "new": str(destination), "identity": signature, "undo_status": "available"})
-        except (OSError, ValueError) as error:
-            try:
-                unchanged = _inspect(source) == row["identity"]
-            except (OSError, ValueError):
-                unchanged = False
-            row.update(status="failed" if unchanged else "unknown", reason=str(error))
-            if kind == "undo" and entries[index].get("entry"):
-                entries[index]["entry"].update(undo_status="unresolved", undo_error=str(error))
+        except Exception as error:
+            if getattr(error, "file_authority_failure", False):
+                access_error = error
+                row.update(status="unknown" if getattr(error, "file_move_attempted", False) else "not_attempted",
+                           reason="Access changed during this operation. Review the recorded paths before another request.")
+                if kind == "undo" and entries[index].get("entry"):
+                    entries[index]["entry"].update(undo_status="unresolved", undo_error=row["reason"])
+            elif isinstance(error, (OSError, ValueError)):
+                try:
+                    unchanged = _inspect(source) == row["identity"]
+                except (OSError, ValueError):
+                    unchanged = False
+                row.update(status="failed" if unchanged else "unknown", reason=str(error))
+                if kind == "undo" and entries[index].get("entry"):
+                    entries[index]["entry"].update(undo_status="unresolved", undo_error=str(error))
+            else:
+                raise
             stopped = True
         if kind != "undo":
             record["results"] = _public_rows(rows)
@@ -344,6 +412,13 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
             _save(journal)
         except Exception:
             stopped = persistence_error = True
+        try:
+            _access(check)
+        except Exception as error:
+            if not getattr(error, "file_authority_failure", False):
+                raise
+            access_error = access_error or error
+            stopped = True
     statuses = {row["status"] for row in rows}
     succeeded = sum(row["status"] in {"moved", "renamed", "undone"} for row in rows)
     ok = statuses <= {"moved", "renamed", "undone", "unchanged"} and not persistence_error
@@ -358,6 +433,8 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
         message += " The recovery record could not be fully saved. Keep these paths and inspect them manually."
     result = _response(kind, payload, rows, plan, preview=False, ok=ok, status=status, message=message,
                        operation_id=record.get("id"), undo_available=kind != "undo" and bool(succeeded) and not persistence_error)
+    if access_error:
+        result["access_stopped"] = True
     if kind == "undo":
         record.update(undo_status="completed" if ok else "partial", undo_results=_public_rows(rows), undo_receipt=result)
     else:
@@ -367,15 +444,29 @@ def _execute(kind, payload, user, rows, plan, ident, saved, operation_id):
     except Exception:
         result.update(ok=False, status="partial" if succeeded else "failed", undo_available=False,
                       message=message + " Recovery evidence was not confirmed saved.")
+    try:
+        _access(check)
+    except Exception as error:
+        if not getattr(error, "file_authority_failure", False):
+            raise
+        access_error = access_error or error
+    if access_error:
+        # Attach only internally; FastAPI still emits the original denial detail.
+        access_error.file_operation_receipt = copy.deepcopy(result)
+        raise access_error
     return result
 
 
-def request(kind, user, payload, *, confirm, preview_id=None):
+def request(kind, user, payload, *, confirm, preview_id=None, check=None):
+    _access(check)
     lock = _routes().FILE_MUTATION_LOCK
     if not lock.acquire(blocking=False):
+        _access(check)
         raise HTTPException(409, "Another file operation is running. Wait for its result before retrying.")
+    review = None
     try:
-        saved = _load()
+        _access(check)
+        saved = _checked(check, _load)
         now = time.time()
         if confirm and preview_id:
             review = _plans.get(preview_id)
@@ -383,21 +474,25 @@ def request(kind, user, payload, *, confirm, preview_id=None):
                 recorded = _find(saved, user, preview_id)
                 if (recorded and recorded.get("receipt") and recorded.get("type") == kind
                         and recorded.get("request_payload") == payload):
-                    return copy.deepcopy(recorded["receipt"])
+                    return _checked(check, lambda: copy.deepcopy(recorded["receipt"]))
                 raise HTTPException(410, "This file review is unavailable. Preview again before changing files.")
             if review["kind"] != kind or review["payload"] != payload:
                 raise HTTPException(409, "The request differs from its preview. Review it again.")
+            if review.get("interrupted"):
+                raise HTTPException(409, "This operation's recovery reservation was not confirmed. Inspect the saved record and paths before making a new review; this token will not repeat it.")
             if review.get("receipt"):
-                return copy.deepcopy(review["receipt"])
+                return _checked(check, lambda: copy.deepcopy(review["receipt"]))
             if review["expires_at"] <= now:
                 raise HTTPException(410, "This file review expired. Preview again.")
         else:
             review = None
         try:
-            rows, plan, operation_id = _prepare(kind, payload, user, saved)
+            rows, plan, operation_id = _prepare(kind, payload, user, saved, check=check)
         except (OSError, ValueError) as error:
+            _access(check)
             raise HTTPException(400, str(error)) from None
         if not confirm:
+            _access(check)
             for key, old in list(_plans.items()):
                 if old["expires_at"] <= now:
                     _plans.pop(key)
@@ -407,10 +502,10 @@ def request(kind, user, payload, *, confirm, preview_id=None):
             _plans[ident] = {"kind": kind, "user": user, "payload": copy.deepcopy(payload), "rows": copy.deepcopy(rows),
                              "operation_id": operation_id, "expires_at": now + REVIEW_SECONDS}
             can_execute = bool(rows) and all(row["status"] in {"ready", "unchanged"} for row in rows) and any(row["status"] == "ready" for row in rows)
-            return _response(kind, payload, rows, plan, preview=True, ok=True, preview_id=ident,
+            return _checked(check, lambda: _response(kind, payload, rows, plan, preview=True, ok=True, preview_id=ident,
                              expires_at=now + REVIEW_SECONDS, can_execute=can_execute,
                              operation_id=operation_id, history=_history(saved, user) if kind == "undo" else [],
-                             message="Review every source and destination. Nothing has changed." if rows else "No files are available for this operation.")
+                             message="Review every source and destination. Nothing has changed." if rows else "No files are available for this operation."))
         ident = preview_id or uuid.uuid4().hex
         if review and (review["rows"] != rows or review["operation_id"] != operation_id):
             for row in rows:
@@ -418,10 +513,20 @@ def request(kind, user, payload, *, confirm, preview_id=None):
             result = _response(kind, payload, rows, plan, preview=False, status="rejected",
                                message="The files or operation changed since preview. Nothing was changed; preview again.")
             review["receipt"] = copy.deepcopy(result)
+            _access(check)
             return result
-        result = _execute(kind, payload, user, rows, plan, ident, saved, operation_id)
+        result = _execute(kind, payload, user, rows, plan, ident, saved, operation_id, check=check)
         if review:
             review["receipt"] = copy.deepcopy(result)
+        _access(check)
         return result
+    except Exception as error:
+        if review:
+            if getattr(error, "file_operation_receipt", None) is not None:
+                review["receipt"] = copy.deepcopy(error.file_operation_receipt)
+            if getattr(error, "file_operation_uncertain", False):
+                review["interrupted"] = True
+        _access(check)
+        raise
     finally:
         lock.release()

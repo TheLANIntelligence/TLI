@@ -1,10 +1,12 @@
 // TLI Chat (LAN Mesh Messenger)
 (() => {
   const $ = (id) => document.getElementById(id);
-  let _lanLocked=false,_lanEpoch=0;
+  let _lanLocked=document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false',_lanEpoch=0;
+  let _lanReady=!_lanLocked,_identityReady=false,_identityRequest=null;
   let _panelOpen = false, _panelEpoch = 0, _bgPollPending = null, _unsubscribeExpiry = null;
-  const _lanAlive=t=>!_lanLocked&&t===_lanEpoch;
-  const _panelVisible = () => _panelOpen && !document.hidden && !_lanLocked;
+  const _lanSessionCurrent=t=>!_lanLocked&&_lanReady&&t===_lanEpoch;
+  const _lanAlive=t=>_lanSessionCurrent(t)&&_identityReady;
+  const _panelVisible = () => _panelOpen && !document.hidden && !_lanLocked && _lanReady;
 
 
   // -----------------------------
@@ -40,8 +42,8 @@
     nodeSearch: "",
     previousOpen: false,
 
-    localNodeId: "local",
-    localNodeName: "Me",
+    localNodeId: null,
+    localNodeName: "",
   };
 
   // Chat polling
@@ -131,7 +133,7 @@
   }
 
   async function safeFetchJson(url) {
-    if(_lanLocked)return null;const epoch=_lanEpoch;
+    if(!_lanAlive(_lanEpoch))return null;const epoch=_lanEpoch;
     try {
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) return null;
@@ -149,16 +151,39 @@
     return ids.join("--");
   }
 
+  function showIdentityUnavailable() {
+    const list=$('tli-chat-buddies-list');
+    if(list){
+      list.replaceChildren();
+      const message=document.createElement('p');message.textContent=_lanLocked||!_lanReady?'Unlock TLI and check access to read this computer’s identity.':'This computer’s identity is unavailable. Check saved identity before messaging. Your draft stays here.';
+      const button=document.createElement('button');button.type='button';button.className='btn btn-ghost';button.textContent=_lanReady?'Check computer identity':'Check access';button.disabled=_lanLocked;
+      const epoch=_lanEpoch;button.addEventListener('click',()=>{if(_lanLocked||epoch!==_lanEpoch)return;if(!_lanReady)return window.EventInterpreter?.retry?.();return resumePanel();});
+      list.appendChild(message);list.appendChild(button);
+    }
+    const meta=$('tli-chat-buddies-meta');if(meta)meta.textContent='—';
+    const pill=$('tli-chat-live-pill');if(pill)pill.textContent='Computer identity unavailable';
+    updateComposerState();
+  }
   async function loadLocalNodeIdentity() {
-    if(_lanLocked)return;const epoch=_lanEpoch;
-    try {
-      const r = await fetch("/mesh/node", { cache: "no-store" });
-      if (!r.ok) return;
-      const d = await r.json();
-      if(!_lanAlive(epoch))return;
-      state.localNodeId = d.node_id || "local";
-      state.localNodeName = d.display_name || "Me";
-    } catch {}
+    if(!_lanSessionCurrent(_lanEpoch))return false;
+    if(_identityRequest)return _identityRequest.promise;
+    const request={epoch:_lanEpoch,promise:null};_identityRequest=request;_identityReady=false;
+    stopChatPolling();stopPresenceStream();stopBgPoll();
+    request.promise=(async()=>{
+      try {
+        const r=await fetch('/mesh/node',{cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(10000)});
+        if(!_lanSessionCurrent(request.epoch)||_identityRequest!==request)return false;
+        if(r.status===401||r.status===403){window.dispatchEvent(new CustomEvent('tli-session-locked'));return false;}
+        if(!r.ok)throw Error('Identity unavailable');
+        const d=await r.json();if(!_lanSessionCurrent(request.epoch)||_identityRequest!==request)return false;
+        const text=value=>typeof value==='string'&&!!value.trim();
+        if(!d||typeof d!=='object'||Array.isArray(d)||!text(d.node_id)||!text(d.display_name))throw Error('Identity incomplete');
+        state.localNodeId=d.node_id;state.localNodeName=d.display_name;_identityReady=true;return true;
+      } catch {
+        if(!_lanSessionCurrent(request.epoch)||_identityRequest!==request)return false;
+        state.localNodeId=null;state.localNodeName='';state.lastDirectoryOk=false;showIdentityUnavailable();return false;
+      } finally {if(_identityRequest===request)_identityRequest=null;}
+    })();return request.promise;
   }
 
   function startChatPolling(nodeId) {
@@ -177,7 +202,7 @@
   // Keep unread notifications while another TLI panel is open, without retaining
   // a presence stream. Hidden browser tabs catch up when they become visible.
   async function pollBackgroundMessages() {
-    if (_lanLocked || document.hidden || _bgPollPending) return;
+    if (!_lanAlive(_lanEpoch) || document.hidden || _bgPollPending) return;
     const epoch = _lanEpoch;
     _bgPollPending = (async () => {
       for (const node of state.rawNodes || []) {
@@ -191,7 +216,7 @@
   }
 
   function startBgPoll() {
-    if (_bgPollTimer || _lanLocked || document.hidden) return;
+    if (_bgPollTimer || !_lanAlive(_lanEpoch) || document.hidden) return;
     _bgPollTimer = setInterval(pollBackgroundMessages, 10_000);
   }
 
@@ -240,7 +265,7 @@
   async function fetchReadReceipts(nodeId) { return; }
 
   async function pollChatMessages(nodeId) {
-    if(_lanLocked || document.hidden)return;const epoch=_lanEpoch;
+    if(!_lanAlive(_lanEpoch) || document.hidden)return;const epoch=_lanEpoch;
     if (!nodeId) return;
     const threadId = makeThreadId(nodeId);
     const since = _chatLastTs[threadId] || 0;
@@ -410,6 +435,7 @@
   }
 
   function messagingState(node) {
+    if(!_lanAlive(_lanEpoch))return {available:false,code:'identity_unavailable',message:'This computer’s identity must be checked before messaging. Your draft stays here.'};
     if (!node) return {available: false, code: 'peer_missing', message: 'This computer is no longer in the directory. Refresh its connection before sending.'};
     if (node.id === '__local_loopback__') return {available: true, code: 'local', message: 'Notes stay on this computer.'};
     if (node.previousDiscovery) return {available:false, code:'previous_discovery', message:'This is an older discovery record. Its conversation and draft stay here. Select the current computer to request a connection.'};
@@ -722,7 +748,7 @@
   // Refresh nodes
   // -----------------------------
   async function refreshNodes() {
-    if(_lanLocked)return;const epoch=_lanEpoch;
+    if(!_lanAlive(_lanEpoch))return;const epoch=_lanEpoch;
     // Discovery is automatic; messaging readiness comes from reviewed local state.
     // Previous discoveries retain separate identities, history and drafts.
     let lanData = null;
@@ -1119,7 +1145,7 @@
       review.addEventListener('click', () => reviewComputer(state.selectedNodeId)); controls.appendChild(review);
     }
     const refresh = document.createElement('button'); refresh.type = 'button'; refresh.className = 'btn btn-ghost'; refresh.textContent = 'Refresh status';
-    refresh.addEventListener('click', refreshNodes); controls.appendChild(refresh);
+    refresh.addEventListener('click', () => resumePanel()); controls.appendChild(refresh);
     notice.appendChild(controls);
   }
 
@@ -1131,6 +1157,7 @@
   }
 
   function openThread(nodeId) {
+    if(!_lanAlive(_lanEpoch))return;
     if (state.rawNodes.find(n => n.id === nodeId)?.previousDiscovery) state.previousOpen = true;
     const input = $('tli-chat-input');
     if (state.selectedNodeId !== nodeId && input) {
@@ -1159,6 +1186,7 @@
   }
 
   async function checkSelectedConnection(nodeId) {
+    if(!_lanAlive(_lanEpoch))return;
     const node=state.rawNodes.find(n=>n.id===nodeId),epoch=_lanEpoch;
     if(!node||node.peerProfile==='inference_node'||node.trustState!=='verified'||node.previousDiscovery)return;
     try{const response=await fetch('/mesh/directory/'+encodeURIComponent(nodeId)+'/connection',{method:'POST',cache:'no-store'});
@@ -1177,7 +1205,7 @@
   // -----------------------------
   async function sendCurrentMessage() {
     const input=$('tli-chat-input'),nodeId=state.selectedNodeId;
-    if(_lanLocked||!input||!nodeId)return;
+    if(!_lanAlive(_lanEpoch)||!input||!nodeId)return;
     if (nodeId !== '__local_loopback__' && !messagingState(state.rawNodes.find(n => n.id === nodeId)).available) { updateComposerState(); return; }
     const text=(input.value||'').trim();if(!text)return;
     if(nodeId==='__local_loopback__'){ensureThread(nodeId).push({kind:'text',from:'me',body:text,ts:nowTs(),delivery:'local'});input.value='';renderThread(nodeId);return;}
@@ -1196,7 +1224,7 @@
         to_id:nodeId,to_ip:remote?.ip||null,body:text,ts}};
   }
   async function _deliverMessage(msg,nodeId) {
-    if(_lanLocked||msg._sending)return false;
+    if(!_lanAlive(_lanEpoch)||msg._sending||msg._payload?.from_id!==state.localNodeId)return false;
     const access = messagingState(state.rawNodes.find(n => n.id === nodeId));
     if (!access.available) { msg.delivery = 'failed'; msg.deliveryError = access.message; updateComposerState(); renderThread(nodeId); return false; }
     const epoch=_lanEpoch;msg._sending=true;msg.delivery='pending';msg.deliveryError='';renderThread(nodeId);
@@ -1235,6 +1263,7 @@
   // File sharing (UI-first)
   // -----------------------------
   async function createOutgoingFileOffer(file, toNodeId) {
+    if(!_lanAlive(_lanEpoch))return;
     const peer = (state.rawNodes || []).find(node => node.id === toNodeId);
     if (!peer || !window.TLIPeerTransfers) {
       showToast("Secure file transfer is unavailable. Refresh this installation first.", "error");
@@ -1487,7 +1516,7 @@
     expireConnections();
     if(!_unsubscribeExpiry&&window.MeshService?.subscribeExpiry)_unsubscribeExpiry=window.MeshService.subscribeExpiry(expireConnections);
     if (_isMobile()) _setChatMobileView(state.selectedNodeId ? "thread" : "buddies");
-    await loadLocalNodeIdentity();
+    if(!await loadLocalNodeIdentity())return;
     if (!current()) return;
     await refreshNodes();
     if (!current()) return;
@@ -1511,7 +1540,8 @@
 
   window.TLIChat = {
     async openPeer(nodeId) {
-      if (_lanLocked || typeof nodeId !== 'string') return false;
+      if (!_lanSessionCurrent(_lanEpoch) || typeof nodeId !== 'string') return false;
+      if(!_identityReady&&!await loadLocalNodeIdentity())return false;
       if (state.selectedNodeId !== nodeId && $('tli-chat-input')?.value.trim()) { window.showToast?.('Finish or clear your current message before changing recipient.', 'warn'); return false; }
       const epoch = _lanEpoch;
       await refreshNodes();
@@ -1523,6 +1553,7 @@
     },
     async onOpen() {
       _panelOpen = true;
+      if(!_lanSessionCurrent(_lanEpoch)){showIdentityUnavailable();return;}
       return resumePanel();
     },
 
@@ -1535,23 +1566,29 @@
   };
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { pausePanel(); stopBgPoll(); return; }
-    if (_lanLocked) return;
+    if (!_lanSessionCurrent(_lanEpoch)) return;
     if (_panelOpen) resumePanel();
     else if (state.bound) { startBgPoll(); pollBackgroundMessages(); }
   });
   window.addEventListener('tli-peer-trust-changed', () => { if (_panelVisible()) refreshNodes(); });
   window.addEventListener('beforeunload', () => { _panelOpen = false; pausePanel(); stopBgPoll(); });
-  window.addEventListener('tli-session-locked',()=>{
-    _lanLocked=true;_lanEpoch++;pausePanel();stopBgPoll();
+  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{
+    _lanLocked=true;_lanReady=false;_identityReady=false;_identityRequest=null;_lanEpoch++;pausePanel();stopBgPoll();
     if(state.refreshTimer)clearInterval(state.refreshTimer);state.refreshTimer=null;
     state.threads.clear();state.drafts.clear();state.rawNodes=[];state.nodes=[];state.selectedNodeId=null;state.previousOpen=false;
+    state.localNodeId=null;state.localNodeName='';state.lastDirectoryOk=false;
     for(const key of Object.keys(_chatLastTs))delete _chatLastTs[key];
     for(const key of Object.keys(_chatCursors))delete _chatCursors[key];
-    const out=$('tli-chat-thread-output');if(out)out.replaceChildren();const input=$('tli-chat-input');if(input)input.value='';
-    updateComposerState();
+    for(const id of ['tli-chat-thread-output','tli-chat-thread-title','tli-chat-thread-meta'])$(''+id)?.replaceChildren();
+    const input=$('tli-chat-input');if(input)input.value='';
+    showIdentityUnavailable();
   });
   window.addEventListener('tli-session-unlocked',()=>{
     _lanLocked=false;_lanEpoch++;
-    if (_panelOpen) resumePanel();
+    if(_panelOpen&&!_lanReady)showIdentityUnavailable();
+  });
+  window.addEventListener('tli-private-observation-ready',()=>{
+    if(_lanLocked||_lanReady)return;_lanReady=true;
+    if(_panelOpen)resumePanel();
   });
 })();

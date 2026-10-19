@@ -15,6 +15,23 @@ def target_key(ip, relay):
     return (str(ip).strip().lower().removeprefix("http://").removeprefix("https://").rstrip("/"), int(relay))
 
 
+def _result(output, request_id):
+    ok = driver_succeeded(output)
+    result = dict(output) if isinstance(output, dict) else {}
+    if result.get("outcome") == "unknown":
+        ok, outcome = False, "unknown"
+        summary = "Command outcome is unconfirmed. Check device status before trying again; nothing will retry automatically."
+    elif ok and result.get("acknowledged") is False:
+        outcome = "sent"
+        summary = "Command sent over Bluetooth; the device has not confirmed its state. Check device status before another command."
+    else:
+        outcome = "accepted" if ok else "failed"
+        summary = ("Device acknowledged the command. Current state requires a status reading." if ok else
+                   "The device did not confirm the command. " + str(result.get("summary") or ""))
+    result.update(ok=ok, request_id=request_id, outcome=outcome, summary=summary)
+    return result
+
+
 def run(user, target, action, request_id, operation):
     token = (user, request_id) if request_id else None
     fingerprint = (target, action)
@@ -40,15 +57,13 @@ def run(user, target, action, request_id, operation):
     try:
         try:
             output = operation()
-            ok = driver_succeeded(output)
-            result = dict(output) if isinstance(output, dict) else {}
-            result.update(ok=ok, request_id=request_id,
-                          outcome="accepted" if ok else "failed",
-                          summary="Device acknowledged the command. Current state requires a status reading." if ok else
-                          "The device did not confirm the command. " + str(result.get("summary") or ""))
-        except Exception:
-            result = {"ok": False, "request_id": request_id, "outcome": "unknown",
-                      "summary": "Command outcome is unconfirmed. Check device status before trying again; nothing will retry automatically."}
+            result = _result(output, request_id)
+        except Exception as error:
+            # A checked adapter can retain a known transport outcome when its
+            # initiating authority ends. This evidence stays in the private
+            # command cache; the service still propagates the original denial.
+            known = getattr(error, "device_result", None)
+            result = _result(known if isinstance(known, dict) else {"ok": False, "outcome": "unknown"}, request_id)
         with _lock:
             if token:
                 _requests[token].update(result=copy.deepcopy(result), at=time.monotonic())

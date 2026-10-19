@@ -28,14 +28,17 @@ import uuid
 from typing import Any
 
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from typing import Literal
 from pydantic import BaseModel, Field
 
-from routers.system_routes import require_session
+from routers.system_routes import require_session, _observation_access, _private_observation
+from browser_authority import browser_control_access
+from companion_auth import operation_access
 import tli_state as S
 from tli_state import log_debug
 from narrator_policy import NarratorPolicy, fresh_observation, valid_disks
+from narrator_briefing import build_briefing
 from action_results import execution_summary
 
 # ---------------------------------------------------------------------------
@@ -147,6 +150,7 @@ _narrator: dict[str, Any] = {
 _narrator_lock = threading.Lock()
 _narrator_policy = NarratorPolicy()
 _policy_lock = threading.RLock()
+_last_narrator_briefing: dict | None = None
 
 # Action queue
 _action_queue: list[dict] = []
@@ -249,8 +253,10 @@ def _get_narrator() -> dict:
     with _narrator_lock:
         result = dict(_narrator)
     with _policy_lock:
+        state, now, wall_now = _read_state(), time.monotonic(), time.time()
         result.update(mode=_narrator_policy.mode,
-                      explanations=_narrator_policy.explanations(_read_state(), time.monotonic(), time.time()))
+                      explanations=_narrator_policy.explanations(state, now, wall_now),
+                      briefing=build_briefing(state, _narrator_policy, now, wall_now))
     return result
 
 
@@ -270,9 +276,17 @@ def _build_narrator_from_state(state: dict, trigger_event: dict | None = None) -
 
 
 def _refresh_narrator(event: dict | None = None) -> None:
+    global _last_narrator_briefing
     with _policy_lock:
-        text, kind = _build_narrator_from_state(_read_state(), event)
-        if _set_narrator(text, kind):
+        state = _read_state()
+        text, kind = _build_narrator_from_state(state, event)
+        text_changed = _set_narrator(text, kind)
+        briefing = build_briefing(state, _narrator_policy, time.monotonic(), time.time())
+        # Keep evidence fresh over SSE without changing the existing text timestamp
+        # or animating the same headline again on each hardware observation.
+        signature = {key: value for key, value in briefing.items() if key != "generated_at"}
+        if text_changed or signature != _last_narrator_briefing:
+            _last_narrator_briefing = signature
             _broadcast_narrator_update()
 
 
@@ -693,11 +707,13 @@ def on_event(event: dict) -> None:
 # Handler dispatch
 # ---------------------------------------------------------------------------
 
-def _dispatch_handler(handler: str) -> dict:
+def _dispatch_handler(handler: str, *, check=None) -> dict:
     """
     Execute a confirmed action's handler.
     Returns a receipt dict with at least {ok, navigate_to?}.
     """
+    if check:
+        check()
     if ":" in handler:
         verb, arg = handler.split(":", 1)
     else:
@@ -724,11 +740,17 @@ def _dispatch_handler(handler: str) -> dict:
         # Circular import risk deferred; caller should handle navigate_to.
         try:
             from routers.home_power import get_runtime  # noqa: PLC0415
+            if check:
+                check()
             rt = get_runtime()
             if rt:
-                result = rt.run_scene(arg)
+                if check:
+                    check()
+                result = rt.run_scene(arg, check=check) if check else rt.run_scene(arg)
                 ok, summary = execution_summary(result.get("results") or [], "scene")
                 return {"ok": ok and result.get("ok") is True, "scene_result": result, "narrator_msg": summary}
+        except HTTPException:
+            raise
         except Exception as exc:
             log_debug("dashboard_presence", "warn", f"run_scene failed: {exc}")
         return {"ok": False, "error": f"Scene '{arg}' could not be run."}
@@ -870,12 +892,17 @@ def _vault_snapshot(user_id: str) -> dict:
 
 
 def _smart_home_snapshot() -> dict:
+    from home_power_store import HomePowerStateUnavailable
     devices = []
 
     try:
         from routers.home_power import get_runtime  # lazy
         rt = get_runtime()
         devices = rt.load_devices()
+    except HomePowerStateUnavailable:
+        # Damaged household evidence must not become an empty inventory or a
+        # different registry's apparently healthy snapshot.
+        raise
     except Exception:
         devices = []
 
@@ -927,13 +954,12 @@ def _mesh_snapshot(node: dict) -> dict:
     }
 
 
-def _active_alerts(limit: int = 25) -> list[dict]:
-    try:
-        alerts = S.load_alerts()
-        active = [a for a in alerts if isinstance(a, dict) and not a.get("dismissed")]
-        return active[-max(1, min(int(limit), 100)):]
-    except Exception:
-        return []
+def _active_alerts(limit: int = 25, *, check=None) -> list[dict]:
+    alerts = S.load_alerts(check=check)
+    active = [a for a in alerts if not a.get("dismissed")]
+    if check is not None:
+        check()
+    return active[-max(1, min(int(limit), 100)):]
 
 
 def _recent_action_receipts(limit: int = 5) -> list[dict]:
@@ -1191,7 +1217,10 @@ def _build_suggestions(snapshot: dict) -> list[dict]:
     return suggestions[:6]
 
 
-def _build_command_center_snapshot(user_id: str) -> dict:
+def _build_command_center_snapshot(user_id: str, *, check=None) -> dict:
+    # Unavailable saved alerts must not become an empty, healthy dashboard.
+    # Read them before the remaining optional host observations.
+    alerts = _active_alerts(check=check)
     state = _read_state()
     node = _node_snapshot()
     ai = _ai_snapshot()
@@ -1199,7 +1228,6 @@ def _build_command_center_snapshot(user_id: str) -> dict:
     storage = _disk_snapshot()
     smart_home = _smart_home_snapshot()
     mesh = _mesh_snapshot(node)
-    alerts = _active_alerts()
     current_action = _safe_action_payload(get_top_action())
 
     snapshot = {
@@ -1264,13 +1292,14 @@ class DismissRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.get("/state")
-def get_dashboard_state(_=Depends(require_session)):
+def get_dashboard_state(check=Depends(browser_control_access), _=Depends(require_session)):
     """
     Aggregated metrics from cached state.  Does NOT re-probe hardware.
     Returns in < 100ms from in-memory dict.
     """
+    check()
     state = _read_state()
-    return {
+    result = {
         "cpu_pct":           state["cpu_pct"],
         "ram_pct":           state["ram_pct"],
         "disk_pct_by_drive": state["disk_pct_by_drive"],
@@ -1281,13 +1310,19 @@ def get_dashboard_state(_=Depends(require_session)):
         "host":              state.get("host"),
         "observation_id":    state.get("observation_id"),
     }
+    check()
+    return result
 
 
 @router.get("/narrator/current")
-def get_narrator_current(_=Depends(require_session)):
+def get_narrator_current(check=Depends(browser_control_access), _=Depends(require_session)):
     """Returns current narrator message: {type, text, timestamp}."""
+    check()
     _refresh_narrator()
-    return _get_narrator()
+    check()
+    result = _get_narrator()
+    check()
+    return result
 
 
 class ActivityCursor(BaseModel):
@@ -1304,55 +1339,117 @@ class NarratorSettingsRequest(BaseModel):
 
 
 @router.get("/narrator/settings")
-def get_narrator_settings(response: Response, _=Depends(require_session)):
+def get_narrator_settings(response: Response, check=Depends(browser_control_access), _=Depends(require_session)):
     import narrator_settings
     response.headers["Cache-Control"] = "no-store"
     with _policy_lock:
+        check()
         settings = narrator_settings.read()
+        check()
         _narrator_policy.set_mode(settings["mode"])
+    check()
     _refresh_narrator()
-    return {"ok": True, "scope": "host", **settings, "narrator": _get_narrator()}
+    check()
+    result = {"ok": True, "scope": "host", **settings, "narrator": _get_narrator()}
+    check()
+    return result
 
 
 @router.put("/narrator/settings")
-def put_narrator_settings(req: NarratorSettingsRequest, response: Response, _=Depends(require_session)):
+def put_narrator_settings(req: NarratorSettingsRequest, response: Response,
+                          check=Depends(browser_control_access), _=Depends(require_session)):
     import narrator_settings
     response.headers["Cache-Control"] = "no-store"
     with _policy_lock:
-        settings = narrator_settings.save(req.mode)
+        check()
+        settings = narrator_settings.save(req.mode, check=check)
+        check()
         _narrator_policy.set_mode(settings["mode"])
         _refresh_narrator()
-    return {"ok": True, "scope": "host", **settings, "narrator": _get_narrator()}
+    check()
+    result = {"ok": True, "scope": "host", **settings, "narrator": _get_narrator()}
+    check()
+    return result
+
+
+def _activity_access(request: Request, response: Response, user: str = Depends(require_session)):
+    """Shared host activity: browser authority or the existing native Today client.
+
+    Only summary/review accept a paired Companion's HTTPS Bearer credential.
+    The exception grants no host controls and never falls back to cookies or
+    open-local access. Historical events remain host-wide; only review cursors
+    belong to the resolved owner.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    if request.headers.getlist("authorization"):
+        if (len(request.headers.getlist("authorization")) != 1
+                or request.url.scheme != "https"
+                or any(key.startswith("x-tli-peer-") or key == "forwarded"
+                       or key.startswith("x-forwarded-") for key in request.headers)):
+            raise HTTPException(403, "Use the paired Companion directly over HTTPS for activity.")
+        origins = request.headers.getlist("origin")
+        if (len(request.headers.getlist("host")) != 1
+                or origins and origins != [str(request.base_url).rstrip("/")]
+                or request.headers.get("sec-fetch-site") not in (None, "same-origin", "none")):
+            raise HTTPException(403, "Use the paired Companion or this TLI page for activity.")
+        check = operation_access(request, user)
+    else:
+        browser_check = browser_control_access(request, response)
+        owner_check = operation_access(request, user)
+
+        def check():
+            browser_check()
+            owner_check()
+
+    check()
+    return user, check
 
 
 @router.get("/activity-summary")
-def get_activity_summary(user: str = Depends(require_session)):
+def get_activity_summary(access=Depends(_activity_access)):
     from activity_summary import get_summary
-    return get_summary(user)
+    user, check = access
+    check()
+    result = get_summary(user)
+    check()
+    return result
 
 
 @router.post("/activity-summary/review")
-def review_activity(cursor: ActivityReview, user: str = Depends(require_session)):
+def review_activity(cursor: ActivityReview, access=Depends(_activity_access)):
     from activity_summary import mark_reviewed
-    return mark_reviewed(user, cursor.model_dump(exclude_none=True))
+    user, check = access
+    check()
+    result = mark_reviewed(user, cursor.model_dump(exclude_none=True), check=check)
+    check()
+    return result
 
 
 @router.get("/action/current")
-def get_action_current(_=Depends(require_session)):
+def get_action_current(check=Depends(browser_control_access), _=Depends(require_session)):
     """Returns top-scored non-snoozed action, or null."""
-    return _safe_action_payload(get_top_action())
+    check()
+    result = _safe_action_payload(get_top_action())
+    check()
+    return result
 
 
 @router.get("/command-center")
-def get_command_center(user_id: str = Depends(require_session)):
-    _refresh_narrator()
+def get_command_center(check=Depends(_observation_access), user_id: str = Depends(require_session)):
     """Single Dashboard 2.0 snapshot for daily-use Command Center rendering."""
-    return _build_command_center_snapshot(user_id)
+    with _private_observation(check):
+        _refresh_narrator()
+        check()
+        return _build_command_center_snapshot(user_id, check=check)
 
 
-def _execute_dashboard_action(action_id: str, secondary: bool = False) -> dict:
+def _execute_dashboard_action(action_id: str, secondary: bool = False, *, check=None) -> dict:
     with _action_lock:
+        if check:
+            check()
         _prune_disk_actions(time.time())
+        if check:
+            check()
         action = next((a for a in _action_queue if a["id"] == action_id), None)
         if action is None:
             raise HTTPException(status_code=404, detail="Action not found")
@@ -1361,66 +1458,125 @@ def _execute_dashboard_action(action_id: str, secondary: bool = False) -> dict:
         handler = action.get("secondary_handler" if secondary else "handler")
         if not handler:
             raise HTTPException(status_code=400, detail="This action has no handler.")
+        if check:
+            check()
         _inflight_actions.add(action_id)
+    access_error = None
+    outcome_received = False
+
+    def recheck_access():
+        nonlocal access_error
+        if check:
+            try:
+                check()
+            except HTTPException as exc:
+                access_error = access_error or exc
+                raise
+
     try:
         try:
-            receipt = _dispatch_handler(handler)
+            if check:
+                check()
+            receipt = _dispatch_handler(handler, check=check)
             if not isinstance(receipt, dict):
                 receipt = {"ok": False, "error": "Handler returned no result."}
+        except HTTPException as exc:
+            from routers.home_power import SceneAccessStopped
+            if not isinstance(exc, SceneAccessStopped):
+                raise
+            access_error = exc
+            receipt = {
+                "ok": exc.scene_result.get("ok") is True,
+                "access_stopped": True, "scene_result": exc.scene_result,
+                "narrator_msg": "Access changed during the scene request. Review the recorded results before trying again.",
+            }
         except Exception as exc:
             receipt = {"ok": False, "error": str(exc)}
+        outcome_received = True
+        # Capture late revocation before finalizing, without losing the actual
+        # returned outcome or allowing a secondary/failed action ID to replay.
+        try:
+            recheck_access()
+        except HTTPException:
+            pass  # Finalize the audit, then propagate the captured denial.
         ok = receipt.get("ok") is True
         message = receipt.get("narrator_msg") or (
             f"Completed: {action['title'].rstrip('?')}" if ok else
             f"Action failed: {receipt.get('error') or action['title']}. Review the result before retrying.")
-        if not ok and not any(word in message.lower() for word in ("fail", "partial")):
+        if not ok and not receipt.get("access_stopped") and not any(word in message.lower() for word in ("fail", "partial")):
             message = f"Action failed: {message}"
         receipt = {**receipt, "ok": ok, "narrator_msg": message}
         if _disk_key(action):
             receipt.update(target=copy.deepcopy(action["target"]), observation=copy.deepcopy(action["observation"]))
+        # Once dispatch attempted effects, retain the actual outcome internally
+        # even if its browser lost access. A stopped scene cannot reuse this ID.
+        # Rechecking before disclosure below never authorizes another dispatch.
         with _action_lock:
-            if ok and not secondary:
+            if (ok and not secondary) or receipt.get("access_stopped") or access_error:
                 # A poll can refresh this exact target while navigation returns.
                 # Remove its identity, never another drive or unrelated action.
                 _action_queue[:] = [queued for queued in _action_queue if queued["id"] != action_id]
         with _policy_lock:
-            if ok:
+            if ok and not access_error:
                 _narrator_policy.confirm(message, time.monotonic())
                 _refresh_narrator()
             else:
                 _narrator_policy.confirmation = None
                 # Failure is an immediate action result, not a repeated awareness event.
                 _narrator_policy.event = (message, "alert", time.monotonic() + 30)
+                _narrator_policy.record_activity(message, time.monotonic(), time.time())
                 if _set_narrator(message, "alert"):
                     _broadcast_narrator_update()
         from routers.actions_engine import _append_receipt
         _append_receipt({"ts": S.now_iso(), "kind": "dashboard_action", "action_id": action_id,
                          "ok": ok, "summary": message, "receipt": receipt})
         _broadcast_action_update()
+        if access_error:
+            raise access_error
+        recheck_access()
         next_action = get_top_action()
+        recheck_access()
         return {"ok": ok, "receipt": receipt, "next_action": next_action["id"] if next_action else None}
+    except Exception:
+        # An audit failure must not turn revoked access into a different public
+        # error or expose the attempted action's private result.
+        if not access_error:
+            try:
+                recheck_access()
+            except HTTPException:
+                pass
+        if access_error:
+            if outcome_received:
+                with _action_lock:
+                    _action_queue[:] = [queued for queued in _action_queue if queued["id"] != action_id]
+            raise access_error from None
+        raise
     finally:
         with _action_lock:
             _inflight_actions.discard(action_id)
 
 
 @router.post("/action/confirm")
-def post_action_confirm(req: ConfirmRequest, _=Depends(require_session)):
-    return _execute_dashboard_action(req.action_id)
+def post_action_confirm(req: ConfirmRequest, check=Depends(browser_control_access), _=Depends(require_session)):
+    return _execute_dashboard_action(req.action_id, check=check)
 
 
 @router.post("/action/dismiss")
-def post_action_dismiss(req: DismissRequest, _=Depends(require_session)):
+def post_action_dismiss(req: DismissRequest, check=Depends(browser_control_access), _=Depends(require_session)):
     """Snooze the dismissed action for snooze_minutes (default 60)."""
     snooze_until = time.time() + req.snooze_minutes * 60
     with _action_lock:
+        check()
         _prune_disk_actions(time.time())
+        check()
         for action in _action_queue:
             if action["id"] == req.action_id:
                 key = _disk_key(action)
                 if key:
                     if key not in _disk_snoozes and len(_disk_snoozes) >= 256:
                         raise HTTPException(status_code=409, detail="Too many snoozed drives. Try again after a snooze expires.")
+                check()
+                if key:
                     _disk_snoozes[key] = snooze_until
                 action["snoozed_until_ts"] = snooze_until
                 break
@@ -1429,9 +1585,10 @@ def post_action_dismiss(req: DismissRequest, _=Depends(require_session)):
 
     _broadcast_action_update()
     log_debug("dashboard_presence", "info", f"Action dismissed for {req.snooze_minutes}m: {req.action_id}")
+    check()
     return {"ok": True, "snoozed_until": snooze_until}
 
 
 @router.post("/action/secondary")
-def post_action_secondary(req: ConfirmRequest, _=Depends(require_session)):
-    return _execute_dashboard_action(req.action_id, secondary=True)
+def post_action_secondary(req: ConfirmRequest, check=Depends(browser_control_access), _=Depends(require_session)):
+    return _execute_dashboard_action(req.action_id, secondary=True, check=check)

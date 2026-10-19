@@ -98,6 +98,28 @@ def test_full_release_keeps_dependencies_runtime_and_excludes_private_files(pack
             assert info.create_system == 3 and (info.external_attr >> 16) & 0o111 == 0o111
         assert archive.getinfo("backend/main.py").compress_type == zipfile.ZIP_DEFLATED
     assert '"frontend_only": false' in capsys.readouterr().out
+
+
+def test_optional_task_sonos_voice_setup_ships_without_models_or_generated_audio(package_root):
+    additions = {
+        "backend/requirements-sonos.txt": "soco>=0.31,<1",
+        "backend/requirements-voice.txt": "faster-whisper>=1.2,<2",
+        "docs/TLI_TASK_AGENT.md": "Task setup",
+        "docs/TLI_SONOS.md": "Sonos setup",
+        "docs/TLI_HOST_VOICE.md": "Host voice setup",
+        "backend/models/voice/model.bin": "private installed model",
+        "data/voice/generated.wav": "private generated clip",
+    }
+    for name, content in additions.items():
+        path = package_root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    output = package_root / "optional.zip"
+    packager.build(output)
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        assert set(list(additions)[:5]) <= names
+        assert not set(list(additions)[5:]) & names
     assert (package_root / "data/intelligence/private.json").read_text() == "private data"
 
 

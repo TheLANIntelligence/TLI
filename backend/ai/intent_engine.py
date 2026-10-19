@@ -16,6 +16,7 @@ import time
 import requests
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+from fastapi import HTTPException
 from device_resolution import resolve, label, normalize, DEFAULT_ALIASES
 from .status_answers import is_status_question
 from action_results import driver_succeeded
@@ -400,9 +401,9 @@ _SHELLY_TIMEOUT = 5
 _TOOL_TIMEOUT = 15
 
 
-def execute_action(base_url: str, intent: Dict[str, Any]) -> ActionResult:
+def execute_action(base_url: str, intent: Dict[str, Any], *, check=None) -> ActionResult:
     """
-    Execute an action and return ActionResult (never None, never raises).
+    Return ActionResult; captured browser authorization failures propagate.
     """
     itype = intent.get("type", "")
     base = base_url.rstrip("/") + "/"
@@ -414,7 +415,7 @@ def execute_action(base_url: str, intent: Dict[str, Any]) -> ActionResult:
         elif itype == "shelly_status":
             result = _exec_shelly_status(base, intent, t0)
         elif itype == "tool_run":
-            result = _exec_tool_run(base, intent, t0)
+            result = _exec_tool_run(base, intent, t0, check=check)
         elif itype == "diagnostic":
             result = _exec_diagnostic(base, intent, t0)
         elif itype == "cleanup_run":
@@ -428,11 +429,21 @@ def execute_action(base_url: str, intent: Dict[str, Any]) -> ActionResult:
             success=result.success,
             elapsed_ms=result.elapsed_ms,
         )
+        if callable(check):
+            check()
         return result
 
+    except HTTPException as error:
+        if callable(check) and error.status_code in (401, 403):
+            raise
+        return ActionResult.fail(str(error.detail), elapsed_ms=int((time.time() - t0) * 1000))
     except Exception as e:
+        if callable(check):
+            check()
         elapsed = int((time.time() - t0) * 1000)
         _log_action("action_exception", type=itype, error=str(e), elapsed_ms=elapsed)
+        if callable(check):
+            check()
         return ActionResult.fail(f"Unexpected error executing action: {e}", elapsed_ms=elapsed)
 
 
@@ -549,24 +560,14 @@ def _exec_shelly_status(base: str, intent: Dict, t0: float) -> ActionResult:
         )
 
 
-def _exec_tool_run(base: str, intent: Dict, t0: float) -> ActionResult:
+def _exec_tool_run(base: str, intent: Dict, t0: float, *, check=None) -> ActionResult:
     tool_id = intent.get("tool_id", "")
-
+    if not callable(check):
+        return ActionResult.fail("Open Tools in an authorized TLI browser to run this diagnostic. No tool was run.")
     try:
-        r = requests.post(
-            base + "tools/run",
-            json={"tool_id": tool_id},
-            timeout=_TOOL_TIMEOUT,
-        )
+        from routers.tool_routes import run_builtin_tool
+        data = run_builtin_tool(tool_id, None, check)
         elapsed = int((time.time() - t0) * 1000)
-
-        if not r.ok:
-            return ActionResult.fail(
-                f"Tool `{tool_id}` failed with HTTP {r.status_code}.",
-                elapsed_ms=elapsed,
-            )
-
-        data = r.json()
         output = data.get("output", "")
 
         try:
@@ -577,16 +578,15 @@ def _exec_tool_run(base: str, intent: Dict, t0: float) -> ActionResult:
                 output = output[:500] + "..."
             msg = f"**{tool_id}** result:\n```\n{output}\n```"
 
+        check()
         return ActionResult.ok(msg, elapsed_ms=elapsed)
 
-    except requests.Timeout:
+    except HTTPException as error:
+        if error.status_code in (401, 403):
+            raise
+        check()
         return ActionResult.fail(
-            f"Tool `{tool_id}` timed out after {_TOOL_TIMEOUT} seconds.",
-            elapsed_ms=int((time.time() - t0) * 1000),
-        )
-    except requests.ConnectionError:
-        return ActionResult.fail(
-            f"Couldn't reach TLI tools endpoint. Check server.",
+            str(error.detail),
             elapsed_ms=int((time.time() - t0) * 1000),
         )
 

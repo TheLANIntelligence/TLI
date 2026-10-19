@@ -13,6 +13,11 @@ def fresh_observation(state, wall_now):
             and -5 <= wall_now - probed < 30 and not state.get("probe_error"))
 
 
+def valid_percent(value):
+    """A missing or malformed percentage is unknown, never a zero reading."""
+    return (type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100)
+
+
 def valid_disks(state):
     """Keep absent/invalid measurements unknown, including bools and NaN."""
     disks = state.get("disk_pct_by_drive")
@@ -20,7 +25,7 @@ def valid_disks(state):
         return {}
     return {mount: value for mount, value in disks.items()
             if isinstance(mount, str) and mount and len(mount) <= 1024 and "\x00" not in mount
-            and type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 100}
+            and valid_percent(value)}
 
 
 @dataclass
@@ -56,6 +61,8 @@ class NarratorPolicy:
         self.check_in_index = 0
         self.recovery: tuple[str, float] | None = None
         self.monitoring_lost = False
+        self.activity: dict | None = None
+        self.activity_expires = 0.0
 
     def set_mode(self, mode):
         if mode not in {"quiet", "balanced", "detailed"}:
@@ -92,8 +99,19 @@ class NarratorPolicy:
     def confirm(self, text: str, now: float) -> None:
         self.confirmation = (text, now + 10)
 
+    def record_activity(self, text: str, now: float, wall_now: float, observed_at=None) -> None:
+        """Retain the event's original time independently of headline selection."""
+        if (type(observed_at) not in (int, float) or not math.isfinite(observed_at)
+                or observed_at <= 0 or observed_at > wall_now + 5):
+            observed_at = wall_now
+        expires_at = min(observed_at, wall_now) + 30
+        self.activity = {"text": text[:500], "observed_at": observed_at, "expires_at": expires_at}
+        self.activity_expires = now + max(0, expires_at - wall_now)
+
     def render(self, state: dict, now: float, wall_now: float,
                event: dict | None = None) -> tuple[str, str]:
+        state = {**state, **{key: value if valid_percent(value := state.get(key)) else None
+                            for key in self.pressure}}
         probed = state.get("probed_ts", 0)
         stale = not fresh_observation(state, wall_now)
         unavailable = bool(state.get("probe_error"))
@@ -134,6 +152,7 @@ class NarratorPolicy:
                 kind = "alert" if severity in {"warn", "warning", "alert", "critical", "error"} else "status"
                 rank = 2 if severity == "critical" else 1 if kind == "alert" else 0
                 message = (text, kind, now + 30)
+                self.record_activity(text, now, wall_now, event.get("ts"))
                 spacing = 8 if self.mode != "detailed" else 6
                 if not self.event or now >= self.event[2] or rank > self.event_rank or (now - self.event_started >= spacing and not self.pending_events):
                     self.event, self.event_started, self.event_rank = message, now, rank

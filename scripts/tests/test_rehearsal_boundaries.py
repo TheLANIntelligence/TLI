@@ -52,11 +52,14 @@ def test_actual_isolated_https_restart_and_authentication(tmp_path):
     # pytest process's HTTP clients. No guard in that process is weakened.
     completed = subprocess.run([sys.executable, str(SCRIPTS / "https_rehearsal.py"), "--code-dir", str(SCRIPTS.parent),
         "--data-root", str(root), "--report-path", str(root / "report.json")], env=clean_environment(),
-        capture_output=True, text=True, timeout=100)
+        capture_output=True, text=True, timeout=100,
+        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
     assert (root / "report.json").exists(), completed.stderr
     report = json.loads((root / "report.json").read_text())
     assert report["status"] == "passed", json.dumps(report)
     assert report["owned_processes_stopped"] is True
+    assert report["checks"]["browser_origin_enforced"]
+    assert report["checks"]["native_history_rejects_browser_cookie"]
     assert report["checks"]["saved_bearer_and_identity"]
     assert report["checks"]["bounded_request_drain_and_lifespan_cleanup"]
     assert report["checks"]["activity_review_and_restart_gap_preserved"]

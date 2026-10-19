@@ -150,7 +150,8 @@ def test_write_permission_failure_is_actionable_and_preserves_existing(kind, mon
     assert path.read_bytes() == original and key.read_bytes() == key_bytes
 
 
-def test_corrupt_conversation_is_visible_to_both_existing_history_routes(client):
+def test_corrupt_conversation_is_visible_to_both_existing_history_routes(local_browser_client):
+    client = local_browser_client
     path = Path(S.CONVERSATIONS_FILE)
     path.write_text('invalid JSON')
     assert client.get('/api/ai/conversations').status_code == 503

@@ -24,7 +24,7 @@
       let message = typeof result?.detail === 'string' ? result.detail : `Request failed (${response.status}).`;
       if (response.status === 401) message = 'Unlock TLI with your owner PIN, then refresh this section.';
       else if (response.status === 404 && ['/startup', '/setup'].includes(path)) {
-        message = `The running TLI server does not provide ${path === '/startup' ? 'startup settings' : 'phone pairing setup'}. On the host computer, check that you are using the matching TLI installation. If its files were updated, stop and start TLI normally. Refreshing this page alone cannot add this feature.`;
+        message = `The running TLI server does not provide ${path === '/startup' ? 'connection settings' : 'phone pairing setup'}. On the host computer, check that you are using the matching TLI installation. If its files were updated, stop and start TLI normally. Refreshing this page alone cannot add this feature.`;
       } else if (response.status === 403) {
         message += /https/i.test(message) ? ' Open TLI using its HTTPS address before trying again.' : ' Use the TLI browser page on the host, unlocked with its owner PIN.';
       }
@@ -79,120 +79,6 @@
     function clear() { epoch++; active = false; pending?.abort(); pending = null; clearDetails(); setup.open = false; status.textContent = 'Check Host Start setup after unlocking this TLI.'; button.disabled = true; }
     return { section, clear, activate() { active = true; button.disabled = false; } };
   }
-  function startupControls() {
-    let pendingRead = null, pendingSave = null;
-    const loopbacks = ['127.0.0.1', 'localhost', '::1'];
-    const state = { record: null, available: false, epoch: 0, read: 0, reading: false, saving: false, dirty: false, reviewed: null, localHost: '127.0.0.1' };
-    const section = node('section', null, 'native-companion-startup'); section.id = 'native-companion-startup'; section.setAttribute('aria-label', 'Persistent startup settings');
-    section.append(node('h4', 'Host startup & network access'), node('p', 'Choose how this computer hosts TLI after its next normal start, with or without a paired phone. Saving does not restart TLI or change your current connection.'));
-    const current = node('p', '', 'native-companion-startup-current'); current.id = 'native-startup-current';
-    current.textContent = 'Browser currently connected to: ' + (window.location?.origin || 'Origin unavailable');
-    const summary = node('div', null, 'native-companion-startup-summary'); summary.id = 'native-startup-summary';
-    const status = node('p', 'Refresh connection setup to read startup settings.', 'native-companion-status'); status.id = 'native-startup-status'; status.setAttribute('role', 'status');
-    const form = node('div', null, 'native-companion-startup-form'); form.hidden = true;
-    const modeLabel = node('label', 'Access after the next start');
-    const mode = node('select'); mode.id = 'native-startup-mode';
-    for (const [value, title] of [['local', 'Only this computer'], ['lan', 'Secure home-network access']]) { const option = node('option', title); option.value = value; mode.append(option); }
-    modeLabel.append(mode);
-    const portLabel = node('label', 'Port after the next start');
-    const port = node('input'); port.id = 'native-startup-port'; port.type = 'number'; port.inputMode = 'numeric'; port.min = '1'; port.max = '65535'; port.step = '1'; portLabel.append(port);
-    const httpsLabel = node('label', null, 'native-companion-startup-https');
-    const https = node('input'); https.id = 'native-startup-https'; https.type = 'checkbox';
-    httpsLabel.append(https, node('span', 'Use HTTPS for this computer'));
-    const explanation = node('p', 'Secure home-network access requires HTTPS and a valid owner PIN. The native Companion connects after TLI is restarted in that mode.');
-    const reviewButton = node('button', 'Review startup change', 'btn-outline'); reviewButton.type = 'button'; reviewButton.id = 'native-startup-review';
-    const review = node('div', null, 'native-companion-startup-review'); review.id = 'native-startup-review-box'; review.hidden = true;
-    const reviewText = node('p'); reviewText.id = 'native-startup-review-text';
-    const save = node('button', 'Save startup settings', 'btn-primary'); save.id = 'native-startup-save'; save.type = 'button';
-    const cancel = node('button', 'Keep editing', 'btn-outline'); cancel.type = 'button';
-    review.append(reviewText, save, cancel); form.append(modeLabel, portLabel, httpsLabel, explanation, reviewButton, review);
-    section.append(current, summary, status, form);
-    const validPort = value => Number.isInteger(value) && value >= 1 && value <= 65535;
-    const validHost = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
-    const validConfig = (value, unknown = false) => value && (validHost(value.host) || unknown && value.host === null) && validPort(value.port) && typeof value.https === 'boolean';
-    function valid(data) {
-      return data?.ok === true && typeof data.configured === 'boolean' && validConfig(data.saved) && [...loopbacks, '0.0.0.0'].includes(data.saved.host) &&
-        (data.saved.host !== '0.0.0.0' || data.saved.https === true) && validConfig(data.effective_next) && validConfig(data.running, true) &&
-        (typeof data.restart_required === 'boolean' || data.restart_required === null) && Array.isArray(data.environment_overrides) && data.environment_overrides.length <= 30 &&
-        data.environment_overrides.every(name => typeof name === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(name));
-    }
-    function tell(text, error = false) { status.textContent = text; status.classList.toggle('error', error); }
-    const describe = config => `${config.https ? 'HTTPS' : 'HTTP'} · ${config.host || 'bind address unconfirmed'} · port ${config.port}`;
-    function disabled(value) { [mode, port, https, reviewButton, save, cancel].forEach(control => { control.disabled = value; }); }
-    function invalidateReview() { state.reviewed = null; review.hidden = true; }
-    function choices() { httpsLabel.hidden = mode.value === 'lan'; if (mode.value === 'lan') https.checked = true; }
-    function paint(data, replaceDraft = false) {
-      state.record = data; state.available = true;
-      summary.replaceChildren(node('p', 'Running now: ' + describe(data.running)),
-        node('p', (data.configured ? 'Saved startup: ' : 'Default startup (not yet saved): ') + describe(data.saved)),
-        node('p', 'Effective next startup: ' + describe(data.effective_next)),
-        node('p', data.restart_required === null ? 'The current bind address is unconfirmed. Check the next launcher output after a manual restart.' : data.restart_required ? 'A manual restart is required for the effective next startup settings.' : 'Running and effective next startup settings match.'));
-      if (data.environment_overrides.length) summary.append(node('p', 'Environment overrides: ' + data.environment_overrides.join(', ') + '. These take precedence over saved startup settings. Review the environment used by your launcher before restarting.', 'native-companion-startup-warning'));
-      if (!state.dirty || replaceDraft) {
-        state.localHost = loopbacks.includes(data.saved.host) ? data.saved.host : '127.0.0.1';
-        mode.value = data.saved.host === '0.0.0.0' ? 'lan' : 'local'; port.value = String(data.saved.port); https.checked = data.saved.https;
-        state.dirty = false; invalidateReview(); choices();
-      }
-      form.hidden = false;
-    }
-    function changed() { state.dirty = true; invalidateReview(); choices(); tell('Change not saved. Review it before saving.'); }
-    mode.addEventListener('change', changed); https.addEventListener('change', changed); port.addEventListener('input', changed);
-    reviewButton.addEventListener('click', () => {
-      if (state.reading || state.saving || pendingSave || !state.record || !state.available) return;
-      const value = String(port.value).trim();
-      if (!/^[1-9][0-9]{0,4}$/.test(value) || !validPort(Number(value))) { tell('Use a whole-number port from 1 to 65535.', true); return; }
-      state.reviewed = { host: mode.value === 'lan' ? '0.0.0.0' : state.localHost, port: Number(value), https: mode.value === 'lan' || https.checked };
-      reviewText.textContent = `Save ${mode.value === 'lan' ? 'secure home-network access' : 'access from this computer only'}: ${describe(state.reviewed)}. This changes the saved startup configuration. Your current browser connection (${window.location?.origin || 'origin unavailable'}) stays as it is until you stop TLI and start it again normally.` +
-        (state.record.environment_overrides.length ? ' Existing environment overrides still take precedence; the effective next startup may differ.' : '');
-      review.hidden = false; tell('Review the change, then choose Save startup settings.');
-    });
-    cancel.addEventListener('click', () => { if (!state.saving) { invalidateReview(); tell('Change not saved. You can keep editing.'); } });
-    save.addEventListener('click', async () => {
-      if (state.saving || pendingSave || state.reading || !state.reviewed || !state.record || !state.available) return;
-      const candidate = { ...state.reviewed }, epoch = state.epoch;
-      state.saving = true; disabled(true); tell('Saving startup settings…');
-      try {
-        pendingSave = api('/startup', 'PUT', candidate);
-        const result = await pendingSave;
-        if (epoch !== state.epoch) return;
-        if (!valid(result) || result.saved.host !== candidate.host || result.saved.port !== candidate.port || result.saved.https !== candidate.https) throw new Error('TLI did not confirm the reviewed startup settings.');
-        paint(result, true);
-        tell(result.environment_overrides.length ? 'Startup settings saved. Environment overrides still take precedence. TLI has not been restarted.' : result.restart_required === false ? 'Startup settings saved. Running and effective next startup settings match.' : 'Startup settings saved. Stop TLI normally and start it with its launcher when ready. It has not been restarted.');
-      } catch (error) {
-        if (epoch !== state.epoch) return;
-        if (error.status === 401) { clear(); return; }
-        if (error.status === 404) { state.available = false; invalidateReview(); }
-        tell(error.message + (error.status === 404 ? ' This change was not confirmed. Your draft and previous settings remain visible.' : ' The saved change was not confirmed. Your reviewed choices and the previous settings remain visible; refresh to check before trying again.'), true);
-      } finally { pendingSave = null; if (epoch === state.epoch) { state.saving = false; disabled(!state.available); } }
-    });
-    async function load() {
-      const requestedEpoch = state.epoch;
-      if (pendingRead) { await pendingRead.catch(() => {}); }
-      if (pendingSave) { await pendingSave.catch(() => {}); }
-      if (requestedEpoch !== state.epoch) return;
-      if (state.saving || state.reading) return;
-      const epoch = state.epoch, read = ++state.read; state.reading = true; state.available = false; disabled(true); invalidateReview(); tell('Reading startup settings…');
-      try {
-        pendingRead = api('/startup');
-        const data = await pendingRead;
-        if (epoch !== state.epoch || read !== state.read) return;
-        if (!valid(data)) throw new Error('TLI returned incomplete startup settings.');
-        paint(data); tell(state.dirty ? 'Startup settings refreshed. Your unsaved choices are still in the form; review them again before saving.' : 'Startup settings loaded. Review a change before saving it.');
-      } catch (error) {
-        if (epoch !== state.epoch || read !== state.read) return;
-        if (error.status === 401) { clear(); return; }
-        tell(error.message + (state.record ? ' Previous startup details may be out of date; editing is unavailable until settings can be read again.' : error.status === 404 ? '' : ' Startup controls are unavailable. Recheck after resolving the issue.'), true);
-      } finally { pendingRead = null; if (epoch === state.epoch && read === state.read) { state.reading = false; disabled(!state.available); } }
-    }
-    function clear() {
-      state.epoch++; state.read++; state.record = null; state.available = false; state.reviewed = null; state.reading = false; state.saving = false; state.dirty = false;
-      summary.replaceChildren(); form.hidden = true; review.hidden = true; mode.value = 'local'; port.value = ''; https.checked = false; disabled(false);
-      tell('Unlock TLI with your owner PIN, then refresh startup settings.');
-    }
-    window.addEventListener('tli-session-locked', clear); window.addEventListener('pagehide', clear);
-    function suspend() { state.epoch++; state.read++; state.reading = false; state.saving = false; state.available = false; invalidateReview(); disabled(true); }
-    return { section, load, clear, suspend, available: () => state.available };
-  }
   function start() {
     const panel = document.getElementById('panel-companion');
     if (!panel) return;
@@ -200,25 +86,24 @@
     if (section.dataset.companionBound) return;
     section.id = 'native-companion-settings'; section.className = 'native-companion'; section.dataset.companionBound = '1';
     const body = node('div', null, 'native-companion-body');
-    const state = {active:false, locked:false, epoch:0, setup:null, checkedAt:null, selectedOrigin:'', devices:null, devicesCheckedAt:null, loading:null, mutation:null, remoteReceipt:null, remotePhase:'unknown'};
+    const state = {active:false, locked:false, epoch:0, setup:null, checkedAt:null, selectedOrigin:'', devices:null, devicesCheckedAt:null, loading:null, mutation:null, remoteReceipt:null, remotePhase:'unknown',flowPrepared:true};
     const requests = new Set(); let expiryTimer = null;
-    const startup = startupControls();
     const hostStart = hostStartControls();
     const header = node('div', null, 'native-companion-overview');
     const intro = node('div', null, 'native-companion-intro');
-    intro.append(node('span', 'COMPANION · PRIVATE BETA', 'native-companion-eyebrow'), node('h2', 'Your phone. Your TLI.'),
-      node('p', 'Connect the installed iPhone or Android app to this TLI computer. Your phone uses the host’s AI, saved conversations and existing tools.'));
+    intro.append(node('span', 'TLI ON ANDROID · PRIVATE BETA', 'native-companion-eyebrow'), node('h2', 'Your personal AI, on your phone.'),
+      node('p', 'Ask questions, write, learn and continue your conversations from your phone. This computer keeps your workspace and needs to stay on.'));
     const refresh = node('button', 'Refresh connection setup', 'btn-outline'); refresh.type='button'; refresh.id='native-companion-refresh';
     header.append(intro, refresh);
     const status=node('p','Open this page to check the connection.','native-companion-status'); status.id='native-companion-status'; status.setAttribute('role','status');
     const steps=node('ol',null,'native-companion-steps'); steps.setAttribute('aria-label','Phone connection steps');
     const content=node('div',null,'native-companion-sections'); const blocks={};
-    for (const [index, key, title, hint] of [[1,'access','Owner access','Protect your TLI account'],[2,'connection','Secure connection','Check this host’s LAN access'],[3,'pair','Pair your phone','Create a private invitation'],[4,'devices','Paired phones','Review or remove access']]) {
+    for (const [index, key, title, hint] of [[0,'access','Owner access','Protect your workspace'],[1,'connection','Prepare this computer','Only the setup you need'],[2,'install','Install the Android app','Get the current beta'],[3,'pair','Scan and connect','Use the scanner in TLI'],[4,'chat','Start chatting','Continue on your phone'],[0,'devices','Saved phone access','Review or remove access']]) {
       const item=node('li'), button=node('button',null,'native-companion-step-link');button.type='button';button.dataset.companionStep=key;
       button.append(node('span',String(index),'native-companion-step-number'),node('strong',title),node('span',hint));
-      button.addEventListener('click',()=>focusStep(key));item.append(button);steps.append(item);
+      button.addEventListener('click',()=>focusStep(key));item.append(button);if(index)steps.append(item);
       const block=node('section',null,'native-companion-step');block.id='native-companion-step-'+key;
-      const heading=node('h3',title);heading.tabIndex=-1;heading.id=block.id+'-title';block.setAttribute('aria-labelledby',heading.id);
+      const heading=node('h3',index?index+' · '+title:title);heading.tabIndex=-1;heading.id=block.id+'-title';block.setAttribute('aria-labelledby',heading.id);
       const badge=node('span','Not checked','native-companion-step-status');badge.dataset.state='unknown';badge.id='native-companion-'+key+'-state';
       const head=node('div',null,'native-companion-step-head');head.append(heading,badge);block.append(head);content.append(block);blocks[key]={block,heading,badge};
     }
@@ -226,26 +111,45 @@
     const accessButton=node('button','Open access settings','btn-outline');accessButton.type='button';accessButton.id='native-companion-open-access';
     accessButton.addEventListener('click',()=>{
       if(state.locked&&window.TLIPinLock?.showRecovery){window.TLIPinLock.showRecovery('Unlock TLI with your owner PIN to connect a phone.');return;}
+      window.TLIConnectDevice?.close?.();
       if(typeof window.switchPanel==='function')window.switchPanel('panel-settings');
       window.TLISettingsWorkspace?.open?.('access','settings-section-security');
     });
     blocks.access.block.append(accessCopy,accessButton);
     const connectionCopy=node('p','HTTPS, a reachable LAN address and a matching certificate are checked here.');connectionCopy.id='native-companion-connection-copy';
     const originText=node('p','Current browser: '+(window.location?.origin||'Address unavailable'),'native-companion-address');
-    const advanced=node('details',null,'native-companion-advanced');advanced.id='native-companion-startup-details';
-    advanced.append(node('summary','Review host startup & network settings'),startup.section);
-    const restartHelp=node('p','Saving startup settings does not restart TLI. After a normal host restart, open the HTTPS address printed by the launcher, unlock with your PIN and return here.','native-companion-help');
-    blocks.connection.block.append(connectionCopy,originText,advanced,restartHelp);
-    const pairCopy=node('p','Open the installed TLI Companion app and choose Scan pairing QR. Both devices need the same home network.');
+    const prepare=node('button','Prepare this computer','btn-primary');prepare.type='button';prepare.id='native-companion-prepare';prepare.addEventListener('click',()=>window.TLIConnectDevice?.open({kind:'phone'}));
+    blocks.connection.block.append(connectionCopy,prepare);
+    const downloadURL='https://thelanintelligence.com/download/#android';
+    const installLayout=node('div',null,'native-companion-install-layout'),installCopy=node('div');
+    const download=node('a','Get TLI for Android','btn-primary');download.id='native-companion-download';download.href=downloadURL;download.target='_blank';download.rel='noopener noreferrer';
+    const installQR=node('img');installQR.id='native-companion-install-qr';installQR.src='/assets/companion-install.svg';installQR.alt='Public Android download link. Scan with your phone camera to get TLI.';installQR.width=180;installQR.height=180;
+    const installed=node('button','I have the Android app','btn-outline');installed.type='button';installed.id='native-companion-installed';
+    let appInstalled=false,chatOpened=false;
+    const installStatus=node('p','Scan this public download code with your phone camera. It opens the download page; it does not pair your phone.','native-companion-help');
+    installCopy.append(node('p','Install the current TLI Android beta on your phone, then return here. Keep your phone and this computer on the same home network.'),download,installStatus,installed);
+    installLayout.append(installQR,installCopy);blocks.install.block.append(installLayout);
+    const installAgain=node('button','Show app download','btn-outline');installAgain.type='button';installAgain.id='native-companion-install-again';installAgain.hidden=true;
+    blocks.install.block.append(installAgain);
+    installed.addEventListener('click',()=>{if(!current(state.epoch))return;appInstalled=true;paintFlow();focusStep('pair');});
+    installAgain.addEventListener('click',()=>{appInstalled=false;paintFlow();focusStep('install');});
+    const pairCopy=node('p','In the Android app, choose Scan pairing QR. Scan the private code below, review this computer’s name, then confirm on your phone.');
     const controls=node('div',null,'native-companion-controls');
     const label=node('label','TLI’s address on your home network'),select=node('select');select.id='native-companion-origin';select.setAttribute('aria-label','TLI LAN address');label.append(select);
     const generate=node('button','Create pairing QR','btn-primary');generate.type='button';generate.id='native-companion-generate';generate.disabled=true;
-    controls.append(label,generate);
+    const addressDetails=node('details',null,'native-companion-address-details');addressDetails.id='native-companion-address-details';addressDetails.append(node('summary','Connection address and alternatives'),label,originText);
+    controls.append(generate);
     const addressHelp=node('p','Choose the Ethernet or Wi-Fi address on the same network as your phone. Virtual-machine and disconnected-adapter addresses may not be reachable from your phone.','native-companion-help');addressHelp.id='native-companion-address-help';select.setAttribute('aria-describedby',addressHelp.id);
     const pairing=node('div',null,'native-companion-pairing');pairing.id='native-companion-pairing';pairing.hidden=true;
     const pairNotice=node('p','Complete the owner and connection checks before creating a code.','native-companion-help');pairNotice.id='native-companion-pair-status';pairNotice.setAttribute('role','status');
     const inviteHelp=node('p','Codes are single use and expire after five minutes. Hiding a code or leaving this page does not revoke its invitation.','native-companion-help');
-    blocks.pair.block.append(pairCopy,controls,addressHelp,pairNotice,pairing,inviteHelp);
+    addressDetails.append(addressHelp);
+    blocks.pair.block.append(pairCopy,controls,pairNotice,pairing,inviteHelp,addressDetails);
+    const scanDone=node('button','I have scanned the code','btn-outline');scanDone.id='native-companion-scan-done';scanDone.type='button';scanDone.hidden=true;blocks.pair.block.append(scanDone);
+    scanDone.addEventListener('click',()=>{if(!current(state.epoch))return;chatOpened=true;paintFlow();focusStep('chat');});
+    blocks.chat.block.append(node('p','Once the app confirms your connection, open Chat on your phone. Start a new conversation or continue one from this computer.'),node('p','Try “Help me plan my week” or “Explain something I’m learning.” Photos, documents and saved notes are there when you need them.'));
+    const chatStatus=node('p','Your phone checks its connection and AI availability. A saved phone below confirms access was granted; it does not mean the phone is online.','native-companion-help');chatStatus.id='native-companion-chat-status';blocks.chat.block.append(chatStatus);
+    const checkPhones=node('button','Refresh saved phone access','btn-outline');checkPhones.type='button';checkPhones.id='native-companion-check-phones';checkPhones.addEventListener('click',()=>current(state.epoch)?loadDevices(state.epoch):undefined);blocks.chat.block.append(checkPhones);
     const devicesNotice=node('p','Paired phones have not been checked.','native-companion-help');devicesNotice.id='native-companion-devices-status';devicesNotice.setAttribute('role','status');
     const devices=node('div',null,'native-companion-devices');devices.id='native-companion-devices';
     blocks.devices.block.append(node('p','Removing access disconnects that phone from this host. It must pair again to reconnect.'),devicesNotice,devices);
@@ -270,17 +174,27 @@
     remoteBody.append(node('p','Reach your existing paired HTTPS address through an externally managed private network. This is optional; normal home-network pairing stays the same.'),remoteStatus,remotePlan,remoteActions,guide,
       node('p','This workflow uses a routed private LAN IPv4 address. Link-local (169.254), direct Tailscale (100.x), public URLs and MagicDNS names are not supported here. Keep the existing TLS certificate; do not disable verification or publish TLI through a public tunnel.','native-companion-help'),
       node('p','Remote traffic crosses the Internet through your chosen encrypted private network. Its account, gateway availability and access policy are managed outside TLI. A desktop check cannot verify your phone’s remote path.','native-companion-help'),links);
-    remote.append(remoteSummary,remoteBody);content.append(hostStart.section,remote);
-    const note=node('p','This page connects the native TLI Companion app. Browser satellite access is a separate connection.','native-companion-footer');
+    remote.append(remoteSummary,remoteBody);
+    const management=node('details',null,'native-companion-management');management.id='native-companion-management';management.append(node('summary','Saved phones and advanced connection options'),blocks.devices.block,blocks.access.block,hostStart.section,remote);
+    const ios=node('details',null,'native-companion-ios');ios.id='native-companion-ios';ios.append(node('summary','iPhone and other ways to connect'),node('p','The guided app setup is for Android. Existing iPhone beta pairings keep their access. An iPhone beta needs a reviewed IPv4 address; hostname recovery is currently Android-only. You can also open this host’s HTTPS address in your phone browser and unlock with your owner PIN.'));
+    management.append(ios);content.append(management);
+    const note=node('p','Keep this computer awake with TLI running. Away-from-home access is an optional private-network setup under advanced options.','native-companion-footer');
     body.append(header,status,steps,content,note);section.append(body);panel.append(section);
 
     function current(epoch){return state.active&&!state.locked&&!document.hidden&&epoch===state.epoch;}
-    function notice(text,error=false){status.textContent=text;status.classList.toggle('error',error);}
+    function notice(text,error=false){status.textContent=text;status.classList.toggle('error',error);status.hidden=!!embeddedAt&&!error&&ready();}
     function badge(key,text,kind='unknown'){blocks[key].badge.textContent=text;blocks[key].badge.dataset.state=kind;}
-    function focusStep(key){if(key==='remote'){remote.open=true;remoteSummary.focus?.({preventScroll:true});remote.scrollIntoView?.({block:'start'});return;}const step=blocks[key];if(step){step.heading.focus?.({preventScroll:true});step.block.scrollIntoView?.({block:'start'});}}
-    function ready(){return state.setup?.pairing_ready===true&&/^https:/.test(window.location?.origin||'')&&current(state.epoch);}
+    function focusStep(key){if(key==='remote'){management.open=true;remote.open=true;remoteSummary.focus?.({preventScroll:true});remote.scrollIntoView?.({block:'start'});return;}if(['access','devices'].includes(key))management.open=true;const step=blocks[key];if(step){step.heading.focus?.({preventScroll:true});step.block.scrollIntoView?.({block:'start'});}}
+    function paintFlow(){
+      const prepared=ready();
+      blocks.connection.block.hidden=!!embeddedAt||prepared;
+      blocks.install.block.hidden=!prepared;installLayout.hidden=appInstalled;installAgain.hidden=!appInstalled;
+      blocks.pair.block.hidden=!prepared||!appInstalled;blocks.chat.block.hidden=!prepared||!chatOpened;
+      scanDone.hidden=pairing.hidden;controls.hidden=!pairing.hidden;badge('install',appInstalled?'App installed':'Next step',appInstalled?'ready':'needed');badge('chat','Confirm on your phone','unknown');
+    }
+    function ready(){return state.flowPrepared&&state.setup?.pairing_ready===true&&/^https:/.test(window.location?.origin||'')&&current(state.epoch);}
     function canPair(){return ready()&&!!state.selectedOrigin&&state.selectedOrigin===select.value&&state.setup.origins.includes(state.selectedOrigin);}
-    function busy(){refresh.disabled=!!state.loading||!!state.mutation;remoteRefresh.disabled=!!state.loading||!!state.mutation||!current(state.epoch);generate.disabled=!canPair()||!!state.loading||!!state.mutation;select.disabled=!ready()||!!state.loading||!!state.mutation;for(const button of devices.querySelectorAll?.('button')||[])button.disabled=!!state.loading||!!state.mutation||!current(state.epoch);section.setAttribute('aria-busy',state.loading||state.mutation?'true':'false');}
+    function busy(){refresh.disabled=!!state.loading||!!state.mutation;remoteRefresh.disabled=!!state.loading||!!state.mutation||!current(state.epoch);generate.disabled=!canPair()||!!state.loading||!!state.mutation;select.disabled=!ready()||!!state.loading||!!state.mutation;checkPhones.disabled=!!state.loading||!!state.mutation||!current(state.epoch);for(const button of devices.querySelectorAll?.('button')||[])button.disabled=!!state.loading||!!state.mutation||!current(state.epoch);section.setAttribute('aria-busy',state.loading||state.mutation?'true':'false');paintFlow();}
     function privateAddress(origin){const match=/^https:\/\/((?:[0-9]+\.){3}[0-9]+)(?::([0-9]+))?$/.exec(origin||'');if(!match)return null;const parts=match[1].split('.').map(Number),canonical=parts.join('.'),port=match[2]?Number(match[2]):443;if(canonical!==match[1]||parts.some(n=>n>255)||port<1||port>65535||(match[2]&&String(port)!==match[2]))return null;const[a,b]=parts;return a===10||a===172&&b>=16&&b<=31||a===192&&b===168?{host:canonical,port}:null;}
     function acceptRemote(value){const r=value.remote_access,expected=value.origins.filter(privateAddress);if(!r||r.schema_version!==1||r.mode!=='routed_lan'||r.route_status!=='not_tested'||r.tunnel_status!=='unknown'||typeof r.host_ready!=='boolean'||r.host_ready!==!!(value.pairing_ready&&expected.length)||typeof r.checked_at!=='string'||!Number.isFinite(Date.parse(r.checked_at))||typeof r.reason!=='string'||r.reason.length>1000||!Array.isArray(r.eligible_origins)||r.eligible_origins.length!==expected.length||!r.eligible_origins.every((origin,i)=>origin===expected[i]))return false;state.remoteReceipt=r;return true;}
     function paintRemote(phase=state.remotePhase){state.remotePhase=phase;const r=state.remoteReceipt;remotePlan.replaceChildren();remoteStatus.dataset.state=phase==='current'&&r?.host_ready?'ready':'unknown';
@@ -297,7 +211,7 @@
       pairNotice.textContent=state.setup?.pairing_ready&&!/^https:/.test(window.location?.origin||'')?'Open TLI using its HTTPS address and unlock with your owner PIN before creating a code.':
         canPair()?'Ready to create a pairing code for '+state.selectedOrigin+'.':ready()?'Choose the address reachable from your phone before creating a code.':'Complete the owner and connection setup before creating a code.';
     }
-    function clearPairing(){clearTimeout(expiryTimer);expiryTimer=null;pairing.replaceChildren();pairing.hidden=true;}
+    function clearPairing(){clearTimeout(expiryTimer);expiryTimer=null;pairing.replaceChildren();pairing.hidden=true;scanDone.hidden=true;controls.hidden=false;chatOpened=false;}
     async function read(path,method='GET',data){
       const controller=new AbortController();requests.add(controller);
       const timer=setTimeout(()=>controller.abort(),15000);
@@ -308,11 +222,11 @@
       (!value.pairing_ready||value.pin_enabled&&value.tls_enabled&&value.lan_enabled&&value.certificate_ready&&value.origins.length>0);}
     function paintSetup(value){
       state.setup=value;state.checkedAt=Date.now();select.replaceChildren();
-      // An address being certificate-valid does not mean the phone can reach it.
-      // Keep a checked choice; never choose an arbitrary first adapter on a host
-      // with multiple addresses (for example, WSL or disconnected interfaces).
+      // Prefer the reviewed stable identity for Android. Literal addresses remain
+      // explicit fallbacks; never guess the first adapter or replace a prior choice.
       const previous=state.selectedOrigin;
-      state.selectedOrigin=value.origins.includes(previous)?previous:previous?'':value.origins.includes(window.location?.origin)?window.location.origin:value.origins.length===1?value.origins[0]:'';
+      const stable=value.origins.find(origin=>/^https:\/\/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.local:[0-9]+$/.test(origin));
+      state.selectedOrigin=value.origins.includes(previous)?previous:previous?'':stable|| (value.origins.includes(window.location?.origin)?window.location.origin:value.origins.length===1?value.origins[0]:'');
       const placeholder=node('option','Choose your home-network address');placeholder.value='';placeholder.disabled=true;select.append(placeholder);
       for(const origin of value.origins){const option=node('option',origin);option.value=origin;select.append(option);}
       select.value=state.selectedOrigin;
@@ -320,11 +234,8 @@
       accessButton.textContent=value.pin_enabled?'Access settings':'Set owner PIN';
       accessCopy.textContent=value.pin_enabled?'An owner PIN is enabled. Creating invitations requires this browser to be unlocked with that PIN.':'First, set an owner PIN in Access settings, then unlock TLI. This protects pairing and every phone’s access.';
       badge('connection',value.tls_enabled&&value.lan_enabled&&value.certificate_ready?'Ready':'Setup needed',value.tls_enabled&&value.lan_enabled&&value.certificate_ready?'ready':'needed');
-      connectionCopy.textContent=!value.tls_enabled?(startup.available()?'Review and save Secure home-network access below, then restart TLI normally. Saving alone does not enable pairing.':'Phone pairing needs HTTPS access from your home network. Review the startup message below before changing the connection.'):
-        !value.lan_enabled?'HTTPS is available on this computer only. Review secure home-network access below before a normal restart.':
-        !value.certificate_ready||!value.origins.length?value.reason||'No supported LAN address matches this host’s certificate. Check the host connection, then refresh.':
-        'This host reports HTTPS and a certificate matching its listed LAN addresses. Choose the address reachable from your phone.';
-      pairingGuidance();
+      connectionCopy.textContent=ready()?'This computer is prepared. Continue with the Android app.':'Use Connect phone to prepare this computer, including owner access and a reviewed restart when needed.';
+      pairingGuidance();paintFlow();
       paintRemote(acceptRemote(value)?'current':'unknown');
       busy();
     }
@@ -383,14 +294,13 @@
       const epoch=state.epoch;state.setup=null;clearPairing();paintRemote('checking');notice('Checking this host’s connection…');badge('access','Checking');badge('connection','Checking');badge('pair','Checking');
       state.loading=Promise.resolve().then(async()=>{
         if(!current(epoch))return;
-        const startupRead=startup.load();
         try{
-          const value=await read('/setup');await startupRead;if(!current(epoch))return;
+          const value=await read('/setup');if(!current(epoch))return;
           if(!validSetup(value))throw new Error('TLI returned incomplete phone connection details. Readiness is unknown.');
           paintSetup(value);if(value.pin_enabled)await loadDevices(epoch);else{state.devices=null;state.devicesCheckedAt=null;devices.replaceChildren();badge('devices','Owner access needed','needed');devicesNotice.textContent='Unlock with your owner PIN to check paired phones.';}
           if(current(epoch))notice(canPair()?'Ready to pair securely.':ready()?'Choose your home-network address to pair a phone.':'Complete connection setup to pair a phone.');
         }catch(error){
-          await startupRead;if(!current(epoch))return;
+          if(!current(epoch))return;
           if(error.status===401){lockView();return;}
           state.setup=null;paintRemote('unavailable');badge('access','Not confirmed','unavailable');badge('connection','Unavailable','unavailable');badge('pair','Unavailable','unavailable');
           accessCopy.textContent='Owner access could not be confirmed. Refresh after resolving the connection issue.';connectionCopy.textContent='Connection readiness is not confirmed. '+error.message;
@@ -419,35 +329,36 @@
         const expiry=Date.parse(result.expires_at);
         if(![1,2].includes(bundle?.version)||bundle.version===2&&!/^[a-f0-9]{64}$/.test(bundle.public_key||'')||bundle.origin!==origin||typeof bundle.token!=='string'||!bundle.token||typeof bundle.certificate_der!=='string'||!bundle.certificate_der||typeof bundle.node_id!=='string'||!bundle.node_id||typeof bundle.node_name!=='string'||!Number.isFinite(expiry)||expiry<=Date.now()||Date.parse(bundle.expires_at)!==expiry)throw new Error('TLI did not confirm a complete, current pairing invitation. Create a fresh code after checking the connection.');
         const cameraLink=['https_fragment_v1','https_fragment_v2'].includes(result.qr_format);
-        pairing.append(node('h4',cameraLink?'Scan with your phone camera':'Scan with TLI Companion'));
+        const pairingHeading=node('h4','Scan inside the TLI Android app');pairingHeading.tabIndex=-1;pairing.append(pairingHeading);
         pairing.append(node('p','Your phone will connect to '+origin+'.','native-companion-address'));
         if(typeof result.qr==='string'&&/^data:image\/(?:svg\+xml|png);base64,/.test(result.qr)){const img=node('img');img.src=result.qr;img.alt='Single-use QR code for pairing this TLI host';pairing.append(img);}
         else pairing.append(node('p','A QR image is unavailable. Use the complete pairing bundle below.'));
         pairing.append(node('p',`For ${bundle.node_name} · expires ${new Date(expiry).toLocaleTimeString()}. Only scan this code with your own phone.`));
-        if(cameraLink)pairing.append(node('p','Your normal camera opens a local HTTPS page. Choose Open TLI Companion Beta (or Companion), then review the host in the updated app. If the browser shows a local certificate warning, open the app and scan there instead. Opening the link does not pair your phone.'));
+        if(cameraLink){const cameraHelp=node('details');cameraHelp.append(node('summary','Using your phone camera instead?'),node('p','The camera link opens this computer’s local HTTPS page. A browser certificate warning may appear. Use the scanner inside TLI to avoid that browser step. Opening a link does not pair your phone.'));pairing.append(cameraHelp);}
         const manual=node('details');manual.append(node('summary','Use a pairing bundle instead'));const field=node('textarea');field.id='native-companion-bundle';field.value=result.bundle;field.readOnly=true;field.rows=4;field.setAttribute('aria-label','Complete pairing bundle');field.addEventListener('focus',()=>field.select());
         manual.append(node('p','Copy the complete bundle into the phone app. It contains a temporary private invitation.'),field);pairing.append(manual);
         const hide=node('button','Hide code','btn-outline');hide.type='button';hide.id='native-companion-hide-code';hide.addEventListener('click',()=>{clearPairing();pairNotice.textContent='Code hidden. Its invitation remains valid until used or expired.';badge('pair','Ready to pair','ready');generate.focus?.();});pairing.append(hide);pairing.hidden=false;
-        pairNotice.textContent=cameraLink?'Pairing code ready. Scan with your phone camera or inside the updated Companion app.':'Pairing code ready. Scan it in the installed Companion app.';badge('pair','Code ready','ready');
+        pairNotice.textContent='Private pairing code ready. Scan it inside the TLI Android app. Only share it with your own phone.';badge('pair','Code ready','ready');paintFlow();
+        pairingHeading.focus?.({preventScroll:true});pairing.scrollIntoView?.({block:'start'});
         expiryTimer=setTimeout(()=>{if(current(epoch)){clearPairing();pairNotice.textContent='Pairing code expired. Create a fresh one to continue.';badge('pair','Ready to pair','ready');}},expiry-Date.now());
       });
     });
     refresh.addEventListener('click',load);
-    function leave(){state.epoch++;state.active=false;state.setup=null;state.selectedOrigin='';state.remoteReceipt=null;paintRemote('locked');select.replaceChildren();select.value='';for(const controller of requests)controller.abort();clearPairing();startup.suspend();hostStart.clear();busy();}
-    function lockView(){leave();state.locked=true;state.devices=null;state.devicesCheckedAt=null;devices.replaceChildren();startup.clear();for(const key of Object.keys(blocks))badge(key,'Unlock TLI','unknown');accessButton.textContent='Unlock TLI';accessCopy.textContent='Unlock this browser with your owner PIN to review phone access.';pairNotice.textContent='Unlock TLI with your owner PIN before pairing.';devicesNotice.textContent='Unlock TLI to check paired phones.';notice('Unlock TLI with your owner PIN, then refresh this page.');}
+    function leave(){state.epoch++;state.active=false;state.setup=null;state.selectedOrigin='';state.remoteReceipt=null;paintRemote('locked');select.replaceChildren();select.value='';for(const controller of requests)controller.abort();clearPairing();hostStart.clear();busy();}
+    function lockView(){leave();state.locked=true;state.devices=null;state.devicesCheckedAt=null;devices.replaceChildren();for(const key of Object.keys(blocks))badge(key,'Unlock TLI','unknown');accessButton.textContent='Unlock TLI';accessCopy.textContent='Unlock this browser with your owner PIN to review phone access.';pairNotice.textContent='Unlock TLI with your owner PIN before pairing.';devicesNotice.textContent='Unlock TLI to check paired phones.';notice('Unlock TLI with your owner PIN, then refresh this page.');}
     function onOpen(){if(state.locked||document.hidden)return Promise.resolve();if(state.active)return state.loading||Promise.resolve();state.active=true;hostStart.activate();return Promise.allSettled([state.loading,state.mutation]).then(()=>current(state.epoch)?load():undefined);}
-    function open(options={}){if(typeof window.switchPanel==='function')window.switchPanel('panel-companion');const opening=onOpen();if(options.step)focusStep(options.step);return opening;}
-    window.addEventListener('tli-session-locked',lockView);
-    window.addEventListener('tli-session-unlocked',()=>{state.locked=false;if(!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
+    function open(options={}){if(window.TLIConnectDevice?.open)return window.TLIConnectDevice.open({kind:'phone'});if(typeof window.switchPanel==='function')window.switchPanel('panel-companion');const opening=onOpen();if(options.step)focusStep(options.step);return opening;}
+    for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,lockView);
+    window.addEventListener('tli-session-unlocked',()=>{state.locked=false;if(embeddedAt||!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
     window.addEventListener('pagehide',leave);
-    document.addEventListener('visibilitychange',()=>{if(document.hidden)leave();else if(!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)leave();else if(embeddedAt||!panel.hidden&&!panel.classList?.contains?.('hidden'))onOpen();});
     let embeddedAt=null;
     function mount(container){
       if(embeddedAt)return()=>{};
-      const marker=document.createComment('Phone pairing returns here');section.before(marker);embeddedAt=container;container.append(section);onOpen();
-      return()=>{leave();embeddedAt=null;marker.replaceWith(section);};
+      const marker=document.createComment('Phone pairing returns here');section.before(marker);embeddedAt=container;state.flowPrepared=false;management.open=false;remote.open=false;ios.open=false;addressDetails.open=false;section.dataset.embedded='true';container.append(section);paintFlow();onOpen();
+      return()=>{leave();embeddedAt=null;state.flowPrepared=true;section.dataset.embedded='false';marker.replaceWith(section);paintFlow();};
     }
-    window.TLICompanion={open,onOpen,onClose:leave,refresh:load,mount};
+    window.TLICompanion={open,onOpen,onClose:leave,refresh:load,mount,setPrepared(value){state.flowPrepared=value===true;if(!state.flowPrepared)clearPairing();pairingGuidance();if(ready())notice('This computer is prepared for your phone.');busy();}};
     busy();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();

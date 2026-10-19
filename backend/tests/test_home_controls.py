@@ -17,7 +17,7 @@ def controls(monkeypatch):
     rows = [{"ip": IP, "relay": 0, "name": "Left", "id": "left", "aliases": ["reading"], "custom": {"keep": 1}},
             {"ip": IP, "relay": 1, "name": "Right", "id": "right", "room": "Office"}]
     calls = []
-    def save(value):
+    def save(value, **kwargs):
         rows[:] = copy.deepcopy(value)
     def action(**kw):
         calls.append(kw)
@@ -39,9 +39,9 @@ def controls(monkeypatch):
     return rows, calls, driver, runtime
 
 
-def test_registry_merge_preserves_other_relays_ids_and_metadata(controls, authed_client):
+def test_registry_merge_preserves_other_relays_ids_and_metadata(controls, browser_client):
     rows, _, _, _ = controls
-    response = authed_client.post('/homeauto/devices', json={"merge": True, "devices": [{"ip": IP, "relay": 1, "name": "Desk"}]})
+    response = browser_client.post('/homeauto/devices', json={"merge": True, "devices": [{"ip": IP, "relay": 1, "name": "Desk"}]})
     assert response.status_code == 200
     assert len(rows) == 2 and rows[0]["aliases"] == ["reading"]
     assert rows[0]["custom"] == {"keep": 1}
@@ -49,76 +49,76 @@ def test_registry_merge_preserves_other_relays_ids_and_metadata(controls, authed
     assert rows[1]["name"] == "Desk"
 
 
-def test_legacy_registry_name_only_uses_unique_existing_relay(controls, authed_client):
+def test_legacy_registry_name_only_uses_unique_existing_relay(controls, browser_client):
     rows, _, _, _ = controls
     rows.pop(0)
-    r = authed_client.post('/homeauto/devices', json={"devices": [{"ip": IP, "name": "Renamed"}]})
+    r = browser_client.post('/homeauto/devices', json={"devices": [{"ip": IP, "name": "Renamed"}]})
     assert r.status_code == 200 and rows[0]["relay"] == 1 and rows[0]["id"] == "right"
 
 
 @pytest.mark.parametrize('bad', [[{"ip": IP, "name": "Ambiguous"}],
     [{"ip": IP, "relay": 1}, {"ip": IP, "relay": 1}], [{"ip": IP, "relay": -1}], [{"ip": IP, "relay": "one"}]])
-def test_invalid_registry_batch_writes_nothing(controls, authed_client, bad):
+def test_invalid_registry_batch_writes_nothing(controls, browser_client, bad):
     rows, calls, _, _ = controls
     before = copy.deepcopy(rows)
-    r = authed_client.post('/homeauto/devices', json={"merge": True, "devices": [{"ip": "192.0.2.20", "name": "New"}, *bad]})
+    r = browser_client.post('/homeauto/devices', json={"merge": True, "devices": [{"ip": "192.0.2.20", "name": "New"}, *bad]})
     assert r.status_code in (409, 422) and rows == before and calls == []
 
 
-def test_address_only_action_and_status_reject_shared_relays(controls, authed_client):
-    assert authed_client.post('/shelly/relay', json={"ip": IP, "action": "on"}).status_code == 409
-    assert authed_client.get('/shelly/status', params={"ip": IP}).status_code == 409
+def test_address_only_action_and_status_reject_shared_relays(controls, browser_client):
+    assert browser_client.post('/shelly/relay', json={"ip": IP, "action": "on"}).status_code == 409
+    assert browser_client.get('/shelly/status', params={"ip": IP}).status_code == 409
     assert controls[1] == []
 
 
-def test_shelly_and_homepower_return_the_requested_relay_state(authed_client):
+def test_shelly_and_homepower_return_the_requested_relay_state(browser_client):
     for relay, on in ((0, False), (1, True)):
-        r = authed_client.get('/shelly/status', params={"ip": IP, "relay": relay}).json()
+        r = browser_client.get('/shelly/status', params={"ip": IP, "relay": relay}).json()
         assert r['ok'] is True and r['on'] is on and r['relay'] == relay
-    assert authed_client.get('/homepower/devices/right/status').json()['on'] is True
+    assert browser_client.get('/homepower/devices/right/status').json()['on'] is True
 
 
 @pytest.mark.parametrize('output', [{"raw": {}}, {"raw": {"switch:0": {"output": False}}},
     {"ok": True, "raw": {"error": "rejected", "switch:1": {"output": True}}}, {"raw": {"switch:1": {"output": "false"}}}])
-def test_missing_or_invalid_requested_relay_is_unknown(controls, authed_client, output):
+def test_missing_or_invalid_requested_relay_is_unknown(controls, browser_client, output):
     controls[2].get_status = lambda **kw: output
     for url in ('/shelly/status?ip='+IP+'&relay=1', '/homepower/devices/right/status'):
-        r = authed_client.get(url).json()
+        r = browser_client.get(url).json()
         assert r['ok'] is False and r['on'] is None
 
 
-def test_command_ack_is_distinct_from_state_and_replay_does_not_execute(controls, authed_client):
+def test_command_ack_is_distinct_from_state_and_replay_does_not_execute(controls, browser_client):
     body = {"ip": IP, "relay": 1, "action": "toggle", "request_id": "a"*32}
-    first = authed_client.post('/shelly/relay', json=body).json()
+    first = browser_client.post('/shelly/relay', json=body).json()
     assert first['ok'] and first['outcome'] == 'accepted' and 'status reading' in first['summary']
-    assert authed_client.post('/shelly/relay', json=body).json() == first
+    assert browser_client.post('/shelly/relay', json=body).json() == first
     assert controls[1] == [{"ip": IP, "relay": 1}]
-    conflict = authed_client.post('/shelly/relay', json={**body, "relay": 0})
+    conflict = browser_client.post('/shelly/relay', json={**body, "relay": 0})
     assert conflict.status_code == 409 and len(controls[1]) == 1
 
 
-def test_homepower_legacy_shelly_command_gets_truthful_ok(controls, authed_client):
-    r = authed_client.post('/homepower/devices/right/execute', json={"capability": "switch.off", "request_id": "b"*32}).json()
+def test_homepower_legacy_shelly_command_gets_truthful_ok(controls, browser_client):
+    r = browser_client.post('/homepower/devices/right/execute', json={"capability": "switch.off", "request_id": "b"*32}).json()
     assert r['ok'] is True and controls[1] == [{"ip": IP, "relay": 1}]
 
 
 @pytest.mark.parametrize('output', [{"ok": False, "summary": "rejected"}, {"ok": True, "raw": {"error": "rejected"}}, None])
-def test_driver_failures_never_become_success(controls, authed_client, output):
+def test_driver_failures_never_become_success(controls, browser_client, output):
     controls[2].turn_on = lambda **kw: output
-    r = authed_client.post('/shelly/relay', json={"ip": IP, "relay": 1, "action": "on"}).json()
+    r = browser_client.post('/shelly/relay', json={"ip": IP, "relay": 1, "action": "on"}).json()
     assert r['ok'] is False and r['outcome'] == 'failed'
     assert not driver_succeeded(output)
 
 
-def test_transport_failure_is_unconfirmed_and_cached_without_retry(controls, authed_client):
+def test_transport_failure_is_unconfirmed_and_cached_without_retry(controls, browser_client):
     def fail(**kw):
         controls[1].append(kw)
         raise TimeoutError('possibly delivered')
     controls[2].toggle = fail
     body = {"ip": IP, "relay": 1, "action": "toggle", "request_id": "c"*32}
-    first = authed_client.post('/shelly/relay', json=body).json()
+    first = browser_client.post('/shelly/relay', json=body).json()
     assert first['ok'] is False and first['outcome'] == 'unknown'
-    assert authed_client.post('/shelly/relay', json=body).json() == first
+    assert browser_client.post('/shelly/relay', json=body).json() == first
     assert len(controls[1]) == 1
 
 
@@ -153,7 +153,8 @@ def test_request_cache_is_bounded_and_does_not_launch_on_full(monkeypatch):
 @pytest.mark.parametrize('method,url,body', [('post','/shelly/relay',{'ip': IP, 'action':'on','relay':1}),
     ('get','/shelly/status?ip='+IP+'&relay=1',None), ('post','/homeauto/devices',{'devices':[]}),
     ('post','/homepower/devices/right/execute',{'capability':'switch.on'}), ('get','/homepower/devices/right/status',None)])
-def test_home_control_endpoints_require_session(client, monkeypatch, controls, method, url, body):
+def test_home_control_endpoints_require_session(browser_client, monkeypatch, controls, method, url, body):
     monkeypatch.setattr(S, 'load_pin_config', lambda: {'enabled':True})
-    r = getattr(client, method)(url, **({'json':body} if body is not None else {}))
+    browser_client.cookies.clear()
+    r = getattr(browser_client, method)(url, **({'json':body} if body is not None else {}))
     assert r.status_code == 401 and controls[1] == []

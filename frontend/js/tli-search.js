@@ -16,6 +16,31 @@
   // ── Storage keys ────────────────────────────────────────────
   const RECEIPTS_KEY = "tli_search_receipts_v1";
   const MAX_RECEIPTS = 200;
+  let _epoch = 0, _ready = true, _locked = false, _searching = false;
+  const _current = epoch => _ready && !_locked && epoch === _epoch;
+  const _escape = value => String(value ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  function _message(text) {
+    const sub = document.getElementById("search-suggest-sub");
+    if (sub) sub.textContent = text;
+  }
+  function _clearPrivateSearch() {
+    _epoch++; _ready = false; _searching = false;
+    _pendingPrompt = null; _pendingCategory = null;
+    delete window.__tliInjectedUserMessage;
+    window.__tliSearchGateBypassOnce = false;
+    _hideBanner();
+    const receipts = document.getElementById("settings-search-receipts");
+    if (receipts) receipts.textContent = "Unlock TLI to view search receipts.";
+    const run = document.getElementById("search-suggest-run");
+    if (run) run.disabled = false;
+  }
+  window.addEventListener("tli-session-locked", () => { _locked = true; _clearPrivateSearch(); });
+  window.addEventListener("tli-session-unlocked", () => { _locked = false; _epoch++; });
+  window.addEventListener("tli-private-observation-ready", () => {
+    if (_locked) return;
+    _ready = true; _renderReceipts();
+  });
+  window.addEventListener("pagehide", _clearPrivateSearch);
 
   // ── Settings helpers (use main tli_settings blob) ───────────
   function _readSettings() {
@@ -61,6 +86,7 @@
   function _renderReceipts() {
     const host = document.getElementById("settings-search-receipts");
     if (!host) return;
+    if (!_ready || _locked) { host.textContent = "Unlock TLI to view search receipts."; return; }
     const list = _loadReceipts();
     if (!list.length) {
       host.innerHTML = `<div class="small-meta">No receipts yet.</div>`;
@@ -68,13 +94,18 @@
     }
     host.innerHTML = list.map(r => {
       const dt  = new Date(r.ts || Date.now()).toLocaleString();
-      const q   = String(r.query || "").replace(/</g, "&lt;");
-      const ep  = String(r.endpoint || "").replace(/</g, "&lt;");
-      const k   = r.k || "";
+      const q   = _escape(r.query || "");
+      const ep  = _escape(r.endpoint || "");
+      const k   = _escape(r.k || "");
       const ms  = typeof r.ms === "number" ? `${r.ms}ms` : "";
-      const items = (r.results || []).map(x =>
-        `<li><a href="${String(x.url).replace(/"/g,"&quot;")}" target="_blank" rel="noreferrer">${String(x.title || x.url).replace(/</g,"&lt;")}</a></li>`
-      ).join("");
+      const items = (r.results || []).map(x => {
+        const label = _escape(x.title || x.url);
+        try {
+          const url = new URL(x.url);
+          if (!['http:', 'https:'].includes(url.protocol)) throw Error();
+          return `<li><a href="${_escape(url.href)}" target="_blank" rel="noopener noreferrer">${label}</a></li>`;
+        } catch { return `<li>${label}</li>`; }
+      }).join("");
       return `<details class="receipt-item">
         <summary><b>${dt}</b> — ${q} <span class="small-meta">(K=${k} ${ms} ${ep})</span></summary>
         ${items ? `<ul>${items}</ul>` : ""}
@@ -119,6 +150,10 @@
   };
 
   window.tliShowSearchBannerFor = function (text) {
+    if (_locked) return;
+    _epoch++; _searching = false;
+    const run = document.getElementById("search-suggest-run");
+    if (run) run.disabled = false;
     _pendingPrompt   = String(text || "").trim();
     _pendingCategory = _inferCategory(_pendingPrompt);
     const sub = document.getElementById("search-suggest-sub");
@@ -158,7 +193,7 @@
   }
 
   // ── Search via backend proxy ──────────────────────────────────
-  async function _doSearch(query) {
+  async function _doSearch(query, epoch) {
     const s = _getSearchSettings();
     const url = new URL("/search/query", location.origin);
     url.searchParams.set("q", query);
@@ -166,11 +201,19 @@
     url.searchParams.set("endpoint", s.url);
 
     const t0 = performance.now();
-    const resp = await fetch(url.toString());
+    const resp = await fetch(url.toString(), {cache: "no-store", signal: AbortSignal.timeout(15000)});
+    if (!_current(epoch)) throw new Error("Search access changed.");
     const ms = Math.round(performance.now() - t0);
-    if (!resp.ok) throw new Error(`Search failed: HTTP ${resp.status}`);
-    const data = await resp.json();
-    return { results: data.results || [], ms: data.ms ?? ms, endpoint: data.endpoint || s.url };
+    const data = await resp.json().catch(() => null);
+    if (!_current(epoch)) throw new Error("Search access changed.");
+    if (resp.status === 401 || resp.status === 403) {
+      window.dispatchEvent(new CustomEvent("tli-session-locked"));
+      if (typeof showToast === "function") showToast(typeof data?.detail === "string" ? data.detail : "Unlock TLI, then explicitly choose Search + Answer again.", "warn");
+      throw new Error("Search access changed.");
+    }
+    if (!resp.ok) throw new Error(typeof data?.detail === "string" ? data.detail : `Search failed: HTTP ${resp.status}`);
+    if (!data || !Array.isArray(data.results)) throw new Error("Search returned an unreadable response.");
+    return { results: data.results, ms: data.ms ?? ms, endpoint: data.endpoint || s.url };
   }
 
   // ── Build augmented prompt ────────────────────────────────────
@@ -198,14 +241,22 @@
     if (runBtn && !runBtn.__tliBound) {
       runBtn.__tliBound = true;
       runBtn.addEventListener("click", async () => {
+        if (_searching || _locked) return;
+        if (!_ready) {
+          _message("Check access, then choose Search + Answer again. No search has been repeated.");
+          window.EventInterpreter?.retry?.();
+          return;
+        }
         const prompt = _pendingPrompt || (document.getElementById("chat-input")?.value || "").trim();
         _hideBanner();
         if (!prompt) return;
 
         // Disable button briefly to avoid double-click
-        runBtn.disabled = true;
+        const epoch = _epoch;
+        runBtn.disabled = true; _searching = true;
         try {
-          const data = await _doSearch(prompt);
+          const data = await _doSearch(prompt, epoch);
+          if (!_current(epoch)) return;
           _addReceipt({
             ts:       new Date().toISOString(),
             query:    prompt,
@@ -218,13 +269,13 @@
           window.__tliInjectedUserMessage = _buildAugment(prompt, data);
           window.__tliSearchGateBypassOnce = true;
           document.getElementById("chat-send-btn")?.click();
-        } catch {
-          // Search failed — fall through to offline
-          window.__tliSearchGateBypassOnce = true;
-          document.getElementById("chat-send-btn")?.click();
-        } finally {
           _pendingPrompt = null;
-          runBtn.disabled = false;
+        } catch (error) {
+          if (!_current(epoch)) return;
+          _message(`${error.message} Choose Answer Offline or explicitly try the search again.`);
+          _showBanner();
+        } finally {
+          if (_current(epoch)) { _searching = false; runBtn.disabled = false; }
         }
       });
     }
@@ -232,6 +283,7 @@
     if (offBtn && !offBtn.__tliBound) {
       offBtn.__tliBound = true;
       offBtn.addEventListener("click", () => {
+        if (_locked || _searching) return;
         _hideBanner();
         window.__tliSearchGateBypassOnce = true;
         document.getElementById("chat-send-btn")?.click();
@@ -331,6 +383,7 @@
     if (exportBtn && !exportBtn.__tliBound) {
       exportBtn.__tliBound = true;
       exportBtn.addEventListener("click", () => {
+        if (!_ready || _locked) return;
         const data = _loadReceipts();
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
         const a = document.createElement("a");
@@ -344,6 +397,7 @@
     if (clearBtn && !clearBtn.__tliBound) {
       clearBtn.__tliBound = true;
       clearBtn.addEventListener("click", () => {
+        if (!_ready || _locked) return;
         _saveReceipts([]);
         _renderReceipts();
       });

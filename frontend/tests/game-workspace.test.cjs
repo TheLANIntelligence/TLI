@@ -48,7 +48,7 @@ function fixture() {
 
 function gamesFixture() {
   const f=fixture(), root=f.element('section');
-  for(const id of ['go-game-input','go-question','go-output-title','go-output-source','go-output','go-output-wrap','go-ask-btn','go-copy-btn','go-clear-btn','go-analyze-btn','go-read-config-btn','go-read-hardware-btn','go-hw-pills','go-hardware-status','go-detect-status','go-config-badge','go-config-note','go-settings-grid','go-settings-block','go-resolution','go-target-fps','go-cpu','go-gpu','go-ram','go-manual-settings','go-provider','go-check-provider','go-provider-status','go-context-receipt','go-include-history','go-empty-advice']) root.append(f.add(id));
+  for(const id of ['go-game-input','go-question','go-output-title','go-output-source','go-output','go-output-wrap','go-ask-btn','go-copy-btn','go-clear-btn','go-analyze-btn','go-read-config-btn','go-read-hardware-btn','go-hw-pills','go-hardware-status','go-detect-btn','go-detect-status','go-config-badge','go-config-note','go-settings-grid','go-settings-block','go-resolution','go-target-fps','go-cpu','go-gpu','go-ram','go-manual-settings','go-provider','go-check-provider','go-provider-status','go-context-receipt','go-include-history','go-empty-advice']) root.append(f.add(id));
   f.nodes['go-game-input'].value='Cyberpunk 2077';f.nodes['go-provider'].value='bundled';f.nodes['go-target-fps'].value='60';f.nodes['go-include-history'].checked=true;
   f.load('tli-games.js'); f.window.TLIGames.setup();return f;
 }
@@ -83,16 +83,17 @@ test('An impossible legacy refresh rate is neither displayed nor sent for advice
  assert.deepEqual(body.system.display,{width:3840,height:2160});
 });
 
-test('An initially locked open workspace shows no hardware failure and reads once when unlocked',async()=>{
+test('An initially locked open workspace shows no hardware failure and reads once after verified readiness',async()=>{
  const f=gamesFixture();f.handler(async()=>f.json(specs));emit(f,'tli-session-locked');await f.window.TLIGames.onOpen();
  assert.equal(f.calls.length,0);assert.doesNotMatch(visible(f.nodes['go-hw-pills'])+' '+f.nodes['go-hardware-status'].textContent,/failed|unable|unavailable/i);
- emit(f,'tli-session-unlocked');await tick();
+ emit(f,'tli-session-unlocked');await tick();assert.equal(f.calls.length,0);emit(f,'tli-private-observation-ready');await tick();
  assert.deepEqual(f.calls.map(call=>call.url),['/system/summary']);assert.match(visible(f.nodes['go-hw-pills']),/Synthetic Ryzen 7/);
 });
 
 test('Unlocking while Game Optimizer is closed does not read private hardware in the background',async()=>{
  const f=gamesFixture();f.handler(async()=>f.json(specs));emit(f,'tli-session-locked');await f.window.TLIGames.onOpen();f.window.TLIGames.onClose();
  emit(f,'tli-session-unlocked');await tick();assert.equal(f.calls.length,0);
+ emit(f,'tli-private-observation-ready');await tick();assert.equal(f.calls.length,0);
  await f.window.TLIGames.onOpen();assert.deepEqual(f.calls.map(call=>call.url),['/system/summary']);
 });
 
@@ -117,12 +118,12 @@ test('Leaving during hardware loading aborts the request and ignores its late re
  assert.equal(reads,2);assert.match(visible(f.nodes['go-hw-pills']),/New visit CPU/);assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Late old CPU/);
 });
 
-test('Session lock clears hardware and rejects late hardware responses while unlock starts a fresh read',async()=>{
+test('Session lock clears hardware and rejects late responses while verified readiness starts a fresh read',async()=>{
  const f=gamesFixture();let finish;let reads=0;
  f.handler(async()=>++reads===1?new Promise(resolve=>finish=resolve):f.json({...specs,cpu:{model:'Unlocked CPU'}}));
  const original=f.window.TLIGames.onOpen();await tick();emit(f,'tli-session-locked');
  assert.equal(f.calls[0].options.signal.aborted,true);assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Synthetic|failed|unable/i);
- emit(f,'tli-session-unlocked');await tick();finish(f.json({...specs,cpu:{model:'Private previous CPU'}}));await original;
+ emit(f,'tli-session-unlocked');await tick();assert.equal(reads,1);emit(f,'tli-private-observation-ready');await tick();finish(f.json({...specs,cpu:{model:'Private previous CPU'}}));await original;
  assert.equal(reads,2);assert.match(visible(f.nodes['go-hw-pills']),/Unlocked CPU/);assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Private previous CPU/);
 });
 
@@ -131,7 +132,36 @@ test('A current unauthorized hardware read locks without claiming hardware detec
  assert.match(f.nodes['go-hardware-status'].textContent,/unlock/i);assert.doesNotMatch(f.nodes['go-hardware-status'].textContent,/failed|could not read/i);
  assert.equal(f.calls[0].options.signal.aborted,true);
  f.handler(async()=>f.json(specs));emit(f,'tli-session-unlocked');await tick();
+ assert.equal(f.calls.length,1);emit(f,'tli-private-observation-ready');await tick();
  assert.equal(f.calls.length,2);assert.match(visible(f.nodes['go-hw-pills']),/Synthetic Ryzen 7/);
+});
+
+test('Game hardware403 clears private specs and stays paused until verified readiness without advice/config replay',async()=>{
+ const f=gamesFixture();f.handler(async()=>f.json(specs));await f.window.TLIGames.onOpen();
+ f.handler(async()=>f.json({detail:'Private access denied'},403));await f.nodes['go-read-hardware-btn'].click();
+ assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Synthetic/);assert.match(f.nodes['go-hardware-status'].textContent,/unlock/i);
+ emit(f,'tli-session-unlocked');await tick();await f.window.TLIGames.onOpen();assert.equal(f.calls.length,2);
+ let retries=0;f.window.EventInterpreter={retry:()=>{retries++;}};await f.nodes['go-read-hardware-btn'].click();assert.equal(retries,1);assert.equal(f.calls.length,2);
+ f.handler(async()=>f.json(specs));emit(f,'tli-private-observation-ready');emit(f,'tli-private-observation-ready');await tick();
+ assert.equal(f.calls.length,3);assert.ok(f.calls.every(call=>call.url==='/system/summary'));assert.match(visible(f.nodes['go-hw-pills']),/Synthetic/);
+});
+
+test('Game hardware recovery while hidden waits until visible and reads only specs',async()=>{
+ const f=gamesFixture();f.handler(async()=>f.json(specs));emit(f,'tli-session-locked');await f.window.TLIGames.onOpen();
+ f.ctx.document.hidden=true;emit(f,'tli-session-unlocked');emit(f,'tli-private-observation-ready');await tick();assert.equal(f.calls.length,0);
+ f.ctx.document.hidden=false;emit(f,'visibilitychange');await tick();assert.deepEqual(f.calls.map(call=>call.url),['/system/summary']);
+});
+
+test('late Game hardware403 cannot clear a renewed hardware result',async()=>{
+ const f=gamesFixture();let finish;f.handler(async()=>new Promise(resolve=>finish=resolve));const old=f.window.TLIGames.onOpen();await tick();
+ emit(f,'tli-session-locked');emit(f,'tli-session-unlocked');f.handler(async()=>f.json(specs));emit(f,'tli-private-observation-ready');await tick();
+ finish(f.json({detail:'Old denied session'},403));await old;assert.match(visible(f.nodes['go-hw-pills']),/Synthetic/);assert.equal(f.nodes['go-read-hardware-btn'].disabled,false);
+});
+
+test('late Game hardware body cannot replace specs from renewed access',async()=>{
+ const f=gamesFixture();let finish;f.handler(async()=>({ok:true,status:200,json:()=>new Promise(resolve=>finish=resolve)}));const old=f.window.TLIGames.onOpen();await tick();
+ emit(f,'tli-session-locked');emit(f,'tli-session-unlocked');f.handler(async()=>f.json(specs));emit(f,'tli-private-observation-ready');await tick();
+ finish({...specs,cpu:{model:'Old private CPU'}});await old;assert.match(visible(f.nodes['go-hw-pills']),/Synthetic/);assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Old private/);
 });
 
 test('A late unauthorized response from abandoned hardware detection cannot lock a newly opened workspace',async()=>{
@@ -159,10 +189,10 @@ test('Automatic hardware read and refresh preserve all manually corrected fields
  for(const [id,value]of Object.entries(corrections))assert.equal(f.nodes[id].value,value,id);
 });
 
-test('Analyze reads hardware and supported settings without inference and preserves corrections',async()=>{
+test('Analyze reads hardware and supported settings without AI selection or inference and preserves corrections',async()=>{
  const f=gamesFixture();f.nodes['go-gpu'].value='My corrected GPU';f.nodes['go-resolution'].value='1920 x 1080';
  f.handler(async url=>f.json(url==='/system/summary'?{cpu:{model:'Read CPU'},gpu:{model:'Read GPU'},display:{width:2560,height:1440}}:url==='/games/config_read'?{game_name:'Cyberpunk 2077',supported:true,settings:[{label:'Shadows',value:'High'}]}:bound));
- await f.nodes['go-analyze-btn'].click();assert.deepEqual(f.calls.map(c=>c.url).sort(),['/games/advice_provider?provider=bundled','/games/config_read','/system/summary'].sort());
+ await f.nodes['go-analyze-btn'].click();assert.deepEqual(f.calls.map(c=>c.url).sort(),['/games/config_read','/system/summary'].sort());
  assert.equal(f.nodes['go-gpu'].value,'My corrected GPU');assert.equal(f.nodes['go-resolution'].value,'1920 x 1080');assert.match(f.nodes['go-config-badge'].textContent,/1 settings read/);
  assert.equal(f.nodes['go-ask-btn'].disabled,false);
 });
@@ -201,4 +231,127 @@ test('Leaving Game Optimizer aborts advice and does not open Performance or acce
 test('Session lock clears private advice, game and corrections',async()=>{
  const f=gamesFixture();normal(f);await f.nodes['go-ask-btn'].click();f.nodes['go-manual-settings'].value='Private reading';f.nodes['go-cpu'].value='Private host';
  for(const handler of f.events['tli-session-locked']) handler();assert.equal(f.nodes['go-game-input'].value,'');assert.equal(f.nodes['go-manual-settings'].value,'');assert.equal(f.nodes['go-output'].textContent,'');assert.equal(f.nodes['go-context-receipt'].textContent,'');assert.equal(f.nodes['go-output-wrap'].style.display,'none');
+});
+
+for(const value of [{},{detail:'Unexpected success'},{cpu:[]},{cpu:{model:'Bad result'},ok:false}])test('malformed Game hardware success is unavailable and never replaces retained historical specs',async()=>{
+ const f=gamesFixture();f.handler(async()=>f.json(specs));await f.window.TLIGames.onOpen();f.handler(async()=>f.json(value));await f.nodes['go-read-hardware-btn'].click();
+ assert.match(f.nodes['go-hardware-status'].textContent,/historical|previous/);assert.match(visible(f.nodes['go-hw-pills']),/Synthetic Ryzen/);assert.doesNotMatch(visible(f.nodes['go-hw-pills']),/Bad result/);
+});
+
+test('legitimate null Game hardware sections remain unknown rather than a failed request',async()=>{
+ const f=gamesFixture();f.handler(async()=>f.json({cpu:null,gpu:null,memory:{total_gb:null},display:null}));await f.window.TLIGames.onOpen();
+ assert.doesNotMatch(f.nodes['go-hardware-status'].textContent,/failed|Could not/);assert.match(visible(f.nodes['go-hw-pills']),/Not reported/);
+});
+
+const settingsRead = (value='High') => ({game_name:'Cyberpunk 2077',supported:true,
+ settings:[{key:'shadow_quality',label:'Shadow Quality',value}],
+ advice_controls:[{key:'shadow_quality',label:'Shadow Quality',values:['Low','Medium','High','Ultra']}]});
+
+test('detected game changes invalidate trial context without relying on an input event',async()=>{
+ const f=gamesFixture();let invalidated=0,name='Cyberpunk 2077';f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ f.handler(async url=>{assert.equal(url,'/games/detect_best');return f.json({game:{name}});});
+ await f.nodes['go-detect-btn'].click();assert.equal(invalidated,1);
+ name='The Witcher 3';await f.nodes['go-detect-btn'].click();
+ assert.equal(f.nodes['go-game-input'].value,name);assert.equal(invalidated,2);
+ assert.ok(f.calls.every(call=>call.url==='/games/detect_best'));
+});
+
+test('detection names the discovered game and explicit Use this game preserves the typed choice until clicked',async()=>{
+ const f=gamesFixture();let invalidated=0;f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ await f.nodes['go-game-input'].fire('input');const prior=invalidated;
+ const name='Different <game> & title';f.handler(async url=>{assert.equal(url,'/games/detect_best');return f.json({game:{name}});});
+ await f.nodes['go-detect-btn'].click();
+ assert.equal(f.nodes['go-game-input'].value,'Cyberpunk 2077');assert.match(f.nodes['go-detect-status'].textContent,/Different <game> & title/);
+ assert.equal(f.nodes['go-detect-status'].innerHTML,'');assert.equal(f.nodes['go-use-detected-game'].textContent,'Use this game');
+ await f.nodes['go-use-detected-game'].click();
+ assert.equal(f.nodes['go-game-input'].value,name);assert.equal(f.nodes['go-game-input'].dataset.userEdited,'1');
+ assert.equal(invalidated,prior+1);assert.deepEqual(f.calls.map(call=>call.url),['/games/detect_best']);
+});
+
+for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])test('detected game choice cannot survive '+event,async()=>{
+ const f=gamesFixture();await f.nodes['go-game-input'].fire('input');
+ f.handler(async()=>f.json({game:{name:'Previously detected private game'}}));await f.nodes['go-detect-btn'].click();
+ const old=f.nodes['go-use-detected-game'];emit(f,event);emit(f,'tli-session-unlocked');emit(f,'tli-private-observation-ready');
+ f.nodes['go-game-input'].value='New session choice';await old.click();
+ assert.equal(f.nodes['go-game-input'].value,'New session choice');assert.equal(f.calls.length,1);
+});
+
+test('editing the game or leaving the panel makes an old detected-game button inert',async()=>{
+ const f=gamesFixture();await f.nodes['go-game-input'].fire('input');
+ f.handler(async()=>f.json({game:{name:'Detected game'}}));await f.nodes['go-detect-btn'].click();const first=f.nodes['go-use-detected-game'];
+ f.nodes['go-game-input'].value='New typed game';await f.nodes['go-game-input'].fire('input');await first.click();
+ assert.equal(f.nodes['go-game-input'].value,'New typed game');
+ await f.nodes['go-detect-btn'].click();const second=f.nodes['go-use-detected-game'];f.window.TLIGames.onClose();await second.click();
+ assert.equal(f.nodes['go-game-input'].value,'New typed game');assert.ok(f.calls.every(call=>call.url==='/games/detect_best'));
+});
+
+test('a delayed detection cannot replace a newer result or add an old use button',async()=>{
+ const f=gamesFixture();await f.nodes['go-game-input'].fire('input');let finish;
+ f.handler(async()=>new Promise(resolve=>finish=resolve));const old=f.nodes['go-detect-btn'].click();await tick();
+ f.handler(async()=>f.json({game:{name:'New detection'}}));await f.nodes['go-detect-btn'].click();
+ finish(f.json({game:{name:'Old detection'}}));await old;
+ assert.match(f.nodes['go-detect-status'].textContent,/New detection/);assert.doesNotMatch(f.nodes['go-detect-status'].textContent,/Old detection/);
+ await f.nodes['go-use-detected-game'].click();assert.equal(f.nodes['go-game-input'].value,'New detection');
+});
+
+test('direct settings refresh invalidates old trials before waiting and publishes only the latest read',async()=>{
+ const f=gamesFixture();let invalidated=0;f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ f.handler(async()=>f.json(settingsRead()));await f.nodes['go-read-config-btn'].click();assert.equal(invalidated,2);
+ const detached=f.window.TLIGames.trialContext();detached.current_settings[0].value='Modified outside';
+ assert.equal(f.window.TLIGames.trialContext().current_settings[0].value,'High');
+ let finish;f.handler(async()=>new Promise(resolve=>finish=resolve));const old=f.nodes['go-read-config-btn'].click();await tick();
+ assert.equal(invalidated,3);assert.equal(f.window.TLIGames.trialContext().current_settings.length,0);
+ f.handler(async()=>f.json(settingsRead('Low')));await f.nodes['go-read-config-btn'].click();
+ assert.equal(invalidated,5);assert.equal(f.window.TLIGames.trialContext().current_settings[0].value,'Low');
+ finish(f.json(settingsRead('Ultra')));await old;
+ assert.equal(invalidated,5);assert.equal(f.window.TLIGames.trialContext().current_settings[0].value,'Low');
+});
+
+test('detecting another game and returning cannot accept a config read from the earlier game visit',async()=>{
+ const f=gamesFixture();let finish,name='Cyberpunk 2077';
+ f.handler(async url=>url==='/games/detect_best'?f.json({game:{name}}):new Promise(resolve=>finish=resolve));
+ await f.nodes['go-detect-btn'].click();const old=f.nodes['go-read-config-btn'].click();await tick();
+ name='The Witcher 3';await f.nodes['go-detect-btn'].click();name='Cyberpunk 2077';await f.nodes['go-detect-btn'].click();
+ finish(f.json(settingsRead()));await old;
+ assert.equal(f.window.TLIGames.trialContext().current_settings.length,0);
+ assert.equal(f.window.TLIGames.trialContext().config_game_name,null);
+});
+
+test('failed direct config refresh invalidates trials and cannot supply stale current values',async()=>{
+ const f=gamesFixture();let invalidated=0;f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ f.handler(async()=>f.json(settingsRead()));await f.nodes['go-read-config-btn'].click();
+ f.handler(async()=>{throw Error('Synthetic unreadable settings');});await f.nodes['go-read-config-btn'].click();
+ assert.equal(invalidated,4);assert.equal(f.window.TLIGames.trialContext().current_settings.length,0);
+ assert.equal(f.window.TLIGames.trialContext().config_game_name,null);
+ assert.match(f.nodes['go-config-badge'].textContent,/Previous read/);
+});
+
+test('legacy current-value corrections invalidate trials and retain user override provenance in context',async()=>{
+ const f=gamesFixture();let invalidated=0;f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ f.handler(async()=>f.json(settingsRead()));await f.nodes['go-read-config-btn'].click();
+ const select=f.nodes['go-settings-grid'].querySelector('select');select.value='Low';await select.fire('change');
+ assert.equal(invalidated,3);const context=f.window.TLIGames.trialContext();
+ assert.equal(context.current_settings[0].value,'High');assert.equal(context.manual_values.shadow_quality,'Low');
+ context.manual_values.shadow_quality='Ultra';assert.equal(f.window.TLIGames.trialContext().manual_values.shadow_quality,'Low');
+});
+
+test('legacy manual setting names and values invalidate trials without requesting AI',async()=>{
+ const f=gamesFixture();let invalidated=0;f.window.TLIGameTrials={settingsChanged:()=>invalidated++};
+ f.handler(async()=>f.json({game_name:'Cyberpunk 2077',supported:false,settings:[],advice_controls:[]}));
+ await f.nodes['go-read-config-btn'].click();
+ const name=f.nodes['go-settings-grid'].querySelector('input'),select=f.nodes['go-settings-grid'].querySelector('select');
+ name.value='Menu shadows';await name.fire('input');select.value='Medium';await select.fire('change');
+ assert.equal(invalidated,4);assert.deepEqual(f.calls.map(call=>call.url),['/games/config_read']);
+});
+
+for(const event of ['tli-account-changed','tli-user-changed'])test(event+' clears shared private config and rejects an old pending read',async()=>{
+ const f=gamesFixture();f.handler(async()=>f.json(settingsRead()));await f.nodes['go-read-config-btn'].click();
+ const select=f.nodes['go-settings-grid'].querySelector('select');select.value='Medium';await select.fire('change');
+ let finish;f.handler(async()=>new Promise(resolve=>finish=resolve));const old=f.nodes['go-read-config-btn'].click();await tick();
+ emit(f,event);assert.equal(f.nodes['go-game-input'].value,'');assert.equal(f.window.TLIGames.trialContext().locked,true);
+ assert.equal(f.nodes['go-settings-grid'].innerHTML,'');
+ emit(f,'tli-session-unlocked');emit(f,'tli-private-observation-ready');f.nodes['go-game-input'].value='Cyberpunk 2077';
+ finish(f.json(settingsRead('Ultra')));await old;
+ const context=f.window.TLIGames.trialContext();assert.equal(context.current_settings.length,0);assert.equal(Object.keys(context.manual_values).length,0);
+ assert.equal(context.config_game_name,null);assert.equal(f.calls.length,2);
 });

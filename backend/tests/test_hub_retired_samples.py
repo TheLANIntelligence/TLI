@@ -22,11 +22,11 @@ def existing(tmp_path, monkeypatch):
 
 def test_both_sample_views_retire_dead_offer_without_touching_installed_copy(existing):
     installed, _, before = existing
-    for result in [hub.hub_sample_registry(), hub.hub_registry(sample=True)]:
+    for result in [hub.hub_sample_registry(check=lambda: None), hub.hub_registry(sample=True, check=lambda: None)]:
         assert result['packages']
         assert 'app-wol-pad' not in {row['id'] for row in result['packages']}
         assert all('/mesh/wol' not in row.get('inline_html', '') for row in result['packages'])
-    assert hub.hub_installed()['installed'] == installed
+    assert hub.hub_installed(check=lambda: None)['installed'] == installed
     assert all(path.read_bytes() == data for path, data in before.items())
 
 
@@ -34,15 +34,15 @@ def test_retired_bundled_install_refuses_before_any_package_write(existing, monk
     _, _, before = existing
     monkeypatch.setattr(hub, '_fetch_registry', lambda *_: pytest.fail('A sample request must not use a remote registry'))
     with pytest.raises(HTTPException) as error:
-        hub.hub_install(hub.InstallRequest(package_id='app-wol-pad', use_sample=True))
+        hub.hub_install(hub.InstallRequest(package_id='app-wol-pad', use_sample=True), check=lambda: None)
     assert error.value.status_code == 404
     assert all(path.read_bytes() == data for path, data in before.items())
 
 
 def test_user_registry_with_same_id_remains_available(existing, monkeypatch):
     _, registry, before = existing
-    monkeypatch.setattr(hub, '_load_settings', lambda: {'enabled': True, 'hub_url': 'https://registry.example.test'})
-    monkeypatch.setattr(hub, '_fetch_registry', lambda _: registry)
-    assert hub.hub_registry()['packages'][0]['id'] == 'app-wol-pad'
+    monkeypatch.setattr(hub, '_load_settings', lambda *_: {'enabled': True, 'hub_url': 'https://registry.example.test'})
+    monkeypatch.setattr(hub, '_fetch_registry', lambda *_: registry)
+    assert hub.hub_registry(check=lambda: None)['packages'][0]['id'] == 'app-wol-pad'
     assert hub._load_local_registry() == registry
     assert all(path.read_bytes() == data for path, data in before.items())

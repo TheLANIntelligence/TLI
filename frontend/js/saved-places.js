@@ -5,8 +5,10 @@
   const state = { rows: [], busy: false, epoch: 0, checks: new Map(), editing: null };
   const home = { rows: [], loaded: false, busy: false, opening: false, failed: false, checkedAt: null, epoch: 0, request: 0, pending: null };
   const fallbackPanels = { 'panel-dashboard2': 'Dashboard', 'panel-main': 'AI Chat', 'panel-files': 'Files', 'panel-visualizer': 'Free Space', 'panel-settings': 'Settings', 'panel-devices': 'Devices' };
+  const panelHidden = id => id === 'panel-homelab' || window.TLIUI?.isPanelHidden?.(id) === true;
+  const visiblePlace = row => row.kind !== 'panel' || !panelHidden(row.target);
   const panels = () => Array.isArray(window.TLIUI?.navigation) ? Object.fromEntries(window.TLIUI.navigation
-    .filter(item => item.kind !== 'shortcut' && /^panel-[a-z0-9-]+$/.test(item.id) && typeof item.label === 'string')
+    .filter(item => item.kind !== 'shortcut' && !panelHidden(item.id) && /^panel-[a-z0-9-]+$/.test(item.id) && typeof item.label === 'string')
     .map(item => [item.id,item.label])) : fallbackPanels;
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text != null) n.textContent = text; if (cls) n.className = cls; return n; };
   const button = (text, fn) => { const b = node('button', text, 'btn-outline'); b.type = 'button'; b.addEventListener('click', fn); return b; };
@@ -45,13 +47,14 @@
   async function load(current) {
     const result = await api(); if (!current()) return;
     if (result.protocol !== 'saved-places-v1' || !Array.isArray(result.places)) throw new Error('This host does not support saved places.');
-    state.rows = result.places; state.checks.clear(); render(); adoptHomeRows(state.rows); status(`${state.rows.length} saved places. Locations are checked only when you ask.`);
+    state.rows = result.places; state.checks.clear(); render(); adoptHomeRows(state.rows); status(`${state.rows.filter(visiblePlace).length} saved places. Locations are checked only when you ask.`);
   }
   function navigate(panel) {
     if (typeof switchPanel !== 'function') throw new Error('Panel navigation is unavailable. Refresh TLI and try again.');
     switchPanel(panel);
   }
   async function visit(row, action, current) {
+    if (!visiblePlace(row)) throw new Error('This panel is unavailable.');
     const checked = await api('/' + encodeURIComponent(row.id) + '/check', 'POST');
     if (!current()) return;
     if (checked.revision !== row.revision) throw new Error('This favorite changed. Refresh before opening it.');
@@ -79,8 +82,9 @@
   }
   function render() {
     const list = $('places-list'); list.replaceChildren();
-    if (!state.rows.length) list.append(node('p', 'No favorites yet. Save a folder, drive, note from Notes & fixes or TLI panel.'));
-    state.rows.forEach(row => {
+    const visible = state.rows.filter(visiblePlace);
+    if (!visible.length) list.append(node('p', 'No favorites to show. Save a folder, drive, note from Notes & fixes or TLI panel.'));
+    visible.forEach(row => {
       const card = node('article', null, 'places-card'), actions = node('div', null, 'places-actions');
       card.id = 'places-entry-' + row.id; card.tabIndex = -1;
       card.append(node('h3', row.name), node('p', row.kind === 'note' ? 'note from Notes & fixes' : row.target, 'places-target'));
@@ -144,7 +148,7 @@
     if (!$('places-dialog').open) $('places-dialog').showModal();
     return run(async current => {
       await load(current); if (!current()) return;
-      const row = state.rows.find(item => item.id === id);
+      const row = state.rows.find(item => item.id === id && visiblePlace(item));
       if (!row) { status('This favorite is no longer available. Search again for current results.'); return; }
       const card = $('places-entry-' + id); card?.scrollIntoView?.({ block: 'nearest' }); card?.focus();
       status('Favorite selected from search. Choose Open or Scan when ready; its location has not been checked.');
@@ -160,8 +164,9 @@
     card.dataset.state = home.busy ? 'loading' : home.failed ? home.loaded ? 'stale' : 'unavailable' : home.loaded ? 'ready' : 'empty';
     $('places-home-refresh').disabled = home.busy;
     list.replaceChildren();
-    if (home.loaded && home.rows.length) {
-      home.rows.slice(0, 4).forEach(row => {
+    const visible = home.rows.filter(visiblePlace);
+    if (home.loaded && visible.length) {
+      visible.slice(0, 4).forEach(row => {
         const review = button('', async () => {
           if (home.opening || state.busy) return;
           home.opening = true; review.disabled = true;
@@ -177,7 +182,7 @@
       });
     } else if (home.loaded) list.append(node('p', 'Save a folder, drive, note or TLI panel to return here quickly.', 'places-home-empty'));
     else if (!home.busy && !home.failed) list.append(node('p', 'Open Dashboard or choose Refresh to load your private favorites.', 'places-home-empty'));
-    $('places-home-count').textContent = home.loaded ? home.rows.length > 4 ? `4 of ${home.rows.length}` : String(home.rows.length) : '';
+    $('places-home-count').textContent = home.loaded ? visible.length > 4 ? `4 of ${visible.length}` : String(visible.length) : '';
     $('places-home-status').textContent = message || (home.busy ? 'Loading saved places…' : home.loaded ? `Checked ${new Date(home.checkedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Select a favorite to review it.` : '');
   }
   async function refreshHome() {

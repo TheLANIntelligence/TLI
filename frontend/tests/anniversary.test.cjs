@@ -81,7 +81,7 @@ test('Narrator rejects stale messages and cancels a superseded transition', () =
   const displayed = [];
   let timerId = 0;
   const context = vm.createContext({
-    _open: true, _sessionLocked:false, _el: () => null, _typeText: text => displayed.push(text), _setNarratorCard() {},
+    window:{}, _open: true, _sessionLocked:false, _accessBlocked:false, _el: () => null, _typeText: text => displayed.push(text), _setNarratorCard() {},
     setTimeout: fn => { timers.set(++timerId, fn); return timerId; },
     clearTimeout: id => timers.delete(id),
   });
@@ -103,7 +103,7 @@ test('dashboard connection failure replaces a stale healthy Narrator', async () 
   const messages = [];
   const metadata = [];
   const context = vm.createContext({
-    _open: true, _sessionLocked:false, _refreshPending:null, _viewEpoch:0, document:{hidden:false}, AbortSignal, fetch: async () => { throw new Error('offline'); },
+    _open: true, _sessionLocked:false, _accessBlocked:false, _refreshPending:null, _viewEpoch:0, document:{hidden:false}, AbortSignal, fetch: async () => { throw new Error('offline'); },
     window: { TLIUIHealth: require('../js/ui-health.js') }, _lastData: null,
     _lastRefreshFailed: false, _el: () => null,
     _setOrb() {}, _setMeta: text => metadata.push(text), _feedLog() {}, setEventMessage: msg => messages.push(msg),
@@ -119,11 +119,13 @@ test('Dashboard access rejection does not probe legacy private endpoints', async
   const app = fs.readFileSync(path.join(frontend, 'app.js'), 'utf8');
   const start = app.indexOf('  async function _refresh()');
   const end = app.indexOf('\n  function _renderMeshStrip', start);
-  const calls=[];
-  const context=vm.createContext({_open:true,_sessionLocked:false,_refreshPending:null,_viewEpoch:0,document:{hidden:false},AbortSignal,
+  const calls=[],access=[];
+  const context=vm.createContext({_open:true,_sessionLocked:false,_accessBlocked:false,_refreshPending:null,_viewEpoch:0,document:{hidden:false},AbortSignal,
     fetch:async url=>{calls.push(url);return {ok:false,status:401};},window:{TLIUIHealth:require('../js/ui-health.js')},
+    _pauseDashboard:()=>access.push('pause'),_clearPrivateDashboard:()=>access.push('clear'),_showAccessPrompt:()=>access.push('recover'),
     _lastData:null,_lastRefreshFailed:false,_el:()=>null,_setOrb(){},_setMeta(){},_feedLog(){},setEventMessage(){}});
   vm.runInContext(app.slice(start,end)+'\nthis.refresh=_refresh;',context);
   await context.refresh();
   assert.deepEqual(calls,['/dashboard/command-center']);
+  assert.deepEqual(access,['pause','clear','recover']);assert.equal(context._accessBlocked,true);
 });

@@ -202,7 +202,14 @@ async def capture_child(source, cases, preset_id='standard'):
                 context.devices.get = get_device
                 devices.inventory = lambda: {'node': copy.deepcopy(host), 'devices': copy.deepcopy(rows)}
                 state.load_shelly_registry = lambda: copy.deepcopy(fixture.get('registry', []))
-                home._registry = lambda: copy.deepcopy(fixture.get('registry', []))
+                def synthetic_registry(check):
+                    # Keep captured browser checks around the synthetic private
+                    # inventory projection; only its data source is replaced.
+                    check()
+                    registry = copy.deepcopy(fixture.get('registry', []))
+                    check()
+                    return registry
+                home._registry = synthetic_registry
                 models.bundled_capabilities = lambda: {'provider': 'bundled', 'selected': preset_id,
                     'name': preset['name'], 'running': True, 'installation_complete': True,
                     'vision': False, 'capability_source': 'synthetic preset and runtime health'}
@@ -250,7 +257,12 @@ async def capture_child(source, cases, preset_id='standard'):
                     return {str(p.relative_to(root)): sha(p.read_bytes()) for p in root.rglob('*') if p.is_file() and p.resolve() not in excluded}
                 before = snapshots()
                 try:
-                    response = await client.post(path, json=body)
+                    # Home requests retain the production browser-origin gate.
+                    # A fixture may deliberately omit/mismatch Origin to verify
+                    # rejection before inventory or driver effects.
+                    origin = fixture.get('origin', 'http://127.0.0.1')
+                    headers = {} if origin is None else {'Origin': origin}
+                    response = await client.post(path, json=body, headers=headers)
                     if len(response.content) > 512 * 1024:
                         raise ValueError('Route response exceeded bounded output')
                     data = {}; frames = []

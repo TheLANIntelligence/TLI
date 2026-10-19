@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bluetooth setup · TLI</title>
+  <style>
+    :root { color-scheme: dark light; font-family: system-ui, sans-serif; }
+    body { max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; line-height: 1.65; }
+    h1, h2 { line-height: 1.2; } h2 { margin-top: 2rem; }
+    pre { padding: 1rem; background: light-dark(#f0f2f5, #20252d); border-radius: .6rem; overflow-x: auto; }
+    a { color: light-dark(#1356ad, #9dc6ff); } li { margin-bottom: .6rem; }
+  </style>
+</head>
+<body>
+  <a href="/">Back to TLI</a>
+  <h1>Bluetooth setup</h1>
+  <p>TLI connects through the computer running TLI. Built-in Bluetooth is enough.
+    If that computer lacks Bluetooth, it needs a compatible USB Bluetooth adapter.</p>
+  <p>This first version supports Windows 11 (build 22000 or newer) and offers an
+    experimental Govee H6125 on/off profile. Other Bluetooth products and light
+    features are not supported by this profile.</p>
+  <p>TLI is designed for different brands. Setup lists available model integrations;
+    Bluetooth discovery alone does not make a device compatible. The H6125 is the
+    first direct Bluetooth integration, not a requirement for every TLI household.</p>
+  <h2>Prepare the TLI computer</h2>
+  <p>Bluetooth support is an optional installation component. Stop TLI before
+    installing it into the Python environment that runs your host. In the
+    documented source setup, run this from the TLI folder:</p>
+  <pre><code>.\backend\.venv\Scripts\python.exe -m pip install -r backend/requirements-bluetooth.txt</code></pre>
+  <p>An installed package may use a different prepared Python environment. Use
+    that environment, then start TLI normally. Nothing on this page installs
+    software, enables Bluetooth, pairs devices or sends a command.</p>
+  <h2>Add your light</h2>
+  <ol>
+    <li>Unlock TLI and expand Experimental · Bluetooth lights in Smart home,
+      below the optional Home Assistant connection.</li>
+    <li>Choose Scan Bluetooth devices. Select your light and its matching integration.
+      Confirm that its printed brand/model matches; currently the list contains Govee H6125.</li>
+    <li>Give it a unique name and add it. TLI checks its Bluetooth interface without switching the light.</li>
+    <li>Choose Check state, On or Off deliberately. You can also use its configured name in Ask TLI.</li>
+    <li>Forget device removes its saved TLI entry after confirmation. It does not switch the light or unpair Windows.</li>
+  </ol>
+  <h2>If your light is a different brand</h2>
+  <p>A nearby light may appear even when TLI has no matching Bluetooth integration.
+    Do not select another model to force a connection. More integrations require
+    their own device commands and testing. For lights already configured in Home
+    Assistant, TLI has a separate Optional Home Assistant connection for reviewed
+    state reads and On/Off actions. Its setup and permissions remain separate.</p>
+  <h2>Read the result</h2>
+  <p>Sent means a Bluetooth write completed. A separate reported state is needed
+    to verify on/off. Missing or invalid readings remain unknown. Check the light
+    before repeating an uncertain command; TLI never retries it automatically.</p>
+  <p>The H6125 profile still needs testing on your actual light. A nearby name
+    and a software-availability message do not prove compatibility or a working
+    Bluetooth radio. Close other apps holding the light if connection fails.</p>
+  <p>For installation requirements, see the
+    <a href="https://pypi.org/project/bleak/3.0.2/" target="_blank" rel="noopener noreferrer">Bleak package documentation</a>.
+    The distributed <code>docs/TLI_BLUETOOTH.md</code> guide records the protocol and acceptance limits.</p>
+</body>
+</html>

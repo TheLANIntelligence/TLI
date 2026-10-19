@@ -37,6 +37,9 @@ def test_current_navigation_panels_are_supported_and_legacy_favorites_are_not_re
     assert store.private_path('local', 'places').read_bytes() == before
     new = save(client, name='Saved reports', target='panel-reports')
     assert client.post(URL + '/' + new['id'] + '/check').json()['status'] == 'available'
+    homelab = save(client, name='HomeLab', target='panel-homelab')
+    assert client.post(URL + '/' + homelab['id'] + '/check').json()['status'] == 'available'
+    assert homelab in client.get(URL).json()['places']
     assert client.get(URL).json()['places'][0] == old
 
 

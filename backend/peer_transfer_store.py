@@ -158,6 +158,8 @@ def index(*, create=False):
                     unavailable()
         if not path.exists():
             with S._NODE_CONFIG_LOCK:
+                from node_settings import assert_available
+                assert_available(S.NODE_CONFIG_PATH)
                 cfg = S._security.read_json(S.NODE_CONFIG_PATH, "node configuration", 1024 * 1024)
                 if cfg.get("peer_transfers_established") or root().exists():
                     unavailable()

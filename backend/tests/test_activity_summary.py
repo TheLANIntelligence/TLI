@@ -120,16 +120,16 @@ def test_summary_and_review_require_session(client, monkeypatch):
     assert client.post("/dashboard/activity-summary/review", json=bus.activity_snapshot()["cursor"]).status_code == 401
 
 
-def test_api_cursor_validation_and_legacy_feed_contract(authed_client):
+def test_api_cursor_validation_and_legacy_feed_contract(browser_client):
     emit()
-    data = authed_client.get("/dashboard/activity-summary").json()
+    data = browser_client.get("/dashboard/activity-summary").json()
     assert data["ok"] is True
-    assert authed_client.post("/dashboard/activity-summary/review", json=data["cursor"]).json()["ok"] is True
+    assert browser_client.post("/dashboard/activity-summary/review", json=data["cursor"]).json()["ok"] is True
     for invalid in ({"stream_id": "bad", "sequence": 0}, {**data["cursor"], "sequence": -1},
                     {**data["cursor"], "sequence": True}):
-        assert authed_client.post("/dashboard/activity-summary/review", json=invalid).status_code == 422
-    assert authed_client.post("/dashboard/activity-summary/review", json={**data["cursor"], "sequence": 500}).status_code == 409
-    feed = authed_client.get("/api/events/recent").json()
+        assert browser_client.post("/dashboard/activity-summary/review", json=invalid).status_code == 422
+    assert browser_client.post("/dashboard/activity-summary/review", json={**data["cursor"], "sequence": 500}).status_code == 409
+    feed = browser_client.get("/api/events/recent").json()
     assert set(feed) == {"events"}
     assert {"id", "ts", "ts_fmt", "category", "level", "title", "body", "node", "actions"} <= set(feed["events"][0])
 

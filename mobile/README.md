@@ -1,6 +1,75 @@
 # TLI Companion
 
+## Personal AI refresh (0.2.0)
+
+The Android experience uses **Chat / Library / More**. Library shares existing
+conversations and notes; Chat provides direct photo/document entry and supports
+ordinary keyboard dictation without requesting microphone permission. Settings
+shows the installed native version/build and a public **Get Android update** link
+that remains usable when the home computer is offline.
+
+On the desktop, choose **Connect phone** and follow Prepare computer → Install
+Android app → Scan and connect → Start chatting. Android downloads no longer need
+email verification. Use the installed app's scanner for the private pairing QR;
+the separate installation QR only opens the public download page. Existing
+credentials, certificate checks, accepted-run recovery and draft cleanup remain.
+
+See [refresh behavior and acceptance](../docs/TLI_PHONE_REFRESH.md) and
+[current signed delivery](../docs/TLI_COMPANION_CURRENT.md). The newer app requires
+an in-place signed APK update; changing desktop files does not update the phone.
+
 Native iPhone/Android private beta. The Expo Router app shares the owner's existing TLI conversations, devices, diagnostics, scenes, and activity review position. Every native server request uses the local certificate-pinned `modules/tli-transport` module. Expo Go is unsupported.
+
+## Shared workspace source update
+
+Android recovery now combines all private addresses returned by native DNS-SD
+with bounded DNS fallback for the reviewed `.local` name. Native network callbacks
+and foreground resume trigger fresh verification. Each candidate must prove the
+saved certificate, hostname and signing identity without receiving credentials;
+only the proven route becomes active. Recovery refreshes read-only state and
+reattaches saved runs without resubmitting actions. Changed identity or certificate
+details require review. See [connection rollout and acceptance](../docs/TLI_SEAMLESS_CONNECTIONS.md).
+
+The Chat / Library / More navigation includes shared conversation search,
+small-app Builder projects and revisions, reviewed document questions, and an
+explicit reviewed LAN model selector. Chat renders escaped Markdown, tables and
+copyable code. Model choices belong to a conversation on supporting hosts; actual
+answer receipts identify the executing computer separately from the home host.
+
+TXT/Markdown is read locally; selected PDF/DOCX files are uploaded over pinned
+HTTPS for bounded extraction and text review. The existing four-document/64 KiB
+text and 8 MiB source limits apply. Documents require a standalone local-provider
+question; selecting them never silently changes the chosen LAN resource. Cached
+source files are removed after reading. Document text selections clear on
+backgrounding or pairing changes; an already accepted request continues on the host.
+
+Supporting hosts expose owner-scoped runs. Once an answer or app generation is
+accepted, backgrounding detaches this phone while the host continues. Foreground
+resume reads the same run; it never repeats the submission. A protected,
+owner/host-bound run pointer restores the most recent accepted Chat after app
+restart. Stop requests cancellation on the host; an uncertain response does not
+prove that earlier actions were undone. Older hosts retain the existing interrupted
+foreground-request behavior. Shared-work notifications refresh read-only lists and
+offer conversation refresh without overwriting a draft.
+
+More can attach to a Chat run started on another screen, show its current answer
+and request host cancellation. The unsent composer draft stays intact. Startup
+attachment and history/settings reads wait for a reviewed foreground reconnection
+after transient interruption; identity, credential and missing-record failures
+stop with review guidance. Document questions keep the chosen bundled or LM Studio
+route and require a fresh document capability check before accepting a host run.
+
+Builder reuses the host library, immutable versions and revision conflicts.
+Android previews run in a separate local WebView with a sandboxed opaque iframe,
+response CSP, blocked network loading, no TLI credentials and no native JavaScript
+bridge. Generated checks are advisory. Source ZIPs download through pinned native
+transport into temporary cache before explicit sharing. iPhone preview is clearly
+unavailable in this source release. Browser samples remain entirely synthetic.
+
+These changes require a newly compiled Android build; they do not update an
+installed beta automatically. Physical background/resume, picker, cache cleanup,
+network loss, retained pairing, accessibility and preview egress checks remain
+native release gates. JavaScript exports do not establish native acceptance.
 
 The browser preview renders the same screens with clearly labeled sample data. Run `npm run preview` with the supported Node version below. Its platform-specific transport simulates conversations and controls entirely in memory; camera buttons use a sample printer illustration. It cannot pair with TLI, read protected credentials, upload a real photo, or control actual devices. Browser changes disappear on reload.
 
@@ -28,7 +97,12 @@ npx expo export --platform ios --platform android --output-dir dist
 
 ## Pair
 
-Start TLI with PIN authentication, LAN binding, and HTTPS enabled. Desktop Home & network → Phone Companion lets you review and save startup settings for the next normal start. Open the desktop's new HTTPS URL after restarting, create a pairing code, and scan it with the native app on the same network. Confirm the displayed node name and name the phone.
+Open **Connect phone** in the desktop TLI. The guided preparation reuses PIN, LAN,
+HTTPS, firewall and reviewed restart controls. After any required restart and
+unlock, install the Android app, create a private pairing code, and scan it inside
+the app on the same home network. Confirm the displayed computer and name the
+phone. Existing prepared hosts skip preparation; technical repair options remain
+available separately.
 
 The single-use code contains the LAN HTTPS origin, short-lived invitation, public leaf certificate, and node identity. The invitation is discarded after redemption. SecureStore keeps the resulting credential and pairing details; neither is placed in application logs, URLs, AsyncStorage, or photos. A revoked credential cannot fall through to a desktop/anonymous session. A certificate replacement requires re-pairing.
 
@@ -76,7 +150,7 @@ npx eas-cli build --platform ios --profile preview
 npx eas-cli build --platform ios --profile simulator
 ```
 
-Native module tests and trust fixtures are documented under `modules/tli-transport`. Release acceptance requires physical iPhone and Android tests for pairing and revocation; wrong/expired certificates and hostname mismatch; camera/local-network denial; Wi-Fi loss mid-stream and mid-action; background/resume; large text/screen readers; keyboard/composer visibility; and photo troubleshooting continued on desktop under the same conversation ID. Cloud compilation and JS tests do not replace physical-device verification.
+Native module tests and trust fixtures are documented under `modules/tli-transport`. This refresh targets physical Android with a Windows home host: pairing and revocation; wrong/expired certificates and hostname mismatch; camera/local-network denial; Wi-Fi loss mid-stream and mid-action; background/resume; large text/screen readers; keyboard/composer visibility; and photo questions continued on desktop under the same conversation ID. Those physical checks were not run for this candidate at the user's direction. Native iPhone delivery remains future work. Cloud compilation and JS tests do not replace physical-device verification.
 
 `npm audit` currently reports 13 moderate transitive advisories in Expo's `xcode → uuid` build tooling and Router's `query-string → decode-uri-component` dependency paths, with no high/critical findings. The suggested automated fixes downgrade Expo/Router across major versions; those are intentionally not applied. Review upstream updates before wider distribution.
 

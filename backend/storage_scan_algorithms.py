@@ -15,6 +15,7 @@ import shutil
 import stat
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -134,7 +135,7 @@ def _allocated_size(path, info):
 def _scanner_metadata():
     return {"engine": "scandir", "mft": False,
             "allocation_method": "GetFileInformationByHandleEx/FileStandardInfo" if os.name == "nt" else "stat.st_blocks",
-            "limitations": ["Bounded directory enumeration; direct NTFS MFT scanning is not implemented.",
+            "limitations": ["Directory enumeration selected; raw NTFS acquisition is not enabled in Free Space.",
                             "Links and reparse points are excluded. Unreadable entries leave incomplete coverage.",
                             "Allocation excludes filesystem metadata and unenumerated alternate data streams; shared extents may overlap.",
                             "Hard-link bytes belong to the first observed name; folder attribution can change between scans."]}
@@ -453,10 +454,13 @@ def _expand_user_path(raw: str) -> Path:
     return _resolve_root(raw)
 
 def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, noisy_names: Optional[set] = None,
-               max_seconds: float = 15, max_nodes: int = 25_000) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
+               max_seconds: float = 15, max_nodes: int = 25_000, inventory_sink=None) -> Tuple[Dict[str, Any], List[Dict[str, Any]], Dict[str, Any]]:
     """
     Returns (tree, largest_items, meta)
     Tree format matches app.js expectations: {name, path, size, children:[...]}
+    Optional sink receives every observed real entry, independently of the tree
+    budget. It is a transport callback; this read worker never persists an index.
+    Direct files are observed before descending into a directory's child folders.
     """
     noisy_names = set(NOISY_DEFAULT) if noisy_names is None else noisy_names
     started = time.time()
@@ -481,6 +485,35 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
     allocation_unknown = 0
     categories = {}
     file_summary = []
+    inventory_rows = 0
+    inventory_failure = []
+
+    def emit_inventory(node, info=None, **extra):
+        nonlocal inventory_rows
+        if inventory_sink is None:
+            return
+        identity = getattr(info, "st_ino", 0)
+        volume = getattr(info, "st_dev", None)
+        row = {key: value for key, value in node.items() if key not in {"children"}}
+        row.update(root_path=str(root), parent_path=None if node["path"] == str(root) else str(Path(node["path"]).parent),
+                   file_identity=f"{volume}:{identity}" if identity and volume is not None else None,
+                   volume_identity=f"device:{volume}" if volume is not None else None,
+                   coverage_reason=node.get("size_reason"), **extra)
+        try:
+            inventory_sink(row)
+            inventory_rows += 1
+        except Exception as exc:
+            # The traversal tolerates filesystem errors, never transport loss.
+            inventory_failure.append(exc)
+            raise
+
+    def emit_excluded(full, name, reason, info=None, kind="unknown"):
+        emit_inventory({"path": str(full), "name": name, "kind": kind, "size": 0,
+                        "logical_size": None, "allocated_size": None, "allocated_known_bytes": 0,
+                        "size_known": False, "size_partial": True, "allocated_partial": True,
+                        "size_reason": reason, "excluded": True, "protected": True,
+                        "modified_at": _timestamp(getattr(info, "st_mtime", None)),
+                        "created_at": _timestamp(getattr(info, "st_birthtime", None))}, info)
 
     # Track largest files across scan
     largest: List[Dict[str, Any]] = []
@@ -492,7 +525,15 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
         if len(largest) > 200:
             del largest[200:]
 
-    def walk_dir(p: Path, depth: int, retain_children: bool = True) -> Dict[str, Any]:
+    def directory_node(p, info=None):
+        return {"name": p.name or str(p), "path": str(p), "size": 0, "children": [],
+                "size_known": True, "size_partial": False, "size_reason": None,
+                "kind": "directory", "files": 0, "allocated_size": None,
+                "allocated_known_bytes": 0, "allocated_partial": True,
+                "modified_at": _timestamp(getattr(info, "st_mtime", None)),
+                "created_at": _timestamp(getattr(info, "st_birthtime", None))}
+
+    def walk_dir(p: Path, depth: int, retain_children: bool = True, directory_info=None) -> Dict[str, Any]:
         nonlocal entries_seen, denied, files_count, dirs_count
         nonlocal skipped, depth_limited, entry_limited, time_limited
         nonlocal direct_file_bytes, summary_limited
@@ -500,11 +541,33 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
         nonlocal cancelled
         nonlocal hardlinks_skipped, identity_unknown, allocation_unknown
 
-        node: Dict[str, Any] = {"name": p.name or str(p), "path": str(p), "size": 0, "children": [],
-                                "size_known": True, "size_partial": False, "size_reason": None,
-                                "kind": "directory", "files": 0, "allocated_size": None,
-                                "allocated_known_bytes": 0, "allocated_partial": True,
-                                "modified_at": None, "created_at": None}
+        node: Dict[str, Any] = directory_node(p, directory_info)
+        coverage_before = (denied, skipped, depth_limited, entry_limited, time_limited, cancelled, identity_unknown)
+
+        # Queued folders were observed in their parent. Once a limit is reached,
+        # retain that evidence as unknown without opening more filesystem handles.
+        if not cancelled:
+            try:
+                checkpoint(phase="enumerating", entries_seen=entries_seen, files=files_count)
+            except ScanCancelled:
+                cancelled = True
+        stop_reason = None
+        if cancelled:
+            stop_reason = "cancelled"
+        elif depth > max_depth:
+            depth_limited += 1
+            stop_reason = "depth_limit"
+        elif time.monotonic() >= deadline:
+            time_limited = True
+            stop_reason = "time_limit"
+        elif entries_seen >= max_entries:
+            entry_limited = True
+            stop_reason = "entry_limit"
+        if stop_reason:
+            node.update(size_known=False, size_partial=True, size_reason=stop_reason)
+            emit_inventory(node, directory_info)
+            return node
+
         # Directory timestamps are metadata only; a missing timestamp alone does
         # not make otherwise successful enumeration an incomplete byte count.
         try:
@@ -512,40 +575,27 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
             if _is_reparse(directory_info) or stat.S_ISLNK(directory_info.st_mode) or (hasattr(p, "is_junction") and p.is_junction()):
                 skipped += 1
                 node.update(size_known=False, size_partial=True, size_reason="linked")
+                emit_inventory(node, directory_info, excluded=True)
                 return node
             node.update(modified_at=_timestamp(directory_info.st_mtime),
                         created_at=_timestamp(getattr(directory_info, "st_birthtime", None)))
         except OSError:
             pass
-        coverage_before = (denied, skipped, depth_limited, entry_limited, time_limited, cancelled, identity_unknown)
-        checkpoint(phase="enumerating", entries_seen=entries_seen, files=files_count)
-
-        if depth > max_depth:
-            depth_limited += 1
-            node.update(size_known=False, size_partial=True, size_reason="depth_limit")
-            return node
-
-        if time.monotonic() >= deadline:
-            time_limited = True
-            node.update(size_known=False, size_partial=True, size_reason="time_limit")
-            return node
-
         try:
             # Do not swallow permission failures or allocate an unbounded directory listing.
             scandir_items = os.scandir(p)
         except Exception:
             denied += 1
             node.update(size_known=False, size_partial=True, size_reason="unreadable")
-            return node
-
-        # Stop if we hit a hard limit
-        if entries_seen >= max_entries:
-            scandir_items.close()
-            entry_limited = True
-            node.update(size_known=False, size_partial=True, size_reason="entry_limit")
+            emit_inventory(node, directory_info)
             return node
 
         children: List[Dict[str, Any]] = []
+        # Only directories wait. Files stream immediately, and every queued item
+        # has already consumed the global entry budget. Do not materialize or
+        # sort a directory listing, or let an early subtree starve later files
+        # in the directory the user actually selected.
+        pending_directories = deque()
         total = 0
         allocated_total = 0
         allocation_partial = False
@@ -567,6 +617,7 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                 full = Path(entry.path)
                 if entry.is_symlink() or (hasattr(full, "is_junction") and full.is_junction()):
                     skipped += 1
+                    emit_excluded(full, name, "linked", kind="link")
                     continue
                 info = None
                 try:
@@ -575,48 +626,19 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                     pass
                 if _is_reparse(info):
                     skipped += 1
+                    emit_excluded(full, name, "reparse_point", info, "link")
                     continue
                 # Skip obvious noisy dirs
                 if entry.is_dir(follow_symlinks=False) and name in noisy_names:
                     skipped += 1
+                    emit_excluded(full, name, "excluded_name", info, "directory")
                     continue
 
                 full = Path(entry.path)
 
                 if entry.is_dir(follow_symlinks=False):
                     dirs_count += 1
-                    # Reserve the parent before its descendants consume the node
-                    # budget. Otherwise a full child tree can lose its only path
-                    # back to the root when there is no slot left for this folder.
-                    retain_child = retain_children and nodes_retained < max_nodes
-                    if retain_child:
-                        nodes_retained += 1
-                    child = walk_dir(full, depth + 1, retain_children=retain_child)
-                    if depth == 0:
-                        if len(folder_summary) < 200:
-                            folder_summary.append({"name": name, "bytes": int(child.get("size", 0) or 0),
-                                                   "size_known": child["size_known"], "size_partial": child["size_partial"]})
-                        else:
-                            summary_limited = True
-                    if is_protected(str(full)):
-                        child["protected"] = True
-                    total += int(child.get("size", 0) or 0)
-                    allocated_total += child["allocated_known_bytes"]
-                    allocation_partial |= child["allocated_partial"]
-                    recursive_files += child["files"]
-                    if child.get("size", 0) > 0 or child.get("children") or child.get("size_partial"):
-                        if retain_child:
-                            children.append(child)
-                        else:
-                            representation_limited = True
-                            node["omitted_bytes"] = node.get("omitted_bytes", 0) + int(child.get("size", 0) or 0)
-                            node["omitted_entries"] = node.get("omitted_entries", 0) + 1
-                            node["omitted_allocated_known_bytes"] = node.get("omitted_allocated_known_bytes", 0) + child["allocated_known_bytes"]
-                            node["omitted_allocation_partial"] = node.get("omitted_allocation_partial", False) or child["allocated_partial"]
-                    elif retain_child:
-                        # An empty, fully inspected directory has never been a
-                        # map entry. Return its reservation for later siblings.
-                        nodes_retained -= 1
+                    pending_directories.append((full, info))
                 else:
                     # file
                     files_count += 1
@@ -643,7 +665,11 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                         identity_unknown += 1
                     # Without identity, per-name allocation could describe the
                     # same physical file more than once. Do not call it known.
-                    allocated = 0 if hardlink_duplicate else _allocated_size(full, info) if identity[1] else None
+                    # The tree retains v1 first-observed counting. The inventory
+                    # needs actual bytes for every name so it can attribute links
+                    # deterministically after acquisition, regardless of order.
+                    observed_allocated = _allocated_size(full, info) if identity[1] and (inventory_sink is not None or not hardlink_duplicate) else None
+                    allocated = 0 if hardlink_duplicate else observed_allocated
                     allocated_total += allocated or 0
                     allocation_partial |= allocated is None
                     allocation_unknown += int(allocated is None)
@@ -660,6 +686,8 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                     category["files"] += 1
                     summary = {"path": str(full.relative_to(root)), "bytes": int(sz), "logical_size": logical_size,
                                "hardlink_duplicate": hardlink_duplicate,
+                               "file_identity": f"{identity[0]}:{identity[1]}" if identity[1] else None,
+                               "volume_identity": f"device:{identity[0]}" if identity[1] else None,
                                "allocated_size": allocated, "modified_at": file_node["modified_at"],
                                "created_at": file_node["created_at"], "extension": file_node["extension"],
                                "category": file_node["category"], "size_known": size_known}
@@ -670,6 +698,9 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                         heapq.heapreplace(file_summary, candidate)
                     if is_protected(str(full)):
                         file_node["protected"] = True
+                    emit_inventory(file_node, info, allocated_size=observed_allocated,
+                                   allocated_partial=observed_allocated is None,
+                                   allocated_known_bytes=observed_allocated or 0)
                     if retain_children and nodes_retained < max_nodes:
                         children.append(file_node)
                         nodes_retained += 1
@@ -687,12 +718,48 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
                         push_largest(dict(file_node))
 
             except Exception:
+                if inventory_failure:
+                    raise
                 denied += 1
+                emit_excluded(Path(entry.path), entry.name, "unreadable")
                 continue
         except ScanCancelled:
             cancelled = True
         finally:
             scandir_items.close()
+
+        while pending_directories:
+            full, info = pending_directories.popleft()
+            # Reserve the parent before descendants consume the remaining map
+            # budget. Direct files have already had their opportunity for a slot.
+            retain_child = retain_children and nodes_retained < max_nodes
+            if retain_child:
+                nodes_retained += 1
+            child = walk_dir(full, depth + 1, retain_children=retain_child, directory_info=info)
+            if depth == 0:
+                if len(folder_summary) < 200:
+                    folder_summary.append({"name": full.name, "bytes": int(child.get("size", 0) or 0),
+                                           "size_known": child["size_known"], "size_partial": child["size_partial"]})
+                else:
+                    summary_limited = True
+            if is_protected(str(full)):
+                child["protected"] = True
+            total += int(child.get("size", 0) or 0)
+            allocated_total += child["allocated_known_bytes"]
+            allocation_partial |= child["allocated_partial"]
+            recursive_files += child["files"]
+            if child.get("size", 0) > 0 or child.get("children") or child.get("size_partial"):
+                if retain_child:
+                    children.append(child)
+                else:
+                    representation_limited = True
+                    node["omitted_bytes"] = node.get("omitted_bytes", 0) + int(child.get("size", 0) or 0)
+                    node["omitted_entries"] = node.get("omitted_entries", 0) + 1
+                    node["omitted_allocated_known_bytes"] = node.get("omitted_allocated_known_bytes", 0) + child["allocated_known_bytes"]
+                    node["omitted_allocation_partial"] = node.get("omitted_allocation_partial", False) or child["allocated_partial"]
+            elif retain_child:
+                # Empty, fully inspected folders do not consume map slots.
+                nodes_retained -= 1
 
         # Sort children by size desc and cap per directory to keep payload manageable
         children.sort(key=lambda x: x.get("size", 0), reverse=True)
@@ -729,6 +796,7 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
         node["allocated_partial"] = bool(allocation_partial or node["size_partial"])
         node["allocated_known_bytes"] = allocated_total
         node["allocated_size"] = None if node["allocated_partial"] else allocated_total
+        emit_inventory(node, directory_info)
         return node
 
     try:
@@ -738,6 +806,7 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
         tree = {"name": root.name or str(root), "path": str(root), "size": 0, "children": [],
                 "size_known": False, "size_partial": True, "size_reason": "cancelled", "kind": "directory", "files": 0,
                 "allocated_size": None, "allocated_known_bytes": 0, "allocated_partial": True}
+        emit_inventory(tree)
     meta = {
         "root": str(root),
         "seconds": round(time.time() - started, 3),
@@ -762,6 +831,7 @@ def _scan_tree(root: Path, max_entries: int = 120_000, max_depth: int = 18, nois
         "hardlinks_skipped": hardlinks_skipped,
         "identity_unknown": identity_unknown,
         "allocation_unknown": allocation_unknown,
+        "inventory_rows_emitted": inventory_rows,
         "allocated_size": tree["allocated_size"],
         "allocated_known_bytes": tree["allocated_known_bytes"],
         "categories": sorted(categories.values(), key=lambda row: row["bytes"], reverse=True),

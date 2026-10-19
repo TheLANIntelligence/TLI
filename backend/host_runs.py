@@ -87,6 +87,10 @@ class Run:
         self.ident = entry["id"]
         self.owner = entry["owner"]
         self.authorize = operation_access(request, self.owner)
+        if entry["kind"] == "agent_task":
+            from browser_authority import browser_control_access
+            from fastapi import Response
+            self.authorize = browser_control_access(request, Response())
         self.stop = threading.Event()
         self.started = time.monotonic()
         self.events = deque(maxlen=512)
@@ -100,6 +104,11 @@ class Run:
         """Retain the recovery project even if generation is later cancelled."""
         with _lock:
             self.entry["app_id"] = ident
+            _write()
+
+    def bind_task(self, ident):
+        with _lock:
+            self.entry["task_id"] = ident
             _write()
 
     def check(self):
@@ -134,9 +143,24 @@ def _owned(ident, owner):
     return entry
 
 
+def state(ident, owner):
+    with _lock:
+        return _owned(ident, owner)["status"]
+
+
 def _saved_result(entry):
     if entry["status"] != "completed":
         return None
+    if entry["kind"] == "agent_task":
+        from task_agent import get
+        from workspace_settings import owned
+        task = get(entry["owner"], entry["task_id"])
+        conv = owned(S.load_conversations(), entry["conversation_id"], entry["owner"])
+        turn = next((m for m in reversed(conv.get("messages", [])) if m.get("run_id") == entry["id"] and m.get("role") == "assistant"), None)
+        if turn is None:
+            return None
+        return {"reply": turn["content"], "task_id": task["id"], "agent": task,
+                "task_status": turn.get("task_status"), "conversation_id": entry["conversation_id"], "run_id": entry["id"]}
     if entry["kind"] == "chat":
         from workspace_settings import owned
         conv = owned(S.load_conversations(), entry["conversation_id"], entry["owner"])
@@ -178,7 +202,7 @@ def get(ident, owner, after=0):
             # Replay buffers must not outlive access to the saved resource.
             # Keep the admission identity, but withhold all cached content after
             # deletion or an ownership change, including SSE delta events.
-            if entry["kind"] == "chat":
+            if entry["kind"] in {"chat", "agent_task"}:
                 from workspace_settings import owned
                 owned(S.load_conversations(), entry.get("conversation_id"), owner)
             elif entry.get("app_id"):
@@ -191,7 +215,7 @@ def get(ident, owner, after=0):
     if result is None and entry["status"] == "completed":
         try:
             value["result"] = _saved_result(entry)
-            if entry["kind"] == "chat" and value["result"]:
+            if entry["kind"] in {"chat", "agent_task"} and value["result"]:
                 value["text"] = value["result"]["reply"]
                 value["metadata"] = {key: item for key, item in value["result"].items() if key != "reply"}
         except (HTTPException, ValueError, OSError):
@@ -214,7 +238,9 @@ def _finish(run, status, error=None):
         run.entry.update(status=status, updated_at=S.now_iso(), cursor=run.cursor)
         if error:
             run.entry["error"] = str(error)[:700]
-        if run.result and run.entry["kind"] != "chat":
+        if run.result and run.entry["kind"] == "agent_task":
+            run.entry["task_id"] = run.result["task_id"]
+        elif run.result and run.entry["kind"] != "chat":
             project = run.result.get("project", {})
             run.entry.update(app_id=project.get("id"), result_revision=len(project.get("revisions", [])))
         _write()
@@ -222,7 +248,7 @@ def _finish(run, status, error=None):
         for old in sorted(finished, key=lambda value: value.entry["created_at"])[:-15]:
             _runs.pop(old.ident, None)
     publish(run.owner, "run", run.ident)
-    publish(run.owner, "conversation" if run.entry["kind"] == "chat" else "builder", run.entry.get("conversation_id") or run.entry.get("app_id") or "")
+    publish(run.owner, "conversation" if run.entry["kind"] in {"chat", "agent_task"} else "builder", run.entry.get("conversation_id") or run.entry.get("app_id") or "")
 
 
 async def _consume(run, response):
@@ -262,7 +288,10 @@ def _execute(run, request, payload, chat_path):
         with _lock:
             run.entry.update(status="running", updated_at=S.now_iso())
             _write()
-        if run.entry["kind"] == "chat":
+        if run.entry["kind"] == "agent_task":
+            import task_agent
+            run.result = task_agent.execute(run, payload)
+        elif run.entry["kind"] == "chat":
             if chat_path == "/chat" and payload.get("lan_inference") is None:
                 from routers.chat_routes import chat_endpoint, ChatRequest
                 response = chat_endpoint(req=ChatRequest.model_validate(payload), request=request, session_user=run.owner)
@@ -313,6 +342,10 @@ def _execute(run, request, payload, chat_path):
 
 
 def submit(owner, request, *, request_id, kind, payload, app_id=None, chat_path=None):
+    if kind == "agent_task":
+        from browser_authority import browser_control_access
+        from fastapi import Response
+        browser_control_access(request, Response())()
     payload = dict(payload)
     try:
         raw = json.dumps({"kind": kind, "payload": payload, "app_id": app_id, "chat_path": chat_path}, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -340,7 +373,28 @@ def submit(owner, request, *, request_id, kind, payload, app_id=None, chat_path=
         entry = {"id": ident, "owner": owner, "request_id": request_id, "digest": digest, "kind": kind,
                  "status": "accepted", "conversation_id": None, "app_id": app_id, "created_at": now, "updated_at": now, "cursor": 0}
         run = Run(entry, request)
-        if kind == "chat":
+        if kind == "agent_task":
+            import task_agent
+            from workspace_settings import owned
+            from conversation_guard import assert_idle, reserve_run
+            validated = task_agent.validate_request(owner, payload)
+            if validated.resume_task_id:
+                conversation_id = task_agent.get(owner, validated.resume_task_id)["conversation_id"]
+            else:
+                conversation_id = validated.conversation_id or "conv-" + uuid.uuid4().hex
+            with S.CONVERSATIONS_LOCK:
+                conversations = S.load_conversations()
+                if conversation_id in conversations:
+                    owned(conversations, conversation_id, owner)
+                else:
+                    conversations[conversation_id] = {"id": conversation_id, "user_id": owner, "title": validated.message[:80],
+                        "created_at": now, "last_updated": now, "messages": [], "provider": validated.provider.kind,
+                        "compute_selection": None, "settings_revision": 0}
+                assert_idle([conversation_id])
+                S.save_conversations(conversations)
+                reserve_run(conversation_id, ident)
+            payload["conversation_id"] = conversation_id
+        elif kind == "chat":
             from ai.ai_routes import ChatRequest
             from workspace_settings import owned, prepare
             conversation_id = payload.get("conversation_id") or payload.get("session_id") or "conv-" + uuid.uuid4().hex

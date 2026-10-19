@@ -1,6 +1,6 @@
 import { verificationEmailHTML } from './verification-email-template.mjs';
 
-const platformNames = { windows: 'Windows', macos: 'macOS' };
+const platformNames = { windows: 'Windows', macos: 'macOS', android: 'Android' };
 
 // Only the server calls this adapter. API keys and verification tokens never
 // enter the browser's request response, analytics, or application logs.
@@ -14,7 +14,8 @@ export async function sendVerificationEmail(env, { email, platform, version, tok
     throw new Error('Verification email is unavailable');
   }
   const link = `${origin.origin}/download/#verify=${token}`;
-  const label = `TLI ${version} for ${platformNames[platform]}`;
+  const product = platform === 'android' ? 'TLI Companion Beta' : 'TLI';
+  const label = `${product} ${version} for ${platformNames[platform]}`;
   const text = `Verify your email to download ${label}.\n\nOpen this link, then choose "Verify email and show download":\n${link}\n\nThis link expires in 20 minutes and works once. If you did not request a TLI download, ignore this email. No download registration is verified until you confirm. This does not subscribe you to marketing emails.\n\nTheLANIntelligence\nhttps://thelanintelligence.com/`;
   const html = verificationEmailHTML({ label, link });
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
@@ -31,7 +32,7 @@ export async function sendVerificationEmail(env, { email, platform, version, tok
         'Idempotency-Key': idempotencyKey,
       },
       body: JSON.stringify({ from: env.DOWNLOAD_FROM_EMAIL, to: [email],
-        subject: `Verify your email — TLI for ${platformNames[platform]}`, text, html }),
+        subject: `Verify your email — ${product} for ${platformNames[platform]}`, text, html }),
     });
     if (!response.ok) throw new Error('Verification email was not accepted');
     const receipt = await response.json();

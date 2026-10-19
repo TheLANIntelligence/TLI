@@ -284,6 +284,8 @@ def test_local_stop_requires_exact_owned_generation_and_signed_recent_request(ho
     monkeypatch.setattr(L, 'inspect_backend', lambda *_: ('running', 'Owned proof'))
     checks = iter([True, False])
     monkeypatch.setattr(L, 'child_alive', lambda *_: next(checks, False))
+    generations = iter(['running', 'exited'])
+    monkeypatch.setattr(L, 'process_generation_state', lambda *_: next(generations))
     result = L.stop_owned_backend(host['root'], wait_seconds=0)
     assert result['stopped']
     value = H.read_json(H.path_for(host['root'], 'stop-backend.json'))

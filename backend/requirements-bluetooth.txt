@@ -1,0 +1,3 @@
+# Optional host Bluetooth support. Windows 11 build 22000+; Python 3.10+.
+# Installation does not scan, pair or control any device.
+bleak==3.0.2; sys_platform == "win32"

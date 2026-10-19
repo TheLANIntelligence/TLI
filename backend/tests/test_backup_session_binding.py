@@ -72,17 +72,14 @@ def test_revocation_between_validity_and_owner_lookup_cannot_adopt_local(monkeyp
 
 
 @pytest.mark.parametrize('vault', [False, True])
-def test_two_browsers_pin_removal_stops_inflight_but_allows_new_open_request(monkeypatch, vault):
+def test_two_browsers_pin_removal_stops_inflight_but_allows_new_open_request(monkeypatch, tmp_path, vault):
     """Real PIN cookies/routes; synthetic PIN storage and no private archive work."""
     pin, salt = '123456', 'a' * 64
-    pin_state = {'enabled': True, 'hash': system_routes._hash_pin(pin, salt), 'salt': salt}
     monkeypatch.setattr(S, '_active_sessions', {})
     monkeypatch.setattr(S, 'TLS_ENABLED', True)
-    monkeypatch.setattr(S, 'load_pin_config', lambda: dict(pin_state))
-    def remove_pin():
-        pin_state.clear()
-        pin_state['enabled'] = False
-    monkeypatch.setattr(S, 'clear_pin_config', remove_pin)
+    monkeypatch.setattr(S, 'DATA_DIR', str(tmp_path))
+    monkeypatch.setattr(S, 'PIN_CONFIG_FILE', tmp_path / 'pin.json')
+    S.save_pin_config(system_routes._hash_pin(pin, salt), salt)
     monkeypatch.setattr(backups, '_recent_requests', OrderedDict())
     monkeypatch.setattr(vault_backup_routes.archive, '_requests', OrderedDict())
     calls = []
@@ -102,7 +99,7 @@ def test_two_browsers_pin_removal_stops_inflight_but_allows_new_open_request(mon
     app.include_router(system_routes.router)
     app.include_router(backup_routes.router)
     app.include_router(vault_backup_routes.router)
-    with TestClient(app, base_url='https://synthetic.invalid') as browser_a, TestClient(app, base_url='https://synthetic.invalid') as browser_b:
+    with TestClient(app, base_url='https://synthetic.invalid', headers={'Origin':'https://synthetic.invalid'}) as browser_a, TestClient(app, base_url='https://synthetic.invalid', headers={'Origin':'https://synthetic.invalid'}) as browser_b:
         for browser in (browser_a, browser_b):
             assert browser.post('/system/pin/verify', json={'pin': pin}).status_code == 200
         token_b = browser_b.cookies.get('tli_session')
@@ -131,7 +128,7 @@ def test_two_browsers_pin_removal_stops_inflight_but_allows_new_open_request(mon
         for header in ['broken', 'Bearer invalid-synthetic-credential']:
             assert browser_b.post(path, json=fields, headers={'Authorization': header}).status_code == 401
         assert calls == ['local']
-        pin_state.update(enabled=True, hash=system_routes._hash_pin(pin, salt), salt=salt)
+        S.save_pin_config(system_routes._hash_pin(pin, salt), salt)
         assert browser_b.post(path, json=fields).status_code == 401
         assert calls == ['local']
 

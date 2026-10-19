@@ -30,9 +30,12 @@ def run(code, root, report_path, port=None):
     processes = []
     logs = []
     base = f"https://127.0.0.1:{port}"
+    browser_headers = {"Origin": base, "Sec-Fetch-Site": "same-origin"}
     cert = root / "data" / "tls" / "cert.pem"
     client = requests.Session()
     client.trust_env = False
+    native_client = requests.Session()
+    native_client.trust_env = False
 
     def launch(name):
         log = (root / f"https-{name}.log").open("w", encoding="utf-8")
@@ -44,7 +47,9 @@ def run(code, root, report_path, port=None):
         return process
 
     def request(method, path, **kwargs):
-        return client.request(method, base + path, verify=str(cert), timeout=8, allow_redirects=False, **kwargs)
+        # Native Companion never carries the desktop browser's cookie jar.
+        selected = native_client if any(key.lower() == "authorization" for key in kwargs.get("headers", {})) else client
+        return selected.request(method, base + path, verify=str(cert), timeout=8, allow_redirects=False, **kwargs)
 
     def ready(process):
         deadline = time.monotonic() + 35
@@ -73,6 +78,7 @@ def run(code, root, report_path, port=None):
     def stop(process, authorization):
         expect(request("POST", "/__fixture/stop", headers={**authorization, "Connection": "close"}))
         client.close()  # close owned keep-alive connections before graceful shutdown
+        native_client.close()
         if process.wait(timeout=45) != 0:
             raise RuntimeError("Synthetic listener did not stop cleanly.")
 
@@ -81,8 +87,15 @@ def run(code, root, report_path, port=None):
         ready(first)
         report["checks"]["production_https_listener"] = True
         expect(request("GET", "/api/intelligence/memory"), 401)
-        expect(request("POST", "/system/pin/verify", json={"pin": "incorrect"}), 403)
-        expect(request("POST", "/system/pin/verify", json={"pin": "739182"}))
+        # The browser login contract requires an explicit matching Origin even
+        # over loopback. Rejected origins must not become PIN authentication.
+        expect(request("POST", "/system/pin/verify", json={"pin": "739182"}), 403)
+        expect(request("POST", "/system/pin/verify", headers={"Origin": "https://unrelated.invalid"},
+                       json={"pin": "739182"}), 403)
+        assert not client.cookies.get("tli_session")
+        report["checks"]["browser_origin_enforced"] = True
+        expect(request("POST", "/system/pin/verify", headers=browser_headers, json={"pin": "incorrect"}), 403)
+        expect(request("POST", "/system/pin/verify", headers=browser_headers, json={"pin": "739182"}))
         assert client.cookies.get("tli_session")
         initial = expect(request("GET", "/api/companion/v1/startup"))
         assert initial["running"] == {"host": "127.0.0.1", "port": port, "https": True}
@@ -93,6 +106,11 @@ def run(code, root, report_path, port=None):
         baseline = expect(request("GET", "/api/companion/v1/bootstrap", headers=bearer))
         assert baseline["ai"]["status"] == "unavailable" and baseline["capabilities"]["chat"] is False
         report["checks"]["connected_with_ai_unavailable"] = True
+        expect(request("GET", "/api/ai/conversations", headers=bearer))
+        expect(request("GET", "/api/ai/conversations", headers={**bearer,
+            "Cookie": "tli_session=" + client.cookies.get("tli_session")}), 403)
+        assert not native_client.cookies
+        report["checks"]["native_history_rejects_browser_cookie"] = True
         expect(request("GET", "/api/companion/v1/bootstrap", headers={"Authorization": "Bearer tlic_invalid"}), 401)
         report["checks"]["invalid_bearer_does_not_fall_back"] = True
         activity = expect(request("GET", "/dashboard/activity-summary", headers=bearer))
@@ -148,7 +166,7 @@ def run(code, root, report_path, port=None):
         assert any(f["id"] == note["id"] and f["revision"] == note["revision"] for f in facts), "The synthetic note or its revision changed across restart."
         history = expect(request("GET", f"/api/ai/conversations/{conversation}", headers=bearer))
         assert any(message.get("note_context", {}).get("actions_performed") is False for message in history["messages"]), "The saved note-context receipt was not reopened after restart."
-        expect(request("POST", "/system/pin/verify", json={"pin": "739182"}))
+        expect(request("POST", "/system/pin/verify", headers=browser_headers, json={"pin": "739182"}))
         restarted = expect(request("GET", "/api/companion/v1/startup"))
         assert restarted["running"] == initial["running"]
         report["checks"].update(normal_stop_restart=True, saved_bearer_and_identity=True,
@@ -182,6 +200,7 @@ def run(code, root, report_path, port=None):
         for log in logs:
             log.close()
         client.close()
+        native_client.close()
         report["owned_processes_stopped"] = all(process.poll() is not None for process in processes)
         path = Path(report_path)
         path.parent.mkdir(parents=True, exist_ok=True)

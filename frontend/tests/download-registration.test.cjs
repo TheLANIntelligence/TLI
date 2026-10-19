@@ -70,7 +70,7 @@ function fixture(options = {}) {
   for (const id of ['download-email-form', 'download-email', 'download-platform', 'download-website', 'download-submit', 'email-status',
     'download-ready', 'download-file', 'mac-installer', 'copy-status', 'windows-sha256', 'macos-sha256', 'access',
     'email-verification', 'verify-email', 'verify-status', 'challenge-status', 'download-challenge',
-    'companion-download', 'companion-file', 'companion-version', 'android-sha256', 'download-description']) element(id);
+    'android', 'companion-download', 'companion-file', 'companion-version', 'android-sha256', 'download-description']) element(id);
   const form = nodes['download-email-form'];
   form.reportValidity = () => nodes['download-email'].reportValidity() && nodes['download-platform'].reportValidity();
   const anchors = ['windows', 'macos', 'android'].flatMap(platform => [0, 1].map(index => {
@@ -124,23 +124,29 @@ function fixture(options = {}) {
   };
 }
 
+function assertAndroidPublic(f) {
+  assert.equal(f.nodes['companion-file'].href, companion.url);
+  assert.equal(f.nodes['companion-file'].hidden, false);
+  assert.equal(f.nodes['companion-download'].hidden, false);
+  assert.equal(f.nodes['android-sha256'].textContent, companion.sha256);
+  assert.ok(f.anchors.filter(anchor => anchor.platform === 'android').every(anchor => anchor.href === companion.url));
+}
 function assertLocked(f) {
   assert.equal(f.nodes['download-ready'].hidden, true);
   assert.equal(f.nodes['mac-installer'].hidden, true);
   assert.equal(f.nodes['download-file'].href, '');
-  assert.equal(f.nodes['companion-file'].href, '');
-  assert.equal(f.nodes['companion-download'].hidden, true);
-  assert.ok(f.anchors.every(anchor => anchor.href === '#access'));
+  assertAndroidPublic(f);
+  assert.ok(f.anchors.filter(anchor => anchor.platform !== 'android').every(anchor => anchor.href === '#access'));
   assert.equal(f.autoClicks.length, 0);
   assert.deepEqual(f.privateSideEffects, [], 'No email or token in browser storage, navigation or logs');
 }
 const posts = f => f.calls.filter(call => call.options.method === 'POST');
 async function usable(options) { const f = fixture(options); await flush(); f.fill(); f.solve(); return f; }
 
-test('static page is gated, accessible and has no third-party form fallback', () => {
+test('static page keeps desktop registration accessible and Android separate from the email gate', () => {
   const links = [...html.matchAll(/<a\b[^>]*>/gi)].map(match => attributes(match[0]));
-  const downloads = links.filter(attrs => 'data-windows-download' in attrs || 'data-macos-download' in attrs || 'data-android-download' in attrs);
-  assert.equal(downloads.length, 5);
+  const downloads = links.filter(attrs => 'data-windows-download' in attrs || 'data-macos-download' in attrs);
+  assert.equal(downloads.length, 4);
   assert.ok(downloads.every(attrs => attrs.href === '#access'));
   assert.ok(!links.some(attrs => /\/releases\/download\//.test(attrs.href || '')));
   assert.ok(!links.some(attrs => /\.apk(?:$|\?)/i.test(attrs.href || '')));
@@ -152,11 +158,15 @@ test('static page is gated, accessible and has no third-party form fallback', ()
   assert.ok('disabled' in tagWithId('verify-email').attrs);
   assert.equal(tagWithId('verify-email').attrs.type, 'button');
   const select = html.match(/<select\b[^>]*id="download-platform"[^>]*>([\s\S]*?)<\/select>/i);
-  assert.deepEqual([...select[1].matchAll(/<option\b[^>]*>/gi)].map(match => attributes(match[0]).value).filter(Boolean).sort(), ['android', 'macos', 'windows']);
+  assert.deepEqual([...select[1].matchAll(/<option\b[^>]*>/gi)].map(match => attributes(match[0]).value).filter(Boolean).sort(), ['macos', 'windows']);
   assert.equal(tagWithId('download-website').attrs.tabindex, '-1');
   assert.equal(tagWithId('download-website').attrs.autocomplete, 'off');
   assert.match(html, /class="email-honeypot" aria-hidden="true"/);
-  for (const id of ['download-ready', 'mac-installer', 'email-verification', 'companion-download', 'companion-file']) assert.ok('hidden' in tagWithId(id).attrs);
+  for (const id of ['download-ready', 'mac-installer', 'email-verification']) assert.ok('hidden' in tagWithId(id).attrs);
+  for (const id of ['companion-download', 'companion-file']) assert.ok(!('hidden' in tagWithId(id).attrs));
+  assert.ok(html.indexOf('id="companion-file"') < html.indexOf('id="access"'));
+  assert.match(html, /No email or account required to download/);
+  assert.match(html, /scan it inside the app/);
   assert.ok(!('href' in tagWithId('download-file').attrs));
   assert.ok(!('href' in tagWithId('companion-file').attrs));
   assert.match(html, /<noscript>/);
@@ -172,12 +182,30 @@ test('configuration and a Cloudflare token are required; platform controls retai
   assert.equal(f.widgetOptions.sitekey, config.turnstileSiteKey);
   assert.equal(f.nodes['download-submit'].disabled, true);
   f.solve(); assert.equal(f.nodes['download-submit'].disabled, false);
-  for (const anchor of f.anchors) {
+  for (const anchor of f.anchors.filter(anchor => anchor.platform !== 'android')) {
     await anchor.fire('click');
     assert.equal(f.nodes['download-platform'].value, anchor.platform);
     assert.equal(f.document.activeElement, f.nodes['download-email']);
     assertLocked(f);
   }
+});
+
+test('Android deep link provides the signed APK immediately without verification, navigation or registration changes', async () => {
+  const f = fixture({ hash: '#android', configHandler: async () => reply({ error: 'unavailable' }, 503) });
+  assertAndroidPublic(f);
+  assert.equal(f.location.hash, '#android');
+  await flush();
+  for (const anchor of f.anchors.filter(anchor => anchor.platform === 'android')) {
+    const event = await anchor.fire('click');
+    assert.equal(event.defaultPrevented, false, 'The download remains an ordinary explicit link');
+  }
+  assert.equal(f.nodes['download-platform'].value, '');
+  assert.equal(f.nodes['download-email'].value, '');
+  assert.equal(posts(f).length, 0);
+  assert.equal(f.scripts.length, 0);
+  assert.deepEqual(f.scrolls.map(scroll => scroll.id), ['android'], 'A failed registration service cannot move the user away from Android');
+  assert.equal(f.scrolls[0].settings.behavior, 'instant');
+  assertLocked(f);
 });
 
 test('disabled, missing or failed config never loads Turnstile, sends email or permits verification', async () => {
@@ -203,7 +231,7 @@ test('challenge load error or expiration stays gated and clears any previously a
 });
 
 test('invalid email, missing challenge and unsupported platform cannot request a link', async () => {
-  for (const [address, platform] of [['', 'windows'], ['not-an-email', 'macos'], [email, ''], [email, 'linux'], [email, '__proto__']]) {
+  for (const [address, platform] of [['', 'windows'], ['not-an-email', 'macos'], [email, ''], [email, 'android'], [email, 'linux'], [email, '__proto__']]) {
     const f = await usable(); f.fill(platform, address); await f.submit();
     assert.equal(posts(f).length, 0); assertLocked(f);
   }
@@ -299,20 +327,19 @@ test('platform shortcuts during verification do not invalidate an in-flight emai
   assert.equal(f.nodes['download-ready'].hidden, false);
 });
 
-test('successful verification reveals the matching platform and a companion option only after verification', async () => {
+test('desktop and existing Android email links still reveal their matching download without changing public Android access', async () => {
   for (const platform of ['windows', 'macos', 'android']) {
     const f = fixture({ hash: '#verify=' + token }); await flush();
     f.respond('verify', async () => reply(verified(platform))); await f.verify();
     assert.equal(f.nodes['download-file'].href, selectedRelease(platform).url);
     assert.equal(f.nodes['companion-download'].hidden, false);
-    assert.equal(f.nodes['companion-file'].hidden, platform === 'android');
-    assert.equal(f.nodes['companion-file'].href, platform === 'android' ? '' : companion.url);
+    assertAndroidPublic(f);
     assert.match(f.nodes['companion-version'].textContent, /Companion Beta/);
     assert.equal(f.nodes['android-sha256'].textContent, companion.sha256);
     assert.match(f.nodes['download-description'].textContent, platform === 'android' ? /APK/ : /ZIP/);
     assert.equal(f.nodes['download-ready'].hidden, false);
     assert.equal(f.nodes['mac-installer'].hidden, platform !== 'macos');
-    assert.equal(f.nodes['download-platform'].value, platform);
+    assert.equal(f.nodes['download-platform'].value, platform === 'android' ? '' : platform);
     assert.equal(f.nodes['email-verification'].hidden, true);
     assert.equal(f.document.activeElement, f.nodes['download-file']);
     assert.equal(f.autoClicks.length, 0); assert.deepEqual(f.privateSideEffects, []);

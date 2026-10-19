@@ -192,94 +192,112 @@
     debug_panel:     "Debug Panel",
   };
 
-  async function loadLicenseStatus() {
-    const badge    = document.getElementById("tli-lic-tier-badge");
-    const licensee = document.getElementById("tli-lic-licensee");
-    const expiry   = document.getElementById("tli-lic-expiry");
-    const features = document.getElementById("tli-lic-features");
-    if (!badge) return;
-    try {
-      const r = await fetch("/license/status");
-      if (!r.ok) return;
-      const d = await r.json();
-      const tier = d.tier || "free";
-      const meta = TIER_BADGES[tier] || TIER_BADGES.free;
-      badge.textContent = meta.label;
-      badge.className   = "tli-lic-tier-badge " + meta.cls;
-      if (licensee) licensee.textContent = d.licensee || "";
-      if (expiry) {
-        expiry.textContent = d.expires_at
-          ? "Expires " + d.expires_at.slice(0, 10)
-          : (d.valid ? "No expiry" : "");
-      }
-      if (features && d.features) {
-        features.innerHTML = Object.entries(d.features).map(function ([k, v]) {
-          return '<span class="tli-lic-feat' + (v ? ' tli-lic-feat--on' : '') + '">' + (FEATURE_LABELS[k] || k) + '</span>';
-        }).join("");
-      }
-    } catch (_) {}
+  let _licEpoch = 0, _licRead = 0, _licLocked = false, _licReady = true, _licVerified = false, _licBusy = false, _licPausedFrom = null;
+  const _licCurrent = epoch => epoch === _licEpoch && !_licLocked && _licReady;
+  const _licEl = id => document.getElementById(id);
+  function _licControls() {
+    for (const id of ['tli-lic-activate-btn','tli-lic-deactivate-btn','tli-lic-key-input']) if (_licEl(id)) _licEl(id).disabled = !_licCurrent(_licEpoch) || _licBusy;
+    const refresh = _licEl('tli-lic-refresh-btn');
+    if (refresh) { refresh.disabled = _licLocked || _licBusy; refresh.textContent = _licReady ? 'Refresh license details' : 'Check license access'; }
   }
-
-  function _bindLicenseButtons() {
-    const activateBtn   = document.getElementById("tli-lic-activate-btn");
-    const deactivateBtn = document.getElementById("tli-lic-deactivate-btn");
-    const keyInput      = document.getElementById("tli-lic-key-input");
-    const msg           = document.getElementById("tli-lic-msg");
-    if (!activateBtn || !deactivateBtn || !keyInput) return;
-    if (activateBtn.dataset.bound) return;
-    activateBtn.dataset.bound = "1";
-
-    activateBtn.addEventListener("click", async function () {
-      if (activateBtn.disabled || deactivateBtn.disabled) return;
-      const key = keyInput.value.trim();
-      if (!key) { _licMsg(msg, "Paste your license key above.", "warn"); return; }
-      activateBtn.disabled = true;
-      activateBtn.textContent = "Activating…";
-      try {
-        const r = await fetch("/license/activate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key }),
-        });
-        const d = await r.json();
-        if (!r.ok || d.valid !== true) {
-          _licMsg(msg, d.detail || "Activation failed.", "err");
-        } else {
-          keyInput.value = "";
-          _licMsg(msg, "Activated — " + (d.tier || "").toUpperCase() + " tier. Restart TLI if prompted.", "ok");
-          await loadLicenseStatus();
-        }
-      } catch (_) {
-        _licMsg(msg, "Network error during activation.", "err");
-      } finally {
-        activateBtn.disabled = false;
-        activateBtn.textContent = "Activate";
+  function _licClear() {
+    const pending = _licBusy;
+    _licEpoch++; _licRead++; _licBusy = false;
+    for (const id of ['tli-lic-licensee','tli-lic-expiry','tli-lic-features','tli-lic-msg']) if (_licEl(id)) _licEl(id).textContent = '';
+    if (_licEl('tli-lic-tier-badge')) _licEl('tli-lic-tier-badge').textContent = 'Unavailable';
+    if (_licEl('tli-lic-key-input')) _licEl('tli-lic-key-input').value = '';
+    if (_licEl('tli-lic-activate-btn')) _licEl('tli-lic-activate-btn').textContent = 'Activate';
+    _licControls();
+    if (pending) _licMsg(_licEl('tli-lic-msg'), 'License change interrupted. Outcome not confirmed. No retry was sent. Refresh details after unlocking.', 'err');
+  }
+  async function _licRequest(url, options, epoch) {
+    if (!_licCurrent(epoch)) throw new Error('License access changed.');
+    const response = await fetch(url, {credentials:'same-origin',cache:'no-store',...options});
+    const data = await response.json().catch(() => null);
+    if (response.status === 401 || response.status === 403) {
+      const current = _licCurrent(epoch);
+      if (current || epoch === _licPausedFrom && !_licReady && !_licVerified) {
+        if (current) window.dispatchEvent(new CustomEvent('tli-session-locked'));
+        _licMsg(_licEl('tli-lic-msg'), (typeof data?.detail === 'string' ? data.detail : 'Unlock TLI to manage the saved license.') + (options.method ? ' Change outcome not confirmed.' : '') + ' No retry was sent.', 'err');
+        if (current) window.TLIPinLock?.checkAndLock();
       }
-    });
-
-    deactivateBtn.addEventListener("click", async function () {
-      if (deactivateBtn.disabled || activateBtn.disabled) return;
-      deactivateBtn.disabled = true;
+    }
+    if (!_licCurrent(epoch)) throw new Error('License access changed.');
+    if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
+    if (!data || typeof data !== 'object') throw new Error('The host returned an unreadable license result.');
+    return data;
+  }
+  async function loadLicenseStatus() {
+    const badge = _licEl('tli-lic-tier-badge');
+    if (!badge || !_licCurrent(_licEpoch)) return;
+    const epoch = _licEpoch, read = ++_licRead;
+    try {
+      const d = await _licRequest('/license/details', {}, epoch);
+      if (!_licCurrent(epoch) || read !== _licRead) return;
+      if (!TIER_BADGES[d.tier] || typeof d.valid !== 'boolean' || typeof d.beta !== 'boolean' || typeof d.licensee !== 'string' ||
+          d.expires_at != null && typeof d.expires_at !== 'string' || !d.features || typeof d.features !== 'object' || Array.isArray(d.features) || Object.values(d.features).some(value => typeof value !== 'boolean')) throw new Error('The host did not return complete license details.');
+      const meta = TIER_BADGES[d.tier]; badge.textContent = d.beta ? 'BETA' : meta.label; badge.className = 'tli-lic-tier-badge ' + meta.cls;
+      if (_licEl('tli-lic-licensee')) _licEl('tli-lic-licensee').textContent = d.licensee;
+      if (_licEl('tli-lic-expiry')) _licEl('tli-lic-expiry').textContent = d.expires_at ? 'Expires ' + d.expires_at.slice(0,10) : d.valid ? 'No expiry' : '';
+      const features = _licEl('tli-lic-features');
+      if (features) {
+        features.textContent = '';
+        for (const [key,value] of Object.entries(d.features)) { const node = document.createElement('span'); node.className = 'tli-lic-feat' + (value ? ' tli-lic-feat--on' : ''); node.textContent = FEATURE_LABELS[key] || key; features.appendChild(node); }
+      }
+    } catch (error) {
+      if (_licCurrent(epoch) && read === _licRead) {
+        for (const id of ['tli-lic-licensee','tli-lic-expiry','tli-lic-features']) if (_licEl(id)) _licEl(id).textContent = '';
+        badge.textContent = 'Unavailable'; _licMsg(_licEl('tli-lic-msg'), 'License details unavailable. ' + error.message, 'err');
+      }
+    }
+  }
+  function _bindLicenseButtons() {
+    const activate = _licEl('tli-lic-activate-btn'), deactivate = _licEl('tli-lic-deactivate-btn'), input = _licEl('tli-lic-key-input'), msg = _licEl('tli-lic-msg');
+    if (!activate || !deactivate || !input || activate.dataset.bound) return;
+    activate.dataset.bound = '1';
+    const row = _licEl('tli-lic-status-row');
+    if (row && !_licEl('tli-lic-refresh-btn')) {
+      const refresh = document.createElement('button'); refresh.id = 'tli-lic-refresh-btn'; refresh.type = 'button'; refresh.className = 'btn-outline btn-sm';
+      refresh.addEventListener('click', async () => {
+        if (_licLocked || _licBusy) return;
+        if (!_licReady) { await window.EventInterpreter?.retry(); return; }
+        await loadLicenseStatus();
+      }); row.appendChild(refresh);
+    }
+    async function write(remove) {
+      if (!_licCurrent(_licEpoch) || _licBusy) return;
+      const key = input.value.trim();
+      if (!remove && !key) { _licMsg(msg, 'Paste your license key above.', 'warn'); return; }
+      const epoch = _licEpoch; _licBusy = true; _licRead++; input.value = ''; _licControls();
+      if (!remove) activate.textContent = 'Activating…';
       try {
-        const r = await fetch("/license/deactivate", { method: "DELETE" });
-        const data = await r.json();
-        if (!r.ok || data.valid !== false || data.message !== "License removed") throw new Error(typeof data.detail === "string" ? data.detail : "The host did not confirm removal.");
-        _licMsg(msg, "Saved license key removed. Current access is shown above.", "ok");
+        const d = await _licRequest(remove ? '/license/deactivate' : '/license/activate', remove ? {method:'DELETE'} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key})}, epoch);
+        if (!_licCurrent(epoch)) return;
+        if (remove ? d.valid !== false || d.message !== 'License removed' : d.valid !== true || !TIER_BADGES[d.tier]) throw new Error('The host did not confirm the requested license change.');
+        _licMsg(msg, remove ? 'Saved license key removed. Current access is shown above.' : 'Activated — ' + d.tier.toUpperCase() + ' tier.', 'ok');
         await loadLicenseStatus();
       } catch (error) {
-        _licMsg(msg, "Failed to remove license. " + error.message, "err");
-      } finally {
-        deactivateBtn.disabled = false;
-      }
-    });
+        if (_licCurrent(epoch)) _licMsg(msg, (remove ? 'Failed to remove license. ' : 'Activation not confirmed. ') + error.message + ' No retry was sent. Refresh license details before trying again.', 'err');
+      } finally { if (_licCurrent(epoch)) { _licBusy = false; activate.textContent = 'Activate'; _licControls(); } }
+    }
+    activate.addEventListener('click', () => write(false)); deactivate.addEventListener('click', () => write(true)); _licControls();
   }
-
   function _licMsg(el, text, type) {
     if (!el) return;
-    el.textContent = text;
-    el.className   = "tli-lic-msg tli-lic-msg--" + type;
-    setTimeout(function () { if (el.textContent === text) el.textContent = ""; }, 5000);
+    el.textContent = text; el.className = 'tli-lic-msg tli-lic-msg--' + type;
   }
+  window.addEventListener('tli-session-locked', () => { _licPausedFrom = _licEpoch; _licLocked = true; _licReady = false; _licVerified = false; _licClear(); });
+  window.addEventListener('tli-session-unlocked', event => {
+    const verified = event?.detail?.source === 'pin-verification';
+    if (!_licLocked && (!verified || _licVerified)) return;
+    const replace = !_licLocked && _licReady; _licLocked = false; _licReady = false; if (verified) _licVerified = true;
+    if (replace) _licClear(); _licControls();
+  });
+  window.addEventListener('tli-private-observation-ready', () => {
+    if (_licLocked || _licReady) return; _licReady = true; _licPausedFrom = null; _licControls();
+    if (_licEl('panel-settings')?.hidden === false) loadLicenseStatus();
+  });
+  window.addEventListener('pagehide', () => { _licReady = false; _licPausedFrom = null; _licClear(); });
 
 
   // ==================================================================

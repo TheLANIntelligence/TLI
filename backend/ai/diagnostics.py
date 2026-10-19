@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 import requests
+from fastapi import HTTPException
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -21,12 +22,20 @@ from typing import Any, Dict, List, Optional
 #  Internal check runner
 # ==================================================================
 
-def _check(name: str, fn) -> Dict[str, Any]:
+def _check(name: str, fn, check=None) -> Dict[str, Any]:
     t0 = time.time()
+    if check is not None:
+        check()
     try:
         ok, detail = fn()
+        if check is not None:
+            check()
         return {"name": name, "ok": bool(ok), "detail": str(detail), "ms": int((time.time() - t0) * 1000)}
+    except HTTPException:
+        raise
     except Exception as e:
+        if check is not None:
+            check()
         return {"name": name, "ok": False, "detail": str(e)[:200], "ms": int((time.time() - t0) * 1000)}
 
 
@@ -39,6 +48,7 @@ def run_full_diagnostic(
     shelly_registry: Optional[List[Dict]] = None,
     model_path: Optional[Path] = None,
     conversations_path: Optional[Path] = None,
+    check=None,
 ) -> Dict[str, Any]:
     """
     Run all system health checks and return a structured report.
@@ -56,7 +66,7 @@ def run_full_diagnostic(
             return False, data.get("reason") or "not healthy"
         return False, f"HTTP {r.status_code}"
 
-    checks.append(_check("AI Runtime", _check_ai))
+    checks.append(_check("AI Runtime", _check_ai, check))
 
     # 2. Model file on disk
     def _check_model():
@@ -67,7 +77,7 @@ def run_full_diagnostic(
             return True, f"Present ({size_mb} MB)"
         return False, "Model file not found"
 
-    checks.append(_check("Model File", _check_model))
+    checks.append(_check("Model File", _check_model, check))
 
     # 3. Shelly devices — direct ping (2s timeout)
     for dev in (shelly_registry or []):
@@ -84,16 +94,17 @@ def run_full_diagnostic(
                 return True, "Reachable"
             return False, f"HTTP {r.status_code}"
 
-        checks.append(_check(f"{name} ({ip})", _check_shelly))
+        checks.append(_check(f"{name} ({ip})", _check_shelly, check))
 
-    # 4. Tools endpoint
+    # 4. Explicit built-in service with the initiating browser's authority.
     def _check_tools():
-        r = requests.post(base + "tools/run", json={"tool_id": "sys_snapshot"}, timeout=5)
-        if r.ok:
-            return True, "Responding"
-        return False, f"HTTP {r.status_code}"
+        if not callable(check):
+            return False, "Run this check from an authorized TLI browser."
+        from routers.tool_routes import run_builtin_tool
+        run_builtin_tool("sys_snapshot", None, check)
+        return True, "Responding"
 
-    checks.append(_check("Tools Endpoint", _check_tools))
+    checks.append(_check("Tools Endpoint", _check_tools, check))
 
     # 5. Conversation store
     def _check_conversations():
@@ -105,9 +116,11 @@ def run_full_diagnostic(
         json.loads(text)
         return True, "Readable"
 
-    checks.append(_check("Conversation Store", _check_conversations))
+    checks.append(_check("Conversation Store", _check_conversations, check))
 
     all_ok = all(c["ok"] for c in checks)
+    if check is not None:
+        check()
     return {"healthy": all_ok, "checks": checks}
 
 

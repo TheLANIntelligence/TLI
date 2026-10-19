@@ -16,6 +16,75 @@ let shellyCycle = null;
 let shellyRenderedFreshness = new Map();
 // Room/name context is user-entered metadata, never evidence of device state.
 let shellyRoomContext = new Map();
+let shellyAuthEpoch = 0, shellyLocked = false, shellyAccessReady = true, shellyVerifiedSession = false;
+let shellyReloadHost = null;
+let shellyRegistryReady = false, shellyRegistryMessage = 'Loading the host device registry…', shellyRegistryReadEpoch = 0, shellyRegistryWrite = null;
+const shellyControlIds = ['shelly-add-device-btn', 'shelly-discover-btn', 'shelly-status-btn', 'shelly-on-btn', 'shelly-off-btn', 'shelly-import-cache-btn'];
+function shellyCurrent(epoch = shellyAuthEpoch) { return epoch === shellyAuthEpoch && !shellyLocked && shellyAccessReady; }
+function shellyCheck(epoch) { if (!shellyCurrent(epoch)) throw new Error('Smart-device access changed. Unlock TLI, then review current status before trying again.'); }
+function shellyControlAccess() {
+  for (const id of shellyControlIds) if ($(id)) $(id).disabled = !shellyCurrent() || (id !== 'shelly-status-btn' && (!shellyRegistryReady || !!shellyRegistryWrite));
+  if ($('shelly-refresh-all-btn')) $('shelly-refresh-all-btn').disabled = shellyLocked || !!shellyRegistryWrite;
+}
+function shellyRegistryUnavailable(message) {
+  shellyRegistryReady = false; shellyRegistryMessage = message; shellyRegistryReadEpoch++;
+  stopShellyAutoRefresh(); shellyControlAccess(); renderAllShellyCards();
+}
+function shellyRegistryCheck(epoch) {
+  shellyCheck(epoch);
+  if (!shellyRegistryReady || shellyRegistryWrite) throw new Error('Host registry unavailable or a save is pending. Use Refresh All to verify it before saving changes.');
+}
+function shellySavedRegistryCheck(result, epoch) {
+  shellyCheck(epoch);
+  if (!shellyRegistryReady || shellyRegistryWrite || result?._registryEpoch !== shellyRegistryReadEpoch) throw new Error('The host registry changed after the save response. Refresh it before reviewing the saved changes.');
+}
+function shellyRegistryRows(rows) {
+  if (!Array.isArray(rows)) throw new Error('The host returned no valid device registry.');
+  const keys = new Set();
+  return rows.map(row => {
+    const ip = row?.ip ?? row?.host;
+    if (!row || typeof row !== 'object' || typeof ip !== 'string' || !ip.trim() || row.name != null && typeof row.name !== 'string' ||
+        row.relay != null && (!Number.isInteger(row.relay) || row.relay < 0 || row.relay > 255)) throw new Error('The host returned an invalid device registry.');
+    const key = shellyKey(ip, row.relay ?? 0);
+    if (keys.has(key)) throw new Error('The host returned duplicate device targets.');
+    keys.add(key);
+    // Legacy host-only rows get a view alias; the returned host data is not
+    // mutated or implicitly written back as a registry migration.
+    return {...row, ip};
+  });
+}
+function clearShellyPrivateView(message) {
+  stopShellyAutoRefresh(); shellyReads.clear(); shellyCommands.clear(); shellyRevisions.clear();
+  shellyHostLoad = null; shellyCycle = null; shellyRoomContext.clear(); shellyRenderedFreshness.clear(); lastShellyStatus = null;
+  shellyRegistryReady = false; shellyRegistryReadEpoch++; shellyRegistryWrite = null;
+  Object.keys(shellyDevices).forEach(key => delete shellyDevices[key]);
+  // Saved browser records are preserved; they are not rendered again on unlock.
+  for (const id of ['shellyCards', 'shelly-status-raw', 'shelly-status-summary', 'shelly-device-meta', 'shelly-name-label']) if ($(id)) $(id).textContent = '';
+  for (const id of ['shelly-ip-input', 'shelly-name-input', 'shelly-relay-input']) if ($(id)) $(id).value = '';
+  if ($('shelly-status-pill')) $('shelly-status-pill').textContent = 'Access unavailable';
+  if ($('shellyCards')) $('shellyCards').textContent = message;
+  setHomeAutoHealth('degraded', message); shellyControlAccess();
+}
+window.addEventListener?.('tli-session-locked', () => {
+  shellyLocked = true; shellyAccessReady = false; shellyVerifiedSession = false; shellyAuthEpoch++;
+  clearShellyPrivateView('Unlock TLI to view smart devices.');
+});
+window.addEventListener?.('tli-session-unlocked', event => {
+  const verified = event?.detail?.source === 'pin-verification';
+  if (!shellyLocked && (!verified || shellyVerifiedSession)) return;
+  shellyLocked = false; shellyAccessReady = false; if (verified) shellyVerifiedSession = true;
+  shellyAuthEpoch++; clearShellyPrivateView('Waiting for verified access. Use Refresh All to recheck access.');
+});
+window.addEventListener?.('tli-private-observation-ready', () => {
+  if (shellyLocked || shellyAccessReady) return;
+  shellyAccessReady = true; shellyControlAccess();
+  if (shellyReloadHost) {
+    const epoch = shellyAuthEpoch, pending = shellyReloadHost(); shellyHostLoad = pending;
+    pending.then(() => {
+      if (shellyCurrent(epoch) && $('panel-homeauto')?.hidden === false) startShellyAutoRefresh();
+    });
+  }
+});
 function shellyReadingFresh(d) { return !!(d.status?.checkedAt && Date.now() - d.status.checkedAt <= 30000 && !d.statusError); }
 
 function shellyKey(ip, relay = 0) { return `${String(ip).trim().toLowerCase()}#${relay}`; }
@@ -32,6 +101,7 @@ function shellyTarget(ip, relay = null) {
   return {ip, relay:Number(relay), key:shellyKey(ip, Number(relay))};
 }
 function loadShellyDevicesFromStorage() {
+  if (!shellyCurrent()) return;
   try {
     const saved = JSON.parse(localStorage.getItem(shellyDevicesStorageKey) || '{}');
     Object.keys(shellyDevices).forEach(k => delete shellyDevices[k]);
@@ -44,9 +114,11 @@ function loadShellyDevicesFromStorage() {
   } catch (e) { console.warn('Shelly cache unavailable:', e); }
 }
 function saveShellyDevicesToStorage() {
+  if (!shellyRegistryReady || shellyRegistryWrite) return;
   try { localStorage.setItem(shellyDevicesStorageKey, JSON.stringify(shellyDevices)); } catch {}
 }
 function upsertShellyDevice(ip, patch = {}) {
+  if (!shellyCurrent()) return null;
   const target = shellyTarget(ip, patch.relay ?? null);
   const old = shellyDevices[target.key] || {name:'', status:null};
   shellyDevices[target.key] = {...old, ...patch, ...target, updatedAt:new Date().toISOString()};
@@ -57,6 +129,7 @@ function getSelectedShellyIp() {
   try { return localStorage.getItem(shellySelectedIpStorageKey)?.trim() || null; } catch { return null; }
 }
 function setSelectedShellyIp(ip, relay = null) {
+  if (!shellyCurrent()) return;
   const target = shellyTarget(ip, relay);
   try {
     localStorage.setItem(shellySelectedIpStorageKey, target.ip);
@@ -70,9 +143,16 @@ function readShellyTarget() {
   const ip = $('shelly-ip-input')?.value.trim() || getSelectedShellyIp();
   return shellyTarget(ip, $('shelly-relay-input')?.value ?? null);
 }
-async function shellyRequest(url, options = {}) {
+async function shellyRequest(url, options = {}, epoch = shellyAuthEpoch) {
+  shellyCheck(epoch);
   const response = await fetch(url, {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(45000), ...options});
-  const data = await response.json();
+  const data = await response.json().catch(() => null);
+  shellyCheck(epoch);
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent?.(new CustomEvent('tli-session-locked'));
+    window.TLIPinLock?.checkAndLock();
+  }
+  if (!data || typeof data !== 'object') throw new Error('Smart-device response is unavailable.');
   if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : `Request failed (${response.status}).`);
   return data;
 }
@@ -86,7 +166,7 @@ function buildShellySnapshotFromPayload(ip, payload, relay = 0) {
     checkedAt:valid ? Date.now() : null};
 }
 function startShellyAutoRefresh() {
-  if (shellyAutoTimer !== null) return;
+  if (!shellyCurrent() || !shellyRegistryReady || shellyAutoTimer !== null) return;
   const epoch = ++shellyAutoEpoch;
   const age = () => {
     if (epoch !== shellyAutoEpoch) return;
@@ -185,12 +265,20 @@ function applyShellyNameToUI(name) {
     label.style.display = "";
   }
 }
-async function loadShellyHostRegistry() {
+async function loadShellyHostRegistry(epoch = shellyAuthEpoch) {
+  shellyCheck(epoch);
+  if (shellyRegistryWrite) throw new Error('A registry save is still pending. Wait before refreshing.');
+  const request = ++shellyRegistryReadEpoch;
+  shellyRegistryReady = false; shellyRegistryMessage = 'Loading the host device registry…';
+  stopShellyAutoRefresh(); shellyControlAccess(); renderAllShellyCards();
+  try {
   const [data, context] = await Promise.all([
-    shellyRequest('/homeauto/devices'),
-    shellyRequest('/api/intelligence/devices').catch(() => null),
+    shellyRequest('/homeauto/devices', {}, epoch),
+    shellyRequest('/api/intelligence/devices', {}, epoch).catch(() => null),
   ]);
-  if (!Array.isArray(data.devices)) throw new Error('The host returned no valid device registry.');
+  shellyCheck(epoch);
+  if (request !== shellyRegistryReadEpoch) throw new Error('A newer registry check replaced this response.');
+  const devices = shellyRegistryRows(data.devices);
   if (Array.isArray(context?.devices)) {
     const nextContext = new Map();
     for (const d of context.devices) {
@@ -201,7 +289,7 @@ async function loadShellyHostRegistry() {
     shellyRoomContext = nextContext;
   }
   const next = {};
-  for (const d of data.devices) {
+  for (const d of devices) {
     const target = shellyTarget(d.ip, d.relay ?? 0);
     const old = shellyDevices[target.key];
     next[target.key] = {...d, ...target, status:old?.status || null,
@@ -209,15 +297,34 @@ async function loadShellyHostRegistry() {
   }
   Object.keys(shellyDevices).forEach(k => delete shellyDevices[k]);
   Object.assign(shellyDevices, next);
-  saveShellyDevicesToStorage(); renderAllShellyCards();
+  shellyRegistryReady = true; shellyRegistryMessage = '';
+  saveShellyDevicesToStorage(); shellyControlAccess(); renderAllShellyCards();
+  } catch (error) {
+    if (request !== shellyRegistryReadEpoch) error.shellyObsolete = true;
+    if (shellyCurrent(epoch) && request === shellyRegistryReadEpoch) shellyRegistryUnavailable('Host registry unavailable. ' + error.message + ' Saved browser records are preserved. Use Refresh All after recovery.');
+    throw error;
+  }
 }
-async function syncShellyRegistry(changes = null) {
+async function syncShellyRegistry(changes = null, epoch = shellyAuthEpoch) {
+  shellyRegistryCheck(epoch);
   const devices = changes || Object.values(shellyDevices);
   if (!devices.length) return;
+  const write = {}; shellyRegistryWrite = write; const registry = ++shellyRegistryReadEpoch; shellyControlAccess();
+  try {
   const result = await shellyRequest('/homeauto/devices', {method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({merge:true, devices:devices.map(d => ({ip:d.ip, relay:d.relay ?? 0, name:d.name || ''}))})});
-  if (result.ok !== true) throw new Error('Device registry was not saved.');
-  return result;
+    body:JSON.stringify({merge:true, devices:devices.map(d => ({ip:d.ip, relay:d.relay ?? 0, name:d.name || ''}))})}, epoch);
+  if (result.ok !== true || !Number.isInteger(result.count) || !Array.isArray(result.devices) || result.count !== result.devices.length) throw new Error('The host did not confirm a complete registry save.');
+  const saved = shellyRegistryRows(result.devices);
+  if (!devices.every(device => saved.some(row => shellyKey(row.ip, row.relay ?? 0) === shellyKey(device.ip, device.relay ?? 0) && String(row.name || '') === String(device.name || '')))) throw new Error('The host did not confirm the requested device changes.');
+  return {...result, _registryEpoch:registry};
+  } catch (error) {
+    if (shellyCurrent(epoch)) {
+      const message = 'Registry save unconfirmed. ' + error.message + ' Saved browser records are preserved. Refresh the host registry before trying again; no save will retry automatically.';
+      shellyRegistryUnavailable(message);
+      throw new Error(message);
+    }
+    throw error;
+  } finally { if (shellyRegistryWrite === write) { shellyRegistryWrite = null; if (shellyCurrent(epoch)) shellyControlAccess(); } }
 }
 
 function persistShellyIp(ip) {
@@ -283,17 +390,19 @@ function cancelShellyInlineRename(cardEl) {
 }
 
 async function commitShellyInlineRename(cardEl, ip, relay = null) {
-  if (!cardEl || cardEl.dataset.saving === 'true') return;
+  if (!shellyCurrent() || !shellyRegistryReady || !cardEl || cardEl.dataset.saving === 'true') return;
+  const epoch = shellyAuthEpoch;
   const name = cardEl.querySelector('[data-shelly-name-input]')?.value.trim();
   if (!name) { showToast("Name can't be empty.", 'warn'); return; }
   cardEl.dataset.saving = 'true';
   try {
     const target = shellyTarget(ip, relay);
-    await syncShellyRegistry([{...target, name}]);
+    const saved = await syncShellyRegistry([{...target, name}], epoch);
+    shellySavedRegistryCheck(saved, epoch);
     upsertShellyDevice(ip, {relay:target.relay, name});
     showToast(`Saved name: ${name} (${ip}, relay ${target.relay})`, 'ok');
     cardEl.classList.remove('is-renaming'); renderAllShellyCards();
-  } catch (e) { showToast('Name was not saved: ' + e.message, 'error'); }
+  } catch (e) { if (shellyCurrent(epoch)) showToast('Name save unconfirmed: ' + e.message, 'error'); }
   finally { cardEl.dataset.saving = 'false'; }
 }
 
@@ -325,8 +434,14 @@ function shellyDeviceArtwork(name) {
 }
 
 function renderAllShellyCards() {
+  if (!shellyCurrent()) return;
   const container = $("shellyCards");
   if (!container) return;
+  if (!shellyRegistryReady) {
+    container.textContent = shellyRegistryMessage;
+    setHomeAutoHealth('degraded', shellyRegistryMessage);
+    return;
+  }
 
   if (isShellyInlineRenamingActive()) return;
   const openedDetails = new Set();
@@ -551,12 +666,17 @@ function renderAllShellyCards() {
 }
 
 async function fetchShellyStatusForIp(ip, silent = false, relay = null) {
+  if (!shellyCurrent()) return false;
+  const epoch = shellyAuthEpoch;
+  const registry = shellyRegistryReadEpoch;
   const target = shellyTarget(ip, relay);
   if (shellyReads.has(target.key)) return shellyReads.get(target.key);
   const revision = shellyRevisions.get(target.key) || 0;
   const request = (async () => {
     try {
-      const data = await shellyRequest(`/shelly/status?ip=${encodeURIComponent(target.ip)}&relay=${target.relay}`);
+      const data = await shellyRequest(`/shelly/status?ip=${encodeURIComponent(target.ip)}&relay=${target.relay}`, {}, epoch);
+      shellyCheck(epoch);
+      if (registry !== shellyRegistryReadEpoch) return false;
       const snapshot = buildShellySnapshotFromPayload(target.ip, data, target.relay);
       if (snapshot.isOn === null) throw new Error(data.summary || 'The requested relay state is unavailable.');
       if ((shellyRevisions.get(target.key) || 0) !== revision) return false;
@@ -565,32 +685,43 @@ async function fetchShellyStatusForIp(ip, silent = false, relay = null) {
       if (!silent) showToast(`Relay ${target.relay} status updated.`, 'ok');
       return true;
     } catch (e) {
+      if (!shellyCurrent(epoch) || registry !== shellyRegistryReadEpoch) return false;
       if ((shellyRevisions.get(target.key) || 0) !== revision) return false;
       upsertShellyDevice(target.ip, {relay:target.relay, statusError:e.message});
       if (!silent) showToast('Status unavailable: ' + e.message, 'error');
       return false;
-    } finally { renderAllShellyCards(); }
+    } finally { if (shellyCurrent(epoch)) renderAllShellyCards(); }
   })();
   shellyReads.set(target.key, request);
   try { return await request; } finally { if (shellyReads.get(target.key) === request) shellyReads.delete(target.key); }
 }
 async function fetchAllShellyStatuses(silent = false) {
+  if (!shellyCurrent() || !shellyRegistryReady) return;
+  const epoch = shellyAuthEpoch;
+  const registry = shellyRegistryReadEpoch;
   if (shellyCycle) return shellyCycle;
-  shellyCycle = (async () => {
+  const cycle = (async () => {
     if (shellyHostLoad) await shellyHostLoad;
+    if (!shellyCurrent(epoch) || registry !== shellyRegistryReadEpoch) return;
     const devices = Object.values(shellyDevices).filter(d => !shellyCommands.has(d.key));
     let reported = 0;
-    for (const d of devices) if (await fetchShellyStatusForIp(d.ip, true, d.relay)) reported++;
+    for (const d of devices) {
+      if (!shellyCurrent(epoch) || registry !== shellyRegistryReadEpoch) return;
+      if (await fetchShellyStatusForIp(d.ip, true, d.relay)) reported++;
+    }
+    if (!shellyCurrent(epoch) || registry !== shellyRegistryReadEpoch) return;
     renderAllShellyCards();
     if (!silent) showToast(`${reported} of ${devices.length} relay states reported.`, reported === devices.length ? 'ok' : 'warn');
   })();
-  try { return await shellyCycle; } finally { shellyCycle = null; }
+  shellyCycle = cycle;
+  try { return await cycle; } finally { if (shellyCycle === cycle) shellyCycle = null; }
 }
 async function fetchShellyStatus(silent = false) {
   try { const t = readShellyTarget(); return await fetchShellyStatusForIp(t.ip, silent, t.relay); }
   catch (e) { if (!silent) showToast(e.message, 'error'); return false; }
 }
 function renderShellyStatus(ip, payload, relay = 0) {
+  if (!shellyCurrent()) return;
   const snapshot = buildShellySnapshotFromPayload(ip, payload, relay);
   lastShellyStatus = snapshot;
   const pill = $('shelly-status-pill');
@@ -599,7 +730,16 @@ function renderShellyStatus(ip, payload, relay = 0) {
   if ($('shelly-status-raw')) $('shelly-status-raw').textContent = JSON.stringify(payload, null, 2);
 }
 async function sendShellyAction(action, ipOverride = null, relayOverride = null) {
+  const epoch = shellyAuthEpoch;
+  const registry = shellyRegistryReadEpoch;
   let target;
+  const current = () => shellyCurrent(epoch) && registry === shellyRegistryReadEpoch;
+  const unavailable = () => {
+    if (target && shellyCurrent(epoch)) { shellyCommands.delete(target.key); renderAllShellyCards(); }
+    return {ok:false, outcome:'unknown', summary:'Access or the host registry changed. Review current status before trying again.'};
+  };
+  if (!current()) return unavailable();
+  if (!shellyRegistryReady || shellyRegistryWrite) return {ok:false, summary:'Host registry unavailable or a save is pending. Refresh the registry before sending a device command.'};
   try { target = ipOverride ? shellyTarget(ipOverride, relayOverride) : readShellyTarget(); }
   catch (e) { showToast(e.message, 'error'); return {ok:false, summary:e.message}; }
   if (shellyCommands.has(target.key)) return {ok:false, summary:'Another command for this relay is running.'};
@@ -612,13 +752,15 @@ async function sendShellyAction(action, ipOverride = null, relayOverride = null)
   try {
     result = await shellyRequest('/shelly/relay', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({ip:target.ip, relay:target.relay, action,
-      request_id:Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,'0')).join('')})});
+      request_id:Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,'0')).join('')})}, epoch);
+    if (!current()) return unavailable();
     if (result.ok !== true) {
       result = {...result, ok:false, summary:result.summary || 'The device did not confirm the command.'};
     } else {
       result.summary = `Relay ${target.relay}: command acknowledged. Checking current state…`;
     }
   } catch (e) {
+    if (!current()) return unavailable();
     result = {ok:false, outcome:'unknown', summary:'Command outcome unconfirmed. Check status before trying again. ' + e.message};
   }
   upsertShellyDevice(target.ip, {relay:target.relay, commandResult:result.summary});
@@ -626,7 +768,9 @@ async function sendShellyAction(action, ipOverride = null, relayOverride = null)
   try {
     if (result.ok) {
       if (shellyReads.has(target.key)) await shellyReads.get(target.key);
+      if (!current()) return unavailable();
       const verified = await fetchShellyStatusForIp(target.ip, true, target.relay);
+      if (!current()) return unavailable();
       const observed = shellyDevices[target.key]?.status;
       const expected = action === 'on' ? true : action === 'off' ? false : null;
       const message = verified ? `Command acknowledged. Relay ${target.relay} now reports ${observed.isOn ? 'ON' : 'OFF'}.` +
@@ -635,11 +779,14 @@ async function sendShellyAction(action, ipOverride = null, relayOverride = null)
       upsertShellyDevice(target.ip, {relay:target.relay, commandResult:message});
       result = {...result, state_verified:verified, on:verified ? observed.isOn : null, summary:message};
     }
-  } finally { shellyCommands.delete(target.key); renderAllShellyCards(); }
+  } finally { if (shellyCurrent(epoch)) { shellyCommands.delete(target.key); renderAllShellyCards(); } }
   return result;
 }
 
 async function discoverShellyDevices() {
+  const epoch = shellyAuthEpoch;
+  if (!shellyCurrent(epoch) || !shellyRegistryReady || shellyRegistryWrite) return;
+  const registry = shellyRegistryReadEpoch;
   const btn = $("shelly-discover-btn");
   const orig = btn?.textContent || "Discover";
 
@@ -650,35 +797,23 @@ async function discoverShellyDevices() {
 
   try {
     showToast("Scanning your LAN for Shelly devices...", "info");
-    const res = await fetch("/shelly/discover");
-    if (!res.ok) {
-      let detail = "";
-      try {
-        const j = await res.json();
-        detail = j.detail || "";
-      } catch {
-        detail = await res.text();
-      }
-      if (res.status === 404) {
-        throw new Error("Discovery endpoint is not loaded yet. Restart TLI, then try Discover again.");
-      }
-      throw new Error(detail || "HTTP " + res.status);
-    }
-
-    const data = await res.json();
-    const found = Array.isArray(data.found) ? data.found : [];
+    const data = await shellyRequest('/shelly/discover', {}, epoch);
+    shellyCheck(epoch);
+    if (!shellyRegistryReady || registry !== shellyRegistryReadEpoch) throw new Error('The host registry changed during discovery. Refresh it before discovering devices again.');
+    if (!Array.isArray(data.found)) throw new Error('Discovery did not return a valid device list.');
+    const found = data.found;
     if (!found.length) {
       showToast(`No Shelly devices found on ${data.subnet || "this subnet"}.`, "info");
       return;
     }
 
-    let added = 0;
+    const staged = [];
     found.forEach((device) => {
       const ip = String(device.ip || "").trim();
       if (!ip) return;
       const existingName = (shellyDevices?.[shellyKey(ip, 0)]?.name || "").trim();
       const discoveredName = String(device.name || device.model || "Shelly").trim();
-      upsertShellyDevice(ip, {
+      staged.push({
         ip, relay:0,
         name: existingName || discoveredName,
         status: shellyDevices?.[shellyKey(ip, 0)]?.status || null,
@@ -689,26 +824,28 @@ async function discoverShellyDevices() {
           ver: device.ver || null,
         },
       });
-      added += 1;
     });
-
-    saveShellyDevicesToStorage();
-    await syncShellyRegistry(found.map(d => ({ip:d.ip, relay:0, name:shellyDevices[shellyKey(d.ip, 0)]?.name || d.name || "Shelly"})));
+    if (!staged.length) throw new Error('Discovery did not return valid device addresses.');
+    const saved = await syncShellyRegistry(staged, epoch);
+    shellySavedRegistryCheck(saved, epoch);
+    staged.forEach(device => upsertShellyDevice(device.ip, device));
 
     const firstIp = String(found[0]?.ip || "").trim();
     if (firstIp) setSelectedShellyIp(firstIp, 0);
 
     renderAllShellyCards();
     await fetchAllShellyStatuses(true);
+    shellySavedRegistryCheck(saved, epoch);
     startShellyAutoRefresh();
 
-    showToast(`Found ${added} Shelly device${added === 1 ? "" : "s"}.`, "ok");
+    showToast(`Found and saved ${staged.length} Shelly device${staged.length === 1 ? "" : "s"}.`, "ok");
   } catch (err) {
+    if (!shellyCurrent(epoch)) return;
     console.error("[Shelly] discovery failed:", err);
     showToast("Shelly discovery failed: " + (err?.message || "unknown error"), "error");
   } finally {
-    if (btn) {
-      btn.disabled = false;
+    if (btn && shellyCurrent(epoch)) {
+      btn.disabled = !shellyRegistryReady || !!shellyRegistryWrite;
       btn.textContent = orig;
     }
   }
@@ -718,6 +855,7 @@ async function discoverShellyDevices() {
 function setupHomeAutomationPanel() {
   if (shellyPanelBound) return;
   shellyPanelBound = true;
+  shellyRegistryReady = false;
   loadShellyDevicesFromStorage(); renderAllShellyCards();
   // Existing browser-only records remain readable, but are never automatically
   // written over the host registry. Importing them is an explicit action.
@@ -725,32 +863,49 @@ function setupHomeAutomationPanel() {
   try {
     const backup = localStorage.getItem('tli_shelly_browser_import_v1');
     if (backup) cached = JSON.parse(backup);
-    else if (cached.length) localStorage.setItem('tli_shelly_browser_import_v1', JSON.stringify(cached));
+    else {
+      // Setup may happen behind the lock. Preserve browser-only records for
+      // explicit import without rendering them or replacing them with host data.
+      if (!shellyCurrent()) cached = Object.entries(JSON.parse(localStorage.getItem(shellyDevicesStorageKey) || '{}'))
+        .filter(([, device]) => device && typeof device === 'object')
+        .map(([key, device]) => ({ip:device.ip || key, relay:device.relay ?? 0, name:device.name || ''}));
+      if (cached.length) localStorage.setItem('tli_shelly_browser_import_v1', JSON.stringify(cached));
+    }
   } catch {}
   const importBtn = $('shelly-import-cache-btn');
-  const load = async () => {
+  const load = async (epoch = shellyAuthEpoch) => {
     try {
-      await loadShellyHostRegistry();
+      await loadShellyHostRegistry(epoch);
+      shellyCheck(epoch);
       if (importBtn) importBtn.hidden = !cached.some(d => !shellyDevices[shellyKey(d.ip,d.relay)]);
-    } catch (e) { showToast('Host registry unavailable; showing previously loaded devices. ' + e.message, 'error'); }
+      if ($('panel-homeauto')?.hidden === false) startShellyAutoRefresh();
+      return true;
+    } catch (e) { if (shellyCurrent(epoch) && !e.shellyObsolete) showToast('Host registry unavailable. ' + e.message, 'error'); return false; }
   };
-  shellyHostLoad = load();
+  shellyReloadHost = load;
+  shellyHostLoad = shellyCurrent() ? load() : Promise.resolve();
   const bind = (id, fn) => $(id)?.addEventListener('click', async () => {
-    const button = $(id); if (button.disabled) return; button.disabled = true;
-    try { await shellyHostLoad; await fn(); } catch (e) { showToast(e.message, 'error'); } finally { button.disabled = false; }
+    const button = $(id); if (button.disabled || shellyLocked) return;
+    if (!shellyAccessReady) { if (id === 'shelly-refresh-all-btn') await window.EventInterpreter?.retry(); return; }
+    const epoch = shellyAuthEpoch; button.disabled = true;
+    try { await shellyHostLoad; if (shellyCurrent(epoch)) await fn(epoch); }
+    catch (e) { if (shellyCurrent(epoch)) showToast(e.message, 'error'); }
+    finally { if (shellyCurrent(epoch)) shellyControlAccess(); }
   });
-  bind('shelly-refresh-all-btn', async () => { await load(); await fetchAllShellyStatuses(false); });
+  bind('shelly-refresh-all-btn', async epoch => { const loaded = await load(epoch); if (loaded && shellyCurrent(epoch)) { await fetchAllShellyStatuses(false); if ($('panel-homeauto')?.hidden === false) startShellyAutoRefresh(); } });
   bind('shelly-status-btn', async () => { await fetchShellyStatus(false); });
   bind('shelly-discover-btn', discoverShellyDevices);
   bind('shelly-on-btn', () => sendShellyAction('on'));
   bind('shelly-off-btn', () => sendShellyAction('off'));
-  bind('shelly-import-cache-btn', async () => { await syncShellyRegistry(cached); await load(); showToast('Browser devices merged into the host registry.', 'ok'); });
-  bind('shelly-add-device-btn', async () => {
+  bind('shelly-import-cache-btn', async epoch => { const saved = await syncShellyRegistry(cached, epoch); shellySavedRegistryCheck(saved, epoch); const loaded = await load(epoch); if (loaded && shellyCurrent(epoch)) showToast('Browser devices merged into the host registry.', 'ok'); });
+  bind('shelly-add-device-btn', async epoch => {
     const target = readShellyTarget(), name = $('shelly-name-input')?.value.trim() || '';
-    await syncShellyRegistry([{...target,name}]);
+    const saved = await syncShellyRegistry([{...target,name}], epoch);
+    shellySavedRegistryCheck(saved, epoch);
     upsertShellyDevice(target.ip, {relay:target.relay, name});
     setSelectedShellyIp(target.ip, target.relay); renderAllShellyCards();
     showToast(`Saved ${name || target.ip} · relay ${target.relay}.`, 'ok');
     await fetchShellyStatusForIp(target.ip, true, target.relay);
   });
+  shellyControlAccess();
 }

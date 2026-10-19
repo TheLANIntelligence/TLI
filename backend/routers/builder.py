@@ -545,6 +545,9 @@ def builder_tasks(limit: int = 50):
 
 @router.post("/chat")
 def chat_with_builder(req: ChatRequest):
+    # Fail before inference when saved history cannot be safely read/appended.
+    # The append still re-reads and validates under its own persistence lock.
+    load_chat_messages(limit=1)
     state = load_state()
     selected = state.get("selected_project") or ""
     project_context = ""

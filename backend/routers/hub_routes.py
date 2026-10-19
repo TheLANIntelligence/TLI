@@ -12,23 +12,22 @@ from __future__ import annotations
 #   DELETE /hub/packages/{pkg_id} — uninstall a package
 #   GET  /hub/sample              — built-in sample registry (for local testing)
 
-import hashlib
+import copy
 import json
-import shutil
-import subprocess
-import sys
 import time
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from routers.system_routes import require_session
 from pydantic import BaseModel
 
 import tli_state as S
-from process_utils import hidden_process_kwargs
+import hub_store as store
+from browser_authority import browser_control_access
+from script_sources import list_hub_metadata, read_hub_source
 
 router = APIRouter(tags=["hub"])
 
@@ -40,9 +39,7 @@ def _installed_path() -> Path:
     return Path(S.DATA_DIR) / "hub_installed.json"
 
 def _pkg_dir() -> Path:
-    p = Path(S.DATA_DIR) / "hub_packages"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+    return store.path("hub_packages")
 
 def _local_registry_path() -> Path:
     return Path(S.DATA_DIR) / "hub_local_registry.json"
@@ -54,60 +51,66 @@ _CACHE_TS: float = 0
 _CACHE_TTL = 300  # 5 minutes
 
 # ── Helpers ──────────────────────────────────────────────────────
-def _load_settings() -> dict:
-    p = _settings_path()
-    try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {"enabled": False, "hub_url": _DEFAULT_HUB_URL}
+def _load_settings(check=store.noop) -> dict:
+    return store.load("settings", check)
 
 
-def _save_settings(s: dict) -> None:
-    p = _settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(s, indent=2), encoding="utf-8")
-    tmp.replace(p)
+def _save_settings(s: dict, check=store.noop) -> None:
+    store.update("settings", lambda _: s, check)
 
 
-def _load_installed() -> list:
-    p = _installed_path()
-    try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8")) or []
-    except Exception:
-        pass
-    return []
+def _load_installed(check=store.noop) -> list:
+    return store.load("installed", check)
 
 
-def _save_installed(lst: list) -> None:
-    p = _installed_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(lst, indent=2), encoding="utf-8")
-    tmp.replace(p)
+def _save_installed(lst: list, check=store.noop) -> None:
+    store.update("installed", lambda _: lst, check)
 
 
-def _fetch_registry(hub_url: str) -> dict:
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _fetch_registry(hub_url: str, check=store.noop) -> dict:
     global _REGISTRY_CACHE, _CACHE_TS
+    store.hub_url(hub_url)
+    if not hub_url:
+        raise store.error(400, "Configure an HTTP or HTTPS Hub registry address first.")
+    check()
     now = time.time()
-    if _REGISTRY_CACHE and (now - _CACHE_TS) < _CACHE_TTL:
-        return _REGISTRY_CACHE
+    with store.LOCK:
+        cached = _REGISTRY_CACHE.get(hub_url)
+        if cached and now - cached[0] < _CACHE_TTL:
+            check()
+            return copy.deepcopy(cached[1])
 
     try:
         req = urllib.request.Request(
             hub_url,
             headers={"User-Agent": f"TLI/{S.TLI_VERSION if hasattr(S, 'TLI_VERSION') else '1.0.0'}"},
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        _REGISTRY_CACHE = data
-        _CACHE_TS = now
+        opener = urllib.request.build_opener(_NoRedirect())
+        with opener.open(req, timeout=8) as resp:
+            check()
+            raw = resp.read(store.REGISTRY_LIMIT + 1)
+            check()
+        if len(raw) > store.REGISTRY_LIMIT:
+            raise store.error(502, "The Hub registry exceeds its supported size.")
+        data = store.validate_registry(store.decode_json(raw, status=502), status=502)
+        check()
+        with store.LOCK:
+            check()
+            # Keep bounded cache space, keyed by the exact configured URL.
+            _REGISTRY_CACHE = {hub_url: (now, copy.deepcopy(data))}
+            _CACHE_TS = now
         return data
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not reach TLI Hub: {e}")
+    except HTTPException:
+        check()
+        raise
+    except Exception:
+        check()
+        raise store.error(502, "The configured Hub registry could not be read. No redirect or replacement registry was used.") from None
 
 
 # ── Sample registry (local demo, no internet needed) ─────────────
@@ -340,22 +343,12 @@ _SAMPLE_REGISTRY = {
 
 
 # ── Helpers ── local registry ──────────────────────────────────────
-def _load_local_registry() -> dict:
-    p = _local_registry_path()
-    try:
-        if p.exists():
-            return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-    return {"version": "1", "hub": "TLI Local Hub", "packages": []}
+def _load_local_registry(check=store.noop) -> dict:
+    return store.load("registry", check)
 
 
-def _save_local_registry(reg: dict) -> None:
-    p = _local_registry_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(reg, indent=2), encoding="utf-8")
-    tmp.replace(p)
+def _save_local_registry(reg: dict, check=store.noop) -> None:
+    store.update("registry", lambda _: reg, check)
 
 
 # ── Pydantic models ───────────────────────────────────────────────
@@ -393,9 +386,10 @@ class PublishRequest(BaseModel):
 # ── Routes ────────────────────────────────────────────────────────
 
 @router.get("/hub/status")
-def hub_status():
-    s = _load_settings()
-    installed = _load_installed()
+def hub_status(check: Callable[[], None] = Depends(browser_control_access)):
+    s = _load_settings(check)
+    installed = _load_installed(check)
+    check()
     return {
         "enabled": s.get("enabled", False),
         "hub_url": s.get("hub_url", _DEFAULT_HUB_URL),
@@ -404,292 +398,171 @@ def hub_status():
 
 
 @router.post("/hub/settings")
-def hub_settings(req: HubSettingsRequest, _session: str = Depends(require_session)):
-    s = _load_settings()
-    if req.enabled is not None:
-        s["enabled"] = req.enabled
-    if req.hub_url is not None:
-        s["hub_url"] = req.hub_url.strip().rstrip("/")
-    _save_settings(s)
+def hub_settings(req: HubSettingsRequest, check: Callable[[], None] = Depends(browser_control_access)):
+    global _REGISTRY_CACHE
+    def change(s):
+        if req.enabled is not None:
+            s["enabled"] = req.enabled
+        if req.hub_url is not None:
+            s["hub_url"] = store.hub_url(req.hub_url.strip())
+        return s
+    s = store.update("settings", change, check)
+    with store.LOCK:
+        _REGISTRY_CACHE = {}
     S.log_debug("hub", "INFO", "Hub settings updated", enabled=s["enabled"], url=s["hub_url"])
+    check()
     return {"ok": True, "settings": s}
 
 
 @router.get("/hub/registry")
-def hub_registry(sample: bool = False):
+def hub_registry(sample: bool = False, check: Callable[[], None] = Depends(browser_control_access)):
+    installed = _load_installed(check)
     if sample:
-        installed = _load_installed()
         installed_ids = {i["id"] for i in installed}
         pkgs = [
             {**p, "installed": p["id"] in installed_ids}
             for p in _SAMPLE_REGISTRY["packages"]
         ]
+        check()
         return {**_SAMPLE_REGISTRY, "packages": pkgs, "source": "sample"}
 
-    s = _load_settings()
+    s = _load_settings(check)
     if not s.get("enabled"):
-        raise HTTPException(status_code=403, detail="TLI Hub is not enabled. Enable it in Hub settings.")
+        check()
+        raise store.error(403, "TLI Hub is not enabled. Enable it in Hub settings.")
 
-    data = _fetch_registry(s.get("hub_url", _DEFAULT_HUB_URL))
-    installed = _load_installed()
+    check()
+    data = _fetch_registry(s.get("hub_url", _DEFAULT_HUB_URL), check)
+    check()
+    installed = _load_installed(check)
     installed_ids = {i["id"] for i in installed}
     pkgs = [
         {**p, "installed": p["id"] in installed_ids}
         for p in data.get("packages", [])
     ]
+    check()
     return {**data, "packages": pkgs, "source": "remote"}
 
 
 @router.get("/hub/sample")
-def hub_sample_registry():
+def hub_sample_registry(check: Callable[[], None] = Depends(browser_control_access)):
     """Always returns the built-in sample registry regardless of opt-in status."""
-    installed = _load_installed()
+    installed = _load_installed(check)
     installed_ids = {i["id"] for i in installed}
     pkgs = [
         {**p, "installed": p["id"] in installed_ids}
         for p in _SAMPLE_REGISTRY["packages"]
     ]
+    check()
     return {**_SAMPLE_REGISTRY, "packages": pkgs, "source": "sample"}
 
 
 @router.get("/hub/installed")
-def hub_installed():
-    return {"installed": _load_installed()}
+def hub_installed(check: Callable[[], None] = Depends(browser_control_access)):
+    check()
+    installed = store.load("installed", check)
+    check()
+    return {"installed": installed}
 
 
 @router.post("/hub/install")
-def hub_install(req: InstallRequest, _session: str = Depends(require_session)):
-    # Find the package — sample first, then remote if hub enabled
-    pkg = None
-    for p in _SAMPLE_REGISTRY["packages"]:
-        if p["id"] == req.package_id:
-            pkg = p
-            break
-
-    if not pkg and not req.use_sample:
-        s = _load_settings()
-        if s.get("enabled"):
-            try:
-                data = _fetch_registry(s.get("hub_url", _DEFAULT_HUB_URL))
-                for p in data.get("packages", []):
-                    if p["id"] == req.package_id:
-                        pkg = p
-                        break
-            except Exception:
-                pass
-
-    if not pkg:
-        raise HTTPException(status_code=404, detail=f"Package '{req.package_id}' not found.")
-
-    installed = _load_installed()
-    # Remove existing entry for this id (re-install / update)
-    installed = [i for i in installed if i["id"] != req.package_id]
-
-    pkg_type = pkg.get("type", "unknown")
-    pkg_dir  = _pkg_dir()
-    now      = datetime.utcnow().isoformat() + "Z"
-
-    # ── Type-specific install ──────────────────────────────────────
-    if pkg_type == "theme":
-        css = pkg.get("preview_css", "")
-        css_file = pkg_dir / f"theme_{pkg['id']}.css"
-        css_file.write_text(css, encoding="utf-8")
-
-    elif pkg_type == "ai_preset":
-        preset_file = pkg_dir / f"preset_{pkg['id']}.json"
-        preset_file.write_text(
-            json.dumps({"id": pkg["id"], "name": pkg["name"],
-                        "system_prompt": pkg.get("system_prompt", "")}, indent=2),
-            encoding="utf-8",
-        )
-
-    elif pkg_type == "script":
-        script_file = pkg_dir / f"script_{pkg['id']}.json"
-        script_file.write_text(
-            json.dumps({"id": pkg["id"], "name": pkg["name"],
-                        "shell": pkg.get("shell", "powershell"),
-                        "code": pkg.get("code", "")}, indent=2),
-            encoding="utf-8",
-        )
-
-    elif pkg_type == "automation":
-        auto_file = pkg_dir / f"automation_{pkg['id']}.json"
-        auto_file.write_text(
-            json.dumps({"id": pkg["id"], "name": pkg["name"],
-                        "trigger": pkg.get("trigger", {}),
-                        "actions": pkg.get("actions", [])}, indent=2),
-            encoding="utf-8",
-        )
-
-    elif pkg_type == "app":
-        app_dir = Path(S.DATA_DIR) / "apps" / pkg["id"]
-        app_dir.mkdir(parents=True, exist_ok=True)
-        # Write inline HTML entry point if provided
-        inline = pkg.get("inline_html")
-        if inline:
-            (app_dir / "index.html").write_text(inline, encoding="utf-8")
-        # Write manifest so the runtime knows permissions / icon / entry
-        manifest = {
-            "id":          pkg["id"],
-            "name":        pkg["name"],
-            "version":     pkg.get("version", "1.0"),
-            "author":      pkg.get("author", "Unknown"),
-            "permissions": pkg.get("permissions", []),
-            "icon":        pkg.get("icon", "📦"),
-            "entry":       "index.html",
-        }
-        (app_dir / "manifest.json").write_text(
-            json.dumps(manifest, indent=2), encoding="utf-8"
-        )
-
-    record = {
-        "id":           pkg["id"],
-        "type":         pkg_type,
-        "name":         pkg["name"],
-        "author":       pkg.get("author", "Unknown"),
-        "version":      pkg.get("version", "1.0"),
-        "installed_at": now,
-    }
-    installed.append(record)
-    _save_installed(installed)
-
-    S.log_debug("hub", "INFO", "Package installed", id=pkg["id"], type=pkg_type)
+def hub_install(req: InstallRequest, check: Callable[[], None] = Depends(browser_control_access)):
+    store.safe_id(req.package_id)
+    # Validate saved state before a remote wait or any package write.
+    _load_installed(check)
+    pkg = next((p for p in _SAMPLE_REGISTRY["packages"] if p["id"] == req.package_id), None)
+    if pkg is None and not req.use_sample:
+        settings = _load_settings(check)
+        if settings["enabled"]:
+            data = _fetch_registry(settings["hub_url"], check)
+            check()
+            pkg = next((p for p in data["packages"] if p["id"] == req.package_id), None)
+    check()
+    if pkg is None:
+        raise store.error(404, "Package not found in the selected registry.")
+    record = store.change_package(pkg, req.package_id, check, installed_at=datetime.utcnow().isoformat() + "Z")
+    S.log_debug("hub", "INFO", "Package installed", id=record["id"], type=record["type"])
+    check()
     return {"ok": True, "package": record}
 
 
 @router.delete("/hub/packages/{pkg_id}")
-def hub_uninstall(pkg_id: str, _session: str = Depends(require_session)):
-    installed = _load_installed()
-    before = len(installed)
-    target = next((i for i in installed if i["id"] == pkg_id), None)
-    if not target:
-        raise HTTPException(status_code=404, detail="Package not installed.")
-
-    # Remove file artifact
-    pkg_dir = _pkg_dir()
-    for f in pkg_dir.glob(f"*_{pkg_id}.*"):
-        try:
-            f.unlink()
-        except Exception:
-            pass
-
-    # App packages: remove the whole app directory
-    if target.get("type") == "app":
-        app_dir = Path(S.DATA_DIR) / "apps" / pkg_id
-        if app_dir.exists():
-            try:
-                shutil.rmtree(app_dir)
-            except Exception:
-                pass
-
-    installed = [i for i in installed if i["id"] != pkg_id]
-    _save_installed(installed)
+def hub_uninstall(pkg_id: str, check: Callable[[], None] = Depends(browser_control_access)):
+    store.change_package(None, pkg_id, check, remove=True)
     S.log_debug("hub", "INFO", "Package uninstalled", id=pkg_id)
-    return {"ok": True, "removed": before - len(installed)}
+    check()
+    return {"ok": True, "removed": 1}
 
 
 @router.get("/hub/apps")
-def hub_apps():
-    """Return installed app packages with their manifests (for tli-apps.js runtime)."""
-    installed   = _load_installed()
-    apps_dir    = Path(S.DATA_DIR) / "apps"
-    result      = []
-    for record in installed:
-        if record.get("type") != "app":
-            continue
-        app_dir       = apps_dir / record["id"]
-        manifest_file = app_dir / "manifest.json"
-        manifest      = {}
-        if manifest_file.exists():
-            try:
-                manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        result.append({
-            **record,
-            "permissions": manifest.get("permissions", []),
-            "icon":        manifest.get("icon", "📦"),
-            "entry":       manifest.get("entry", "index.html"),
-        })
-    return {"apps": result}
+def hub_apps(check: Callable[[], None] = Depends(browser_control_access)):
+    """Return complete registered manifests; declared permissions grant nothing."""
+    with store.LOCK:
+        installed = _load_installed(check)
+        result = []
+        for record in installed:
+            if record["type"] != "app":
+                continue
+            row, manifest, _html = store.app_snapshot(record["id"], check)
+            result.append({**row, "permissions": manifest.get("permissions", []),
+                           "icon": manifest.get("icon", "📦"), "entry": "index.html"})
+        store.assert_ready(check)
+        check()
+        return {"apps": result}
 
 
 @router.get("/hub/themes")
-def hub_themes():
-    """Return CSS for all installed themes so frontend can apply them."""
-    pkg_dir = _pkg_dir()
-    themes = []
-    for f in pkg_dir.glob("theme_*.css"):
-        pkg_id = f.stem.replace("theme_", "", 1)
-        themes.append({"id": pkg_id, "css": f.read_text(encoding="utf-8")})
-    return {"themes": themes}
+def hub_themes(check: Callable[[], None] = Depends(browser_control_access)):
+    """Read exact registered theme files without globbing or creating directories."""
+    with store.LOCK:
+        themes = []
+        for record in _load_installed(check):
+            if record["type"] == "theme":
+                target = store.artifact_paths(record["id"], "theme")[0]
+                snapshot = store.read_artifact(target, check, store.SOURCE_LIMIT)
+                try:
+                    css = snapshot.raw.decode("utf-8")
+                except UnicodeError:
+                    check()
+                    raise store.error() from None
+                themes.append({"id": record["id"], "css": css})
+        store.assert_ready(check)
+        check()
+        return {"themes": themes}
 
 
 @router.get("/hub/presets")
-def hub_presets():
-    """Return all installed AI presets for the Brain selector."""
-    pkg_dir = _pkg_dir()
-    presets = []
-    for f in pkg_dir.glob("preset_*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            presets.append(data)
-        except Exception:
-            pass
-    return {"presets": presets}
+def hub_presets(check: Callable[[], None] = Depends(browser_control_access)):
+    """Read exact registered presets; damaged files are preserved and surfaced."""
+    with store.LOCK:
+        presets = []
+        for record in _load_installed(check):
+            if record["type"] == "ai_preset":
+                target = store.artifact_paths(record["id"], "ai_preset")[0]
+                snapshot = store.read_artifact(target, check, store.INDEX_LIMIT)
+                try:
+                    data = store.decode_json(snapshot.raw)
+                    if not isinstance(data, dict) or data.get("id") != record["id"] or not isinstance(data.get("system_prompt"), str):
+                        raise store.error()
+                except Exception:
+                    check()
+                    raise
+                presets.append(data)
+        store.assert_ready(check)
+        check()
+        return {"presets": presets}
 
 
 @router.post("/hub/packages/{pkg_id}/run")
-def hub_run_script(pkg_id: str):
-    """
-    Execute an installed script package.
-    Returns stdout/stderr (truncated to 8 KB) and exit code.
-    Only script-type packages can be run.
-    """
-    installed = _load_installed()
-    record = next((i for i in installed if i["id"] == pkg_id), None)
-    if not record:
-        raise HTTPException(status_code=404, detail="Package not installed.")
-    if record.get("type") != "script":
-        raise HTTPException(status_code=400, detail="Only script packages can be run.")
+def hub_run_script(pkg_id: str, check: Callable[[], None] = Depends(browser_control_access)):
+    """Retire arbitrary host execution without reading or changing saved packages."""
+    check()
+    raise HTTPException(410, "Hub host-script execution is unavailable. Installed source and package records were preserved. View or export the saved source instead.", headers={"Cache-Control": "no-store"})
 
-    script_file = _pkg_dir() / f"script_{pkg_id}.json"
-    if not script_file.exists():
-        raise HTTPException(status_code=404, detail="Script file not found — try reinstalling the package.")
 
-    script_data = json.loads(script_file.read_text(encoding="utf-8"))
-    shell = script_data.get("shell", "powershell")
-    code  = script_data.get("code", "")
-
-    if not code.strip():
-        raise HTTPException(status_code=400, detail="Script has no code.")
-
-    try:
-        if shell == "powershell":
-            result = subprocess.run(
-                ["powershell", "-NonInteractive", "-NoProfile", "-Command", code],
-                capture_output=True, text=True, timeout=30, **hidden_process_kwargs(),
-            )
-        elif shell in ("bash", "sh"):
-            result = subprocess.run(
-                [shell, "-c", code],
-                capture_output=True, text=True, timeout=30, **hidden_process_kwargs(),
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported shell: {shell}")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=408, detail="Script timed out after 30 seconds.")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail=f"Shell '{shell}' not found on this system.")
-
-    MAX = 8192
-    return {
-        "ok":        result.returncode == 0,
-        "exit_code": result.returncode,
-        "stdout":    result.stdout[:MAX],
-        "stderr":    result.stderr[:MAX],
-        "shell":     shell,
-    }
+@router.get("/hub/packages/{pkg_id}/source")
+def hub_script_source(pkg_id: str, check: Callable[[], None] = Depends(browser_control_access)):
+    return read_hub_source(pkg_id, check)
 
 
 # ── Local registry (publish + serve) ─────────────────────────────
@@ -698,70 +571,50 @@ def hub_run_script(pkg_id: str):
 def hub_local_registry():
     """
     Serve this node's published packages as a Hub-compatible registry.
+    Intentionally public: only explicitly published package contents are shared.
     Mesh peers can point their Hub URL at:  http://<this-node-ip>:<port>/hub/local-registry
     """
     reg = _load_local_registry()
-    installed = _load_installed()
-    installed_ids = {i["id"] for i in installed}
-    pkgs = [{**p, "installed": p["id"] in installed_ids} for p in reg.get("packages", [])]
-    return {**reg, "packages": pkgs, "source": "local"}
+    return {**reg, "source": "local"}
 
 
 @router.post("/hub/publish")
-def hub_publish(req: PublishRequest):
+def hub_publish(req: PublishRequest, check: Callable[[], None] = Depends(browser_control_access)):
     """
     Publish a package to this node's local registry.
     Existing entry with the same id is replaced (acts as update).
     """
-    VALID_TYPES = {"theme", "ai_preset", "script", "automation", "app"}
-    if req.type not in VALID_TYPES:
-        raise HTTPException(status_code=400, detail=f"type must be one of {sorted(VALID_TYPES)}")
-
-    reg = _load_local_registry()
+    store.safe_id(req.id)
     now = datetime.utcnow().isoformat() + "Z"
-
-    pkg: Dict[str, Any] = {
-        "id":          req.id,
-        "type":        req.type,
-        "name":        req.name,
-        "description": req.description,
-        "author":      req.author,
-        "version":     req.version,
-        "tags":        req.tags,
-        "published_at": now,
-        "downloads":   0,
-        "rating":      0,
-    }
-    if req.type == "theme"      and req.preview_css:    pkg["preview_css"]   = req.preview_css
-    if req.type == "ai_preset"  and req.system_prompt:  pkg["system_prompt"] = req.system_prompt
-    if req.type == "script":
-        if req.shell:  pkg["shell"] = req.shell
-        if req.code:   pkg["code"]  = req.code
-    if req.type == "automation":
-        if req.trigger: pkg["trigger"] = req.trigger
-        if req.actions: pkg["actions"] = req.actions
-    if req.type == "app":
-        if req.inline_html:  pkg["inline_html"]  = req.inline_html
-        if req.permissions:  pkg["permissions"]   = req.permissions
-        if req.icon:         pkg["icon"]          = req.icon
-
-    packages = [p for p in reg.get("packages", []) if p["id"] != req.id]
-    packages.append(pkg)
-    reg["packages"] = packages
-    reg["updated"] = now
-    _save_local_registry(reg)
-
+    result = {}
+    def change(reg):
+        previous = next((p for p in reg["packages"] if p["id"] == req.id), {})
+        if any(p["id"].casefold() == req.id.casefold() and p["id"] != req.id for p in reg["packages"]):
+            raise store.error(409, "A published package already uses this identifier with different letter case.")
+        # Keep compatible unknown fields when updating an existing publication.
+        package = {**previous, **req.model_dump(exclude_none=True), "published_at": now,
+                   "downloads": previous.get("downloads", 0), "rating": previous.get("rating", 0)}
+        store.validate_package(package)
+        reg["packages"] = [p for p in reg["packages"] if p["id"] != req.id] + [package]
+        reg["updated"] = now
+        result.update(package)
+        return reg
+    store.update("registry", change, check)
     S.log_debug("hub", "INFO", "Package published to local registry", id=req.id, type=req.type)
-    return {"ok": True, "package": pkg}
+    check()
+    return {"ok": True, "package": result}
 
 
 @router.delete("/hub/local-registry/{pkg_id}")
-def hub_unpublish(pkg_id: str):
+def hub_unpublish(pkg_id: str, check: Callable[[], None] = Depends(browser_control_access)):
     """Remove a package from this node's local registry."""
-    reg = _load_local_registry()
-    before = len(reg.get("packages", []))
-    reg["packages"] = [p for p in reg.get("packages", []) if p["id"] != pkg_id]
-    if len(reg["packages"]) == before:
-        raise HTTPException(status_code=404, detail="Package not found in local registry.")
-    _save_local_registry(reg)
+    store.safe_id(pkg_id)
+    def change(reg):
+        packages = [p for p in reg["packages"] if p["id"] != pkg_id]
+        if len(packages) == len(reg["packages"]):
+            raise store.error(404, "Package not found in local registry.")
+        reg["packages"] = packages
+        return reg
+    store.update("registry", change, check)
+    check()
     return {"ok": True}

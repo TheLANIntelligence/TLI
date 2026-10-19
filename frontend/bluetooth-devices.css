@@ -1,0 +1,38 @@
+/* The host Bluetooth form stays within the existing Smart Home card. */
+#bluetooth-section > summary { cursor: pointer; font-size: 14px; font-weight: 600; line-height: 1.5; }
+#bluetooth-section > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+#bluetooth-section > p { color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+#bluetooth-devices-mount {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+#bluetooth-devices-mount > p,
+#bluetooth-devices-mount > label,
+#bluetooth-candidate,
+#bluetooth-profile,
+#bluetooth-devices {
+  grid-column: 1 / -1;
+}
+#bluetooth-devices-mount > p { margin: 0; overflow-wrap: anywhere; }
+#bluetooth-devices-mount > label { display: flex; align-items: flex-start; gap: 8px; line-height: 1.5; }
+#bluetooth-confirm { flex: none; margin-top: 5px; }
+#bluetooth-devices-mount button { white-space: normal; min-height: 40px; }
+#bluetooth-enroll { justify-self: start; }
+#bluetooth-devices { display: grid; gap: 12px; min-width: 0; }
+#bluetooth-devices > article {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 16px;
+  min-width: 0;
+}
+#bluetooth-devices article > h4,
+#bluetooth-devices article > p { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 580px) {
+  #bluetooth-devices-mount { grid-template-columns: minmax(0, 1fr); }
+  #bluetooth-devices > article { grid-template-columns: minmax(0, 1fr); }
+  #bluetooth-enroll { justify-self: stretch; }
+}

@@ -8,6 +8,7 @@ from tests.test_peer_trust import computer, entry
 def install_directory(monkeypatch):
     monkeypatch.setattr(mesh_routes, "_ensure_host_in_mesh_directory", lambda: None)
     monkeypatch.setattr(mesh_routes.S, "load_node_config", lambda: SimpleNamespace(node_id="primary", role="host"))
+    monkeypatch.setattr(mesh_routes.S, "read_node_config", lambda: SimpleNamespace(node_id="primary", role="host"))
     key,node=computer('compute','192.168.1.50',8444)
     node['capabilities']=['inference_v1']; node.pop('signature')
     node['signature']=key.sign(mesh_routes.peer_trust.canonical(node)).hex()

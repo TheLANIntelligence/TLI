@@ -5,24 +5,58 @@ import json
 import ipaddress
 import socket
 import time
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from collections.abc import Callable
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 import tli_state as S
 from license_gate import gate as _gate
 from routers.system_routes import require_session
 from device_commands import run as run_command, target_key
+from browser_authority import browser_control_access
+import shelly_store
 
 router = APIRouter(tags=["shelly"])
 
 _shelly_info_cache: Dict[str, Dict[str, Any]] = {}
-_registry_lock = threading.RLock()
+_registry_lock = shelly_store.LOCK
+
+
+def _browser_access(request: Request, response: Response) -> Callable[[], None]:
+    """Keep denial responses private as well as successful device observations."""
+    def private_error(error):
+        error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
+        return error
+    try:
+        captured = browser_control_access(request, response)
+    except HTTPException as error:
+        raise private_error(error)
+    def check():
+        try:
+            captured()
+        except HTTPException as error:
+            raise private_error(error)
+    return check
+
+
+def _trusted_call():
+    """In-process services retain their caller's existing authorization boundary."""
+
+
+def _checked(check, operation):
+    check()
+    try:
+        result = operation()
+    except Exception:
+        check()
+        raise
+    check()
+    return result
 
 
 def _get_lan_ip() -> str:
@@ -175,43 +209,61 @@ def _target_relay(ip, relay):
 # ============================================
 
 @router.get("/homeauto/devices")
-def homeauto_devices():
-    return {"devices": S.load_shelly_registry()}
+def homeauto_devices(check=Depends(_browser_access)):
+    return {"devices": _checked(check, S.load_shelly_registry)}
 
 
 @router.post("/homeauto/devices")
-def homeauto_set_devices(payload: Dict[str, Any], _l=Depends(_gate("home_automation")), _s=Depends(require_session)):
+def homeauto_set_devices(payload: Dict[str, Any], check=Depends(_browser_access), _l=Depends(_gate("home_automation"))):
+    check()
     raw_devices = payload.get("devices")
     if not isinstance(raw_devices, list) or len(raw_devices) > 512:
         raise HTTPException(422, "Provide a device list of at most 512 entries.")
     with _registry_lock:
-        previous = S.load_shelly_registry()
+        previous = _checked(check, S.load_shelly_registry)
         devices = list(previous) if payload.get("merge") is True else []
         seen = set()
         for item in raw_devices:
+            check()
             if not isinstance(item, dict) or not str(item.get("ip") or "").strip():
                 raise HTTPException(422, "Each device needs an address.")
-            ip = str(item["ip"]).strip()
+            ip = item["ip"]
+            try:
+                address = shelly_store.address_key(ip)
+            except (TypeError, ValueError):
+                raise HTTPException(422, "Each device needs a valid host or IP address.") from None
             relay = item.get("relay")
             if relay is not None and (type(relay) is not int or not 0 <= relay <= 255):
                 raise HTTPException(422, "Relay must be an integer from 0 to 255.")
-            relay = _target_relay(ip, relay)
-            key = target_key(ip, relay)
+            if relay is None:
+                known = {d.get("relay") or 0 for d in previous
+                         if shelly_store.address_key(d.get("ip") or d.get("host")) == address}
+                if len(known) > 1:
+                    raise HTTPException(409, "This address has multiple registered relays. Choose the relay explicitly.")
+                relay = next(iter(known)) if known else _checked(check, lambda: _target_relay(ip, relay))
+            else:
+                relay = _checked(check, lambda: _target_relay(ip, relay))
+            check()
+            key = (address, relay)
             if key in seen:
                 raise HTTPException(409, "The same address and relay appear more than once.")
             seen.add(key)
-            old = next((d for d in previous if target_key(d.get("ip"), d.get("relay") or 0) == key), {})
+            old = next((d for d in previous if (shelly_store.address_key(d.get("ip") or d.get("host")), d.get("relay") or 0) == key), {})
+            if any(field in old and field in item and old[field] != item[field] for field in ("id", "device_id")):
+                raise HTTPException(409, "An existing device identity cannot change during a registry edit.")
             # Keep IDs, aliases and vendor metadata from existing persisted rows.
-            device = {**old, "name": str(item.get("name", old.get("name", ""))).strip(), "ip": ip, "relay": relay}
-            devices = [d for d in devices if target_key(d.get("ip"), d.get("relay") or 0) != key]
+            device = {**old, **item, "ip": ip, "relay": relay}
+            devices = [d for d in devices if (shelly_store.address_key(d.get("ip") or d.get("host")), d.get("relay") or 0) != key]
             devices.append(device)
-        S.save_shelly_registry(devices)
+        _checked(check, lambda: S.save_shelly_registry(devices, check=check, expected=previous))
+    check()
     return {"ok": True, "count": len(devices), "devices": devices}
 
 
 @router.get("/shelly/discover")
 def shelly_discover(
     subnet: Optional[str] = Query(default=None, description="Optional IPv4 CIDR, e.g. 192.168.1.0/24"),
+    check=Depends(_browser_access),
     _l=Depends(_gate("home_automation")),
 ):
     """
@@ -221,7 +273,7 @@ def shelly_discover(
     so this uses direct HTTP probing against /rpc/Shelly.GetDeviceInfo.
     """
     t0 = time.time()
-    lan_ip = _get_lan_ip()
+    lan_ip = _checked(check, _get_lan_ip)
     if subnet:
         try:
             network = ipaddress.IPv4Network(subnet, strict=False)
@@ -240,21 +292,32 @@ def shelly_discover(
     found: List[Dict[str, Any]] = []
     seen_ips = set()
 
+    check()
     with ThreadPoolExecutor(max_workers=64) as executor:
-        futures = {executor.submit(_probe_shelly_ip, ip): ip for ip in hosts}
-        for future in as_completed(futures):
-            result = future.result()
-            if not result:
-                continue
-            ip = result.get("ip")
-            if ip in seen_ips:
-                continue
-            seen_ips.add(ip)
-            found.append(result)
+        futures = {}
+        try:
+            for ip in hosts:
+                check()
+                futures[executor.submit(_checked, check, lambda ip=ip: _probe_shelly_ip(ip))] = ip
+            for future in as_completed(futures):
+                check()
+                result = future.result()
+                if not result:
+                    continue
+                ip = result.get("ip")
+                if ip in seen_ips:
+                    continue
+                seen_ips.add(ip)
+                found.append(result)
+        finally:
+            for future in futures:
+                future.cancel()
 
     found.sort(key=lambda d: tuple(int(p) for p in str(d.get("ip", "0.0.0.0")).split(".") if p.isdigit()))
+    check()
     S.log_debug("shelly", "INFO", "Shelly discovery complete",
                 subnet=str(network), scanned=len(hosts), found=len(found))
+    check()
     return {
         "ok": True,
         "subnet": str(network),
@@ -265,29 +328,43 @@ def shelly_discover(
     }
 
 
-@router.get("/shelly/status")
-def shelly_status(ip: str = Query(...), relay: Optional[int] = Query(default=None, ge=0, le=255), _l=Depends(_gate("home_automation")), _s=Depends(require_session)):
-    relay = _target_relay(ip, relay)
+def shelly_status(ip: str, relay: Optional[int] = None, _l=None, _s=None, *, check=_trusted_call):
+    relay = _checked(check, lambda: _target_relay(ip, relay))
     try:
-        out = S.shelly_driver.get_status(ip=ip, relay=relay)
+        out = _checked(check, lambda: S.shelly_driver.get_status(ip=ip, relay=relay))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail="Could not read this relay. Check device connectivity and access; its state is unknown.") from exc
     raw = out.get("raw") if isinstance(out, dict) else None
     switch = raw.get(f"switch:{relay}") if isinstance(raw, dict) else None
     valid = isinstance(switch, dict) and isinstance(switch.get("output"), bool) and out.get("ok") is not False and not any(k in raw for k in ("error", "code", "text"))
-    device = shelly_device_info_cached(ip) if valid else None
+    device = _checked(check, lambda: shelly_device_info_cached(ip)) if valid else None
+    check()
     return {"ok": valid, "raw": raw, "summary": out.get("summary", "") if valid else "The requested relay state is unavailable.",
             "device": device, "ip": ip, "relay": relay, "on": switch["output"] if valid else None, "checked_at": time.time()}
 
 
-@router.post("/shelly/relay")
-def shelly_relay(body: ShellyRelayRequest, _l=Depends(_gate("home_automation")), user=Depends(require_session)):
-    relay = _target_relay(body.ip, body.relay)
+def shelly_relay(body: ShellyRelayRequest, _l=None, user="local", *, check=_trusted_call):
+    relay = _checked(check, lambda: _target_relay(body.ip, body.relay))
     def execute():
+        check()
         if body.action == "on":
             return S.shelly_driver.turn_on(ip=body.ip, relay=relay)
         elif body.action == "off":
             return S.shelly_driver.turn_off(ip=body.ip, relay=relay)
         return S.shelly_driver.toggle(ip=body.ip, relay=relay)
-    result = run_command(user, ("shelly", *target_key(body.ip, relay)), body.action, body.request_id, execute)
+    result = _checked(check, lambda: run_command(user, ("shelly", *target_key(body.ip, relay)), body.action, body.request_id, execute))
     return {"raw": None, **result, "ip": body.ip, "relay": relay}
+
+
+@router.get("/shelly/status")
+def shelly_status_http(ip: str = Query(...), relay: Optional[int] = Query(default=None, ge=0, le=255),
+                      check=Depends(_browser_access), _l=Depends(_gate("home_automation"))):
+    return shelly_status(ip, relay, check=check)
+
+
+@router.post("/shelly/relay")
+def shelly_relay_http(body: ShellyRelayRequest, check=Depends(_browser_access),
+                     _l=Depends(_gate("home_automation")), user=Depends(require_session)):
+    return shelly_relay(body, user=user, check=check)

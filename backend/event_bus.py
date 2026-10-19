@@ -25,13 +25,17 @@ import uuid
 from collections import deque
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Request
+import anyio
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from browser_authority import browser_control_access
 
 router = APIRouter()
 
 # ── Constants ──────────────────────────────────────────────────────────────
 MAX_EVENTS = 200   # bounded in-memory ring buffer
+AUTH_CHECK_SECONDS = 1.0
+KEEPALIVE_SECONDS = 20.0
 
 # ── State ──────────────────────────────────────────────────────────────────
 _events: deque = deque(maxlen=MAX_EVENTS)
@@ -179,7 +183,7 @@ def _broadcast_raw(data: str) -> None:
         dead = []
         for q in _subscribers:
             try:
-                _loop.call_soon_threadsafe(q.put_nowait, data)
+                _loop.call_soon_threadsafe(_enqueue, q, data)
             except Exception:
                 dead.append(q)
         for q in dead:
@@ -187,71 +191,115 @@ def _broadcast_raw(data: str) -> None:
                 _subscribers.remove(q)
             except ValueError:
                 pass
+
+
+def _enqueue(q: asyncio.Queue, data: str) -> None:
+    """Run on the subscriber loop; late callbacks cannot repopulate a closed queue."""
+    with _subs_lock:
+        if q not in _subscribers:
+            return
+        try:
+            q.put_nowait(data)
+        except asyncio.QueueFull:
+            # A slow consumer cannot grow its private backlog without bound.
+            # The retained event ring remains available to an authorized reconnect.
+            pass
+
+
+def _unsubscribe(q: asyncio.Queue) -> None:
+    with _subs_lock:
+        if q in _subscribers:
+            _subscribers.remove(q)
+        while True:
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
 # ── Internal broadcast ─────────────────────────────────────────────────────
 def _broadcast(event: Dict) -> None:
-    if not _loop or not _loop.is_running():
-        return
-    data = json.dumps(event)
-    with _subs_lock:
-        dead = []
-        for q in _subscribers:
-            try:
-                _loop.call_soon_threadsafe(q.put_nowait, data)
-            except Exception:
-                dead.append(q)
-        for q in dead:
-            try:
-                _subscribers.remove(q)
-            except ValueError:
-                pass
+    _broadcast_raw(json.dumps(event))
+
+
+class _EventStreamingResponse(StreamingResponse):
+    """Own the async generator even if ASGI send fails while it is suspended."""
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self.body_iterator.aclose()
 
 
 # ── SSE endpoint ───────────────────────────────────────────────────────────
 @router.get("/api/events/stream")
-async def events_stream(request: Request):
+async def events_stream(request: Request, check=Depends(browser_control_access)):
     """
-    SSE stream — pushes live TLI events to the Dashboard feed.
-    No session required (read-only, LAN-local).
+    Browser-only shared host feed; historical events have no per-person owner.
+    The original browser authority is rechecked throughout replay and delivery.
     """
+    check()
     q: asyncio.Queue = asyncio.Queue(maxsize=128)
-    with _subs_lock:
-        _subscribers.append(q)
 
     async def generate():
         try:
+            check()
+            if await request.is_disconnected():
+                return
+            check()
+            # Register only once iteration starts. An unused response cannot
+            # leave a queue retaining private activity in the subscriber list.
+            with _subs_lock:
+                _subscribers.append(q)
             # Replay recent events on connect — capped at 20 items AND 2 hours old.
             # Older events are stale context that shouldn't flood a fresh session.
             cutoff = time.time() - 2 * 3600  # 2 hours ago
+            check()
             recent = [e for e in get_recent(20) if (e.get("ts") or 0) >= cutoff]
             for ev in reversed(recent):
+                if await request.is_disconnected():
+                    return
+                check()
                 yield f"data: {json.dumps(ev)}\n\n"
 
             # Stream live events
+            last_delivery = time.monotonic()
             while True:
+                check()
                 if await request.is_disconnected():
                     break
                 try:
-                    msg = await asyncio.wait_for(q.get(), timeout=20.0)
+                    msg = await asyncio.wait_for(q.get(), timeout=AUTH_CHECK_SECONDS)
+                    check()
                     yield f"data: {msg}\n\n"
+                    last_delivery = time.monotonic()
                 except asyncio.TimeoutError:
-                    yield ": keep-alive\n\n"
+                    check()
+                    if time.monotonic() - last_delivery >= KEEPALIVE_SECONDS:
+                        yield ": keep-alive\n\n"
+                        last_delivery = time.monotonic()
+        except HTTPException:
+            # No error details or retained activity cross a revoked boundary.
+            # Unsubscribe before yielding so the terminal frame cannot suspend
+            # this generator with a still-active private queue.
+            _unsubscribe(q)
+            yield 'data: {"type":"auth_required","code":"session_changed"}\n\n'
         finally:
-            with _subs_lock:
-                try:
-                    _subscribers.remove(q)
-                except ValueError:
-                    pass
+            _unsubscribe(q)
 
-    return StreamingResponse(
+    return _EventStreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
 
 
 @router.get("/api/events/recent")
-async def events_recent(n: int = 50):
-    """REST fallback — returns last n events as JSON."""
-    return {"events": get_recent(n)}
+async def events_recent(n: int = 50, check=Depends(browser_control_access)):
+    """Authorized browser fallback for the shared host-wide history."""
+    check()
+    events = get_recent(n)
+    check()
+    return {"events": events}

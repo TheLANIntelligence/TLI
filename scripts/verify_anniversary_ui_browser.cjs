@@ -20,7 +20,7 @@ const sampleDevices = [{id:'fixture-lamp',name:'Desk lamp',ip:'192.0.2.20',relay
 const bundled = {ok:true,healthy:true,running:true,model_exists:true,state:'running',model_name:'Qwen2.5 3B',model:'Qwen2.5 3B',preset:'standard',selected_preset:'standard',selected_model:'standard',provider:'bundled'};
 const baseFixtures = {
  '/api/diagnostics/version':{ok:true,build_id:'synthetic',release:{schema_version:1,protocol:'dependable-computers-v1',source_id:'a'.repeat(64),backend_id:'b'.repeat(64),frontend_id:'c'.repeat(64),started_at:now,capabilities:['storage_jobs_v1','trusted_peers_v1','case_report_review_v1'],compatibility:{state:'matched',reasons:[]}}},
- '/system/pin/status':{enabled:true}, '/system/onboarding/status':{complete:true},
+ '/system/pin/status':{enabled:true}, '/system/onboarding/status':{complete:true,started:false},
  '/agent/ping':{...host,ok:true}, '/status':{...host,ok:true,device_nickname:'Studio',model_online:false,mesh_status:'unpaired',cpu_usage:18,ram_usage:43,vault_status:{initialized:true,unlocked:false}},
  '/system/node':host, '/system/node/config':host, '/node/config':host,
  '/license/status':{ok:true,tier:'pro',valid:true,pro:true,features:{vault:true,home_automation:true,peer_nodes:true}},

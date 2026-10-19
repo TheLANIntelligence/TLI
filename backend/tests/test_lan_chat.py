@@ -83,7 +83,8 @@ def lan_chat(app, tmp_path, monkeypatch):
     monkeypatch.setattr(lan_inference, "selection", selection)
     monkeypatch.setattr(lan_inference, "stream", stream)
     token = S.create_session_token("alice")
-    client = TestClient(app, base_url="https://192.0.2.20:8000")
+    client = TestClient(app, base_url="https://192.0.2.20:8000",
+                        headers={"Origin": "https://192.0.2.20:8000"})
     client.headers["Cookie"] = "tli_session=" + token
     return SimpleNamespace(client=client, calls=calls, selections=selections, service=lan_inference,
                            manager=manager, token=token)
@@ -275,23 +276,57 @@ def test_shelly_intent_success_or_failure_never_forwards_to_remote(lan_chat, mon
     import home_conversation as home
     registry = [{"id": "shelly-office", "source_id": "office", "source": "shelly", "kind": "smart_device",
                  "name": "Office Lamp", "address": "192.0.2.44", "ip": "192.0.2.44", "relay": 0}]
-    executions = []
-    monkeypatch.setattr(home, "_registry", lambda: registry)
+    executions, readings, checks = [], [], []
+    def registered(check):
+        check()
+        checks.append(check)
+        return registry
+    monkeypatch.setattr(home, "_registry", registered)
     monkeypatch.setattr(home, "_license", lambda: None)
     monkeypatch.setattr(ai_routes, "_route_action_intent", _REAL_ACTION_ROUTE)
-    def execute(device, action, user):
+    def execute(device, action, user, check):
+        check()
+        assert check is checks[0]
         assert user == "alice" and action == "on"
         executions.append(copy.deepcopy(device))
         return {"ok": success}
     monkeypatch.setattr(home, "_command", execute)
-    monkeypatch.setattr(home, "_read", lambda *args: {"ok": True, "on": True})
+    def read(device, user, check):
+        check()
+        assert check is checks[0] and user == "alice"
+        readings.append(copy.deepcopy(device))
+        return {"ok": True, "on": True}
+    monkeypatch.setattr(home, "_read", read)
     monkeypatch.setattr(ai_routes, "execute_action", forbidden)
     result = completed(submit(lan_chat, path, message="Turn on Office Lamp"), path)
     assert len(executions) == 1 and not lan_chat.calls
+    assert len(readings) == int(success)
+    assert all(check is checks[0] for check in checks)
     assert result["handled_by"] == "intent_engine"
     assert ("acknowledged the on command" if success else "did not confirm the on command") in result["reply"]
     if success:
         assert "**ON**" in result["reply"]
+
+
+@pytest.mark.parametrize("path", POSTS)
+@pytest.mark.parametrize("origin", [None, "https://unrelated.invalid"])
+def test_shelly_intent_without_same_origin_never_executes_or_forwards(lan_chat, monkeypatch, path, origin):
+    import home_conversation as home
+    monkeypatch.setattr(ai_routes, "_route_action_intent", _REAL_ACTION_ROUTE)
+    monkeypatch.setattr(home, "_registry", forbidden)
+    monkeypatch.setattr(home, "_command", forbidden)
+    if origin is None:
+        del lan_chat.client.headers["Origin"]
+    else:
+        lan_chat.client.headers["Origin"] = origin
+    response = submit(lan_chat, path, message="Turn on Office Lamp")
+    if path.endswith("/stream") and response.status_code == 200:
+        events = frames(response)
+        assert any(event["type"] == "error" for event in events)
+        assert not any(event["type"] == "done" for event in events)
+    else:
+        assert response.status_code == 403
+    assert not lan_chat.calls
 
 
 @pytest.mark.parametrize("path", POSTS)

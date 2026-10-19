@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
 
 // Exercise the real attachment controller; browser APIs are local, deferred fakes.
 function fixture() {
-  const nodes = {}, readers = [], images = [], notices = [], attachments = [], tasks = [], timers = new Map();
+  const nodes = {}, readers = [], images = [], notices = [], attachments = [], tasks = [], timers = new Map(), events = {};
   let timerId = 0, epoch = 0, locked = false;
   for (const id of ['chat-send-btn','chat-input','new-chat-btn','abort-chat-btn','chat-attach-btn','chat-image-input','chat-image-preview','chat-image-thumb','chat-image-remove']) {
     const classes = new Set(id === 'chat-image-preview' ? ['hidden'] : []);
@@ -20,7 +20,7 @@ function fixture() {
     $: id=>nodes[id], document: {getElementById:id=>nodes[id]},
     setTimeout: fn=>{timers.set(++timerId, fn); return timerId;}, clearTimeout: id=>timers.delete(id),
     showToast: (text)=>notices.push(text),
-    window: {TLIConversationLoad:{deleted(){}}, TLIIntelligence:{capture:()=>epoch,isCurrent:t=>!locked && t===epoch},
+    window: {addEventListener:(type,fn)=>(events[type]||=[]).push(fn),TLIConversationLoad:{deleted(){}}, TLIIntelligence:{capture:()=>epoch,isCurrent:t=>!locked && t===epoch},
       TLIScreenshots:{chooseImage(){},prepareTask:task=>tasks.push(task),attachmentReadStarted:()=>tasks.at(-1),attachmentReadFailed(){},attachmentChanged:(file,task)=>attachments.push({file,task})}},
     FileReader: class {constructor(){readers.push(this);this.readyState=0;} readAsDataURL(file){this.file=file;this.readyState=1;} abort(){this.readyState=2;this.aborted=true;this.onabort?.();}},
     Image: class {constructor(){images.push(this);} set src(value){this.url=value;} get src(){return this.url;}}
@@ -29,7 +29,9 @@ function fixture() {
   const end = source.indexOf('  // Wire no-AI banner action button', start);
   vm.runInContext(source.slice(start, end) + '\n}\nsetupChat();', ctx);
   const clear = source.indexOf('function clearLocalChatSession()');
-  vm.runInContext(source.slice(clear, source.indexOf('window.addEventListener("tli-session-locked"', clear)),ctx);
+  const clearEnd = source.indexOf('let meshDirectoryCache =', clear);
+  assert.ok(clear >= 0 && clearEnd > clear, 'real chat lifecycle handler block');
+  vm.runInContext(source.slice(clear, clearEnd),ctx);
   const data = id=>'data:image/png;base64,'+Buffer.from(id).toString('base64');
   function complete(reader, id='synthetic', {width=20,height=20,corrupt=false}={}) {
     const count=images.length; reader.readyState=2; reader.onload({target:{result:data(id)}});
@@ -38,7 +40,7 @@ function fixture() {
   function pick(file={name:'screen.png',type:'image/png',size:50}) {nodes['chat-image-input'].click();nodes['chat-image-input'].files=[file];nodes['chat-image-input'].fire('change');return readers.at(-1);}
   const state=()=>JSON.parse(vm.runInContext('JSON.stringify({b64:_chatImageB64,mime:_chatImageMime,reading:_chatImageReading})',ctx));
   return {ctx,nodes,readers,images,notices,attachments,tasks,timers,pick,complete,state,data,
-    lock(){locked=true;epoch++;ctx.clearLocalChatSession();},unlock(){locked=false;epoch++;},changeContext(){epoch++;}};
+    lock(type='tli-session-locked'){locked=true;epoch++;for(const fn of events[type]||[])fn();},unlock(){locked=false;epoch++;for(const fn of events['tli-session-unlocked']||[])fn();},changeContext(){epoch++;}};
 }
 
 test('invalid replacement preserves the existing image, guidance and text draft',()=>{
@@ -57,6 +59,12 @@ test('lock erases the attachment and invalidates a pending replacement',()=>{
   const f=fixture();f.complete(f.pick(),'first');const late=f.pick();f.lock();
   assert.equal(f.state().b64,null);assert.equal(f.nodes['chat-image-thumb'].src,'');
   f.complete(late,'late');assert.equal(f.state().b64,null);assert.equal(f.nodes['chat-image-preview'].classList.contains('hidden'),true);
+});
+
+for(const event of ['tli-account-changed','tli-user-changed','pagehide'])test(event+' also erases the private attachment and retires its pending decoder',()=>{
+  const f=fixture();f.complete(f.pick(),'private');const pending=f.pick();f.nodes['chat-input'].value='Private text';f.lock(event);
+  assert.equal(f.state().b64,null);assert.equal(f.nodes['chat-image-thumb'].src,'');assert.equal(f.nodes['chat-input'].value,'');
+  f.unlock();f.complete(pending,'stale');assert.equal(f.state().b64,null);
 });
 test('corrupt images and excessive decoded dimensions cannot replace a valid preview',()=>{
   for(const options of [{corrupt:true},{width:8000,height:8000}]) {

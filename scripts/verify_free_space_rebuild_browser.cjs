@@ -107,7 +107,7 @@ async function cleanupWorkflow(browser){
   assert.equal(requests.filter(r=>r.path.endsWith('/execute')).length,1);assert.equal(mock.records.filter(r=>r.path==='/visualizer/drives').length,capacities);
   assert.equal(await page.evaluate(()=>!!document.querySelector('dialog[open] #cleanup-receipt')),true,'Phone review must be a modal drawer');
   const file=path.join(output,'cleanup-review-390-midnight.png');await page.screenshot({path:file,fullPage:true});report.screenshots.push({name:'cleanup-review',width:390,theme:'midnight',mode:'modern',file,sha256:crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')});
-  await page.keyboard.press('Escape');assert.equal(await page.evaluate(()=>document.activeElement.id),'fs-open-cleanup');
+  await page.keyboard.press('Escape');assert.equal(await page.locator('#fs-open-cleanup').isVisible(),false);assert.equal(await page.evaluate(()=>document.activeElement.id),'fs-table-wrap');assert.equal(await page.locator('#fs-table-wrap').isVisible(),true);
  });}finally{report.errors.push(...run.errors);report.requests.push(...mock.records,...requests);await run.context.close();}
 }
 async function apiContract(browser){
@@ -139,13 +139,14 @@ async function workflow(browser){
  const run=await ready(browser),{page,mock}=run;
  try {
  await check('navigation and location choices do not start a storage job',async()=>{
-  assert.equal(await page.locator('#fs-locations').evaluate(e=>e.open),true,'Drive choices are visible on entry');
+  assert.equal(await page.locator('#fs-locations').evaluate(e=>e.open),false,'Drive choices stay behind an explicit disclosure on entry');
+  await page.locator('#fs-locations > summary').click();
   await page.locator('#fs-drives-refresh').click();await page.waitForFunction(()=>document.querySelectorAll('#vis4-drives [data-mount]').length===12);
   await page.locator('#vis4-drives [data-mount]').first().click();assert.equal(mock.starts().length,0);assert.equal(await page.locator('#storage-results').isVisible(),false);
   await recordView(run,'empty',1440,'emeraldLight','modern');
  });
  await check('failed capacity refresh preserves observed drive list',async()=>{
-  mock.config.failDrives=true;await page.locator('#fs-drives-refresh').click();await page.waitForFunction(()=>!document.getElementById('fs-drives-refresh').disabled);assert.equal(await page.locator('#vis4-drives [data-mount]').count(),12);mock.config.failDrives=false;
+  await page.locator('#fs-locations > summary').click();mock.config.failDrives=true;await page.locator('#fs-drives-refresh').click();await page.waitForFunction(()=>!document.getElementById('fs-drives-refresh').disabled);assert.equal(await page.locator('#vis4-drives [data-mount]').count(),12);mock.config.failDrives=false;await page.locator('#fs-locations > summary').click();
  });
  await check('scan, virtual scrolling, sorting, unknown sizes and scope retention',async()=>{
   await page.locator('#visualizerPathInput').fill(scanPath);await page.locator('#visualizerScanBtn').click();await page.waitForFunction(()=>TLIFreeSpace.getState().observation);
@@ -183,7 +184,7 @@ async function workflow(browser){
  await check('Files navigation and Chat preparation preserve drafts and execute nothing',async()=>{
   await page.locator('#visualizerPathInput').fill(scanPath);assert.equal(await page.locator('#storage-results').isVisible(),false);
   await page.locator('#visualizerScanBtn').click();await page.waitForFunction(root=>TLIFreeSpace.getState().observation?.root===root,scanPath);
-  await page.locator('#visualizerTableBody .storage-file-action').first().click();await page.locator('#visualizerSendToFilesBtn').click();
+  await page.locator('#visualizerTableBody .storage-file-action').first().click();await page.locator('#fs-selected-actions').click();await page.getByRole('button',{name:'Review folder in Files',exact:true}).click();
   const before=mock.starts().length;await page.locator('#fs-handoff-close').click();assert.equal(mock.starts().length,before);
   await page.evaluate(()=>{document.getElementById('chat-input').value='Keep my unsent question';});await page.locator('#fs-ask-chat').click();await page.locator('#fs-handoff-confirm').click();
   assert.equal(await page.locator('#chat-input').inputValue(),'Keep my unsent question');assert.equal(await page.locator('#fs-handoff').evaluate(e=>e.open),true);await page.keyboard.press('Escape');
@@ -222,6 +223,7 @@ async function appearances(browser){
    await page.setViewportSize({width:390,height:1000});await page.evaluate(()=>{TLIInterface.set('modern');TLIThemes.apply('midnight');});
    await page.locator('#fs-mobile-map').focus();await page.keyboard.press('Enter');assert.equal(await page.locator('#vis4-treemap-container').isVisible(),true);await recordView(run,'map',390,'midnight','modern');
    await page.locator('#fs-mobile-list').click();await textScale(page,'panel-visualizer',2);await recordView(run,'large-text',390,'midnight','modern');
+   await page.locator('#fs-tree-columns').click();assert.equal(await page.locator('#fs-tree-columns').getAttribute('aria-pressed'),'true');
    const table=page.locator('#fs-table-wrap');assert.equal(await table.getAttribute('tabindex'),'0');assert.equal(await table.getAttribute('role'),'region');
    await table.evaluate(e=>e.scrollLeft=0);await table.focus();await page.keyboard.press('ArrowRight');await page.waitForFunction(()=>document.getElementById('fs-table-wrap').scrollLeft>0);
    assert.equal(await page.evaluate(()=>document.activeElement.id),'fs-table-wrap','Arrow keys operate the labelled scrolling region');

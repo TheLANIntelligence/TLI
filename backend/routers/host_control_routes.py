@@ -154,7 +154,7 @@ def _lifecycle_browser(request: Request, owner: str, *, mutation=False):
 
 def _lifecycle_metadata():
     return {"schema_version": 1, "instance_id": _INSTANCE_ID,
-            "installation_id": H.installation(S.BASE_DIR)["installation_id"]}
+            "installation_id": H.installation(S.BASE_DIR)["installation_id"], "current_version": S.TLI_VERSION}
 
 
 def _lifecycle_not_installing():

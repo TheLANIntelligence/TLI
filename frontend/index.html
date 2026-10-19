@@ -33,7 +33,8 @@
   <link rel="stylesheet" href="release-status.css?v=86f80ebb2d31">
   <link rel="stylesheet" href="activity-summary.css?v=5dfab2c050dc">
   <link rel="stylesheet" href="storage-cleanup.css?v=9aea320ee9da">
-  <link rel="stylesheet" href="native-companion.css?v=7184834bda02">
+  <link rel="stylesheet" href="native-companion.css?v=75a6bfc18854">
+  <link rel="stylesheet" href="bluetooth-devices.css?v=54df27c9d9d3">
   <script src="/assets/d3.v7.min.js?v=f2094bbf6141" defer></script>
 <link rel="stylesheet" href="intelligence.css?v=a03e1ac1866d" />
 <link rel="stylesheet" href="report-facts.css?v=0f7bef722fdc" />
@@ -46,10 +47,11 @@
 <link rel="stylesheet" href="storage-history.css?v=feb554eea0bb" />
 <link rel="stylesheet" href="chat-workspace.css?v=747696557ffa" />
 <link rel="stylesheet" href="settings-workspace.css?v=71d44b19735a" />
+<link rel="stylesheet" href="update-workspace.css?v=ffd44f0e72ad" />
 <link rel="stylesheet" href="storage-workspace.css?v=f9b180cec9e6" />
 <link rel="stylesheet" href="network-workspace.css?v=e4f39adb29c2" />
 <link rel="stylesheet" href="peer-transfers.css?v=0e824adf206d" />
-<link rel="stylesheet" href="peer-pairing.css?v=7e73a33bf5d5" />
+<link rel="stylesheet" href="peer-pairing.css?v=075b8be602e5" />
 <link rel="stylesheet" href="ui-foundation.css?v=e84846edbf95" />
 <link rel="stylesheet" href="theme-library.css?v=24f5ffb7f762" />
 <link rel="stylesheet" href="vault-workspace.css?v=5112506d29fd" />
@@ -65,22 +67,30 @@
 <link rel="stylesheet" href="mcp-client.css?v=fe1cc6f86f55" />
 <link rel="stylesheet" href="note-search.css?v=dc20502c0e5a" />
 <link rel="stylesheet" href="local-voice.css?v=80ff4bde7330" />
+<link rel="stylesheet" href="task-agent.css?v=fa6e1eb71da7" />
+<link rel="stylesheet" href="sonos.css?v=4" />
+<link rel="stylesheet" href="sonos-player.css?v=3" />
+<link rel="stylesheet" href="voice-conversation.css?v=1" />
 <link rel="stylesheet" href="home-assistant.css?v=199ee6b10570" />
 <link rel="stylesheet" href="case-guides.css?v=f8e7a22cc783" />
 <link rel="stylesheet" href="note-links.css?v=ace47eb02956" />
 <link rel="stylesheet" href="dashboard-workspace.css?v=bea5d21f0141" />
+<link rel="stylesheet" href="narrator-briefing.css?v=6a67bdefd0ae" />
 <link rel="stylesheet" href="css/performance-workspace.css?v=8b560e4a547b">
-<link rel="stylesheet" href="game-workspace.css?v=c930a5ab6a0c">
+<link rel="stylesheet" href="game-workspace.css?v=5ac1edd32a41">
 <link rel="stylesheet" href="simplification.css?v=cbd947b9fdf4">
 <link rel="stylesheet" href="workflow-assistant.css?v=9dbc10ac5d16">
 <link rel="stylesheet" href="smart-hub.css?v=ea901838a6e3">
 <link rel="stylesheet" href="classic-interface.css?v=93f0dd9e3bf2">
-<link rel="stylesheet" href="free-space-workspace.css?v=62c2de842b1d">
+<link rel="stylesheet" href="free-space-workspace.css?v=adfa045e21d5">
 <link rel="stylesheet" href="premium-workspace.css?v=c08fd5030481">
 <link rel="stylesheet" href="premium-chat.css?v=e4e5e90265f1">
 <link rel="stylesheet" href="connected-workspaces.css?v=1ef15498e2d6">
 <link rel="stylesheet" href="header-status.css?v=f75f2cab3d29">
 <link rel="stylesheet" href="onboarding.css?v=934afebc6cca">
+<link rel="stylesheet" href="homelab.css?v=f1d5badf3630">
+<link rel="stylesheet" href="pihole.css?v=126bb2ceb12e">
+<link rel="stylesheet" href="pihole-access.css?v=67765896b170">
 </head>
 
 <body>
@@ -324,7 +334,7 @@
           <div class="side-nav-button-icon">🕸️</div><span>Computers</span>
         </button>
 <button class="side-nav-button" data-panel-target="panel-companion">
-  <div class="side-nav-button-icon">▯</div><span>Phone Companion</span>
+  <div class="side-nav-button-icon">▯</div><span>Connect phone</span>
 </button>
 <button
   class="side-nav-button"
@@ -422,7 +432,7 @@
               </div>
               <form id="tli-rename-form" hidden>
                 <label for="tli-rename-input">Device name</label>
-                <input id="tli-rename-input" class="field-input" maxlength="32" required autocomplete="off">
+                <input id="tli-rename-input" class="field-input" required autocomplete="off">
                 <div class="tli-rename-actions"><button type="submit">Save</button><button id="tli-rename-cancel" type="button">Cancel</button></div>
                 <p id="tli-rename-error" class="tli-shell-empty" role="status" hidden></p>
               </form>
@@ -550,6 +560,7 @@
         </span>
       </div>
 
+      <section id="sonos-quick-player" class="sonos-quick-player" aria-label="Sonos now playing" hidden></section>
       <main class="main-scroll">
         <aside id="tli-release-notice" class="tli-release-notice" role="status" hidden>
           <strong id="tli-release-title">TLI update needs attention</strong>
@@ -783,9 +794,10 @@
           </div>
           <div class="nd-wrap">
             <div id="dashboard-access" class="dashboard-access" role="status" hidden><div><strong>Your saved work is locked</strong><p>Unlock TLI to view recent activity and saved places.</p></div><button id="dashboard-unlock" type="button" class="btn-primary">Unlock TLI</button></div>
+            <section id="dashboard-sonos" class="sonos-dashboard" aria-labelledby="sonos-dashboard-heading" hidden></section>
             <section class="dashboard-attention" id="nd-attention" aria-label="Latest TLI observation">
             <div class="nd-narrator" id="nd-narrator">
-              <div class="dashboard-section-heading"><span class="dashboard-eyebrow">TLI NARRATOR</span><span class="dashboard-section-hint">The latest useful observation</span></div>
+              <div class="dashboard-section-heading"><span class="dashboard-eyebrow">TLI NARRATOR</span><span class="dashboard-section-hint">Your local intelligence briefing</span></div>
               <div class="nd-narrator__lead">
                 <div class="nd-orb-wrap" aria-hidden="true">
                   <svg class="nd-beacon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="36" height="36" rx="12"/><path d="M13 25h6l3-8 5 15 3-7h5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -805,6 +817,7 @@
                 </div>
               </div>
             </div>
+            <section id="narrator-briefing" class="narrator-briefing" aria-label="Narrator briefing" hidden></section>
             <div class="dashboard-attention-footer"><div id="nd-narrator-controls"></div></div>
             </section>
             <div id="nd-action-card" class="nd-action-card" aria-label="Suggested action for its recorded target" hidden></div>
@@ -875,7 +888,7 @@
                   <button type="button" data-panel-target="panel-visualizer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 4-3 11v5h20v-5L19 4ZM2 15h20M6 18h.01M10 18h.01"/></svg><span><strong>Free Space</strong><small>Find what’s taking space</small></span><span aria-hidden="true">↗</span></button>
                   <button type="button" data-panel-target="panel-vault"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="12" rx="3"/><path d="M8 10V6a4 4 0 0 1 8 0v4M12 15v3"/></svg><span><strong>Vault</strong><small>Open your private workspace</small></span><span aria-hidden="true">↗</span></button>
                 </div>
-                <details class="nd-shortcuts"><summary>More shortcuts</summary><div class="button-row"><button class="btn-outline" type="button" data-open-notes>Notes &amp; fixes</button><button class="btn-outline" type="button" data-panel-target="panel-companion">Connect Phone Companion</button></div><div id="nd-actions" class="nd-actions"></div><div id="nd-suggestions" class="nd-suggestions" hidden></div></details>
+                <details class="nd-shortcuts"><summary>More shortcuts</summary><div class="button-row"><button class="btn-outline" type="button" data-open-notes>Notes &amp; fixes</button><button class="btn-outline" type="button" data-panel-target="panel-companion">Connect phone</button></div><div id="nd-actions" class="nd-actions"></div><div id="nd-suggestions" class="nd-suggestions" hidden></div></details>
               </section>
             </aside>
             </div>
@@ -959,8 +972,8 @@
     <div class="card fed-chat-card" id="fed-chat-card">
       <div class="card-header-row">
         <div>
-          <div class="card-title">Federated Chat <span class="badge" style="background:rgba(56,232,178,.12);color:var(--accent);border:1px solid rgba(56,232,178,.3);">Cross-Network</span></div>
-          <div class="card-subtitle">Chat with TLI nodes on other home networks via relay.</div>
+          <div class="card-title">Legacy relay history <span class="badge" style="background:rgba(56,232,178,.12);color:var(--accent);border:1px solid rgba(56,232,178,.3);">Unavailable</span></div>
+          <div class="card-subtitle">The older cross-network relay is unavailable. Retained messages and explicit connection cleanup remain here.</div>
         </div>
       </div>
 
@@ -977,13 +990,13 @@
           <div class="fed-relay-panel-left">
             <div class="fed-relay-dot" id="fed-relay-dot"></div>
             <div>
-              <div class="fed-relay-panel-title">Built-in Relay</div>
-              <div class="fed-relay-panel-sub" id="fed-relay-sub">Off — enable to let others connect through this node</div>
+              <div class="fed-relay-panel-title">Legacy relay status</div>
+              <div class="fed-relay-panel-sub" id="fed-relay-sub">This room-based relay is unavailable. Check whether an older listener still needs cleanup.</div>
             </div>
           </div>
           <div style="display:flex; align-items:center; gap:8px;">
             <span class="fed-relay-url-badge" id="fed-relay-url-badge" hidden></span>
-            <button class="pill-btn" id="fed-relay-toggle">Enable</button>
+            <button class="pill-btn" id="fed-relay-toggle" disabled>Unavailable</button>
           </div>
         </div>
         <div class="fed-relay-port-row" id="fed-relay-port-row" hidden>
@@ -994,7 +1007,7 @@
       </div>
 
       <!-- Pairing pane (shown when disconnected) -->
-      <div id="fed-pair-pane" class="fed-pair-pane">
+      <div id="fed-pair-pane" class="fed-pair-pane" hidden>
         <div class="fed-pair-row">
           <button class="pill-btn primary" id="fed-create-btn">Generate Code</button>
           <span class="fed-pair-or">or</span>
@@ -1021,8 +1034,8 @@
         <div class="fed-peers-row" id="fed-peers-row"></div>
         <div class="fed-thread" id="fed-thread"></div>
         <div class="fed-compose">
-          <input id="fed-input" class="fed-input-field" type="text" placeholder="Type a message…" />
-          <button class="pill-btn primary" id="fed-send-btn">Send</button>
+          <input id="fed-input" class="fed-input-field" type="text" placeholder="Legacy relay is unavailable" disabled />
+          <button class="pill-btn primary" id="fed-send-btn" disabled>Unavailable</button>
         </div>
       </div>
     </div>
@@ -1213,10 +1226,10 @@
             <div class="page-header">
               <div>
                 <h2 class="page-title">Home Automation</h2>
-                <p class="page-subtitle">Direct LAN control for Shelly devices. Bluetooth/cloud-only lights are not supported yet.</p>
+                <p class="page-subtitle">Direct LAN control for Shelly devices, with optional integrations below.</p>
               </div>
               <div class="page-header-tags">
-                <div class="page-tag">LAN-only</div>
+                <div class="page-tag">Local controls</div>
                 <div class="page-tag">Shelly</div>
               </div>
               <button id="shelly-refresh-all-btn" class="btn-outline btn-sm sha-refresh-all-btn">⟳ Refresh All</button>
@@ -1249,6 +1262,14 @@
             <div id="home-assistant-mount"></div>
           </details>
 
+          <details class="card" id="bluetooth-section">
+            <summary>Experimental · Bluetooth lights</summary>
+            <p>Optional · Windows 11 host · Support depends on an installed integration for your exact brand and model. Nearby devices may be detected even when they are not supported.</p>
+            <p>The Home Assistant connection above may cover devices you already configured there. It does not add new Bluetooth integrations to TLI.</p>
+            <p><a href="/bluetooth-help.html" target="_blank" rel="noopener">Setup instructions</a> · Scanning, enrollment and light controls run only when you choose them.</p>
+            <div id="bluetooth-devices-mount"></div>
+          </details>
+
           <!-- Hidden compat: renderShellyStatus still touches these IDs -->
           <div style="display:none;" aria-hidden="true">
             <span id="shelly-status-pill"></span>
@@ -1279,7 +1300,11 @@
   <div class="fs-layout">
     <div class="fs-main">
       <section class="fs-card fs-location-hero" aria-labelledby="fs-location-title">
-    <details class="fs-locations" id="fs-locations" open>
+        <h3 id="fs-location-title" class="fs-location-accessible-title">Choose where to look</h3>
+        <div class="fs-target-controls"><label class="fs-field fs-target-path">Drive or folder<input id="visualizerPathInput" type="text" list="visualizerPathSuggestions" maxlength="4096" placeholder="Choose a drive or enter a folder path" autocomplete="off" spellcheck="false"></label><datalist id="visualizerPathSuggestions"></datalist><label class="fs-field fs-target-profile">Scan type<select id="fs-profile"><option value="quick">Quick · up to 15 s</option><option value="deep">Deep · up to 5 min</option></select></label><button id="visualizerScanBtn" class="fs-button fs-primary" type="button">Scan</button></div>
+        <p id="fs-location-capacity" class="fs-help">Choose a drive or enter a folder on the TLI host.</p>
+        <div class="fs-location-secondary">
+    <details class="fs-locations" id="fs-locations">
       <summary>Drives &amp; folders <span id="fs-location-summary-hint">Choose a drive or folder</span></summary>
       <div class="fs-location-body">
       <div class="fs-heading"><h3 id="fs-locations-title">Drives</h3><button class="fs-button fs-small" id="fs-drives-refresh" type="button">Refresh</button></div>
@@ -1291,19 +1316,19 @@
 </details></div>
       </div>
     </details>
-        <div class="fs-location-line"><h3 id="fs-location-title">Choose where to look</h3><p id="fs-location-capacity" class="fs-help">Choose a drive or enter a folder on the TLI host.</p></div>
-        <div class="fs-target-controls"><label class="fs-field">Drive or folder on this TLI host<input id="visualizerPathInput" type="text" list="visualizerPathSuggestions" maxlength="4096" placeholder="Choose a drive above, or enter a folder path" autocomplete="off" spellcheck="false"></label><datalist id="visualizerPathSuggestions"></datalist><button id="visualizerScanBtn" class="fs-button fs-primary" type="button">Scan</button></div>
-        <div class="fs-source-toolbar"><div class="fs-workspace-tools"><button id="fs-show-changes" class="fs-button fs-small" type="button">Changes</button><button id="fs-show-tools" class="fs-button fs-small" type="button">Storage tools</button><button id="fs-show-monitor" class="fs-button fs-small" type="button">Monitoring</button></div><details class="fs-policy"><summary>Scan options</summary><label class="fs-field">Scan type<select id="fs-profile"><option value="quick">Quick · up to 15 seconds</option><option value="deep">Deep · up to 5 minutes</option></select></label><p id="fs-policy-text">Quick scans inspect up to 50,000 entries and 18 folder levels. Deep scans inspect up to 500,000 entries and 30 levels. Both can finish with partial coverage.</p><p>By default, app/cache and development folders such as AppData, .git and node_modules are excluded. Links always stay excluded. No files are moved or deleted.</p><label class="fs-check"><input id="fs-include-excluded" type="checkbox" disabled> Include excluded app/cache folders in this Deep scan</label><p id="fs-exclusion-help">Available with Deep. This may inspect many more files; cleanup restrictions still apply.</p></details></div>
+        <details id="fs-scan-options" class="fs-policy"><summary>Scan options</summary><p id="fs-policy-text">Quick scans inspect up to 50,000 entries and 18 folder levels. Deep scans inspect up to 500,000 entries and 30 levels. Both can finish with partial coverage.</p><p>By default, app/cache and development folders such as AppData, .git and node_modules are excluded. Links always stay excluded. No files are moved or deleted.</p><label class="fs-check"><input id="fs-include-excluded" type="checkbox" disabled> Include excluded app/cache folders in this Deep scan</label><p id="fs-exclusion-help">Available with Deep. This may inspect many more files; cleanup restrictions still apply.</p></details>
+        </div>
         <div id="fs-job" class="fs-job" hidden><div class="fs-heading"><strong id="fs-job-title"></strong><button id="fs-job-stop" type="button" class="fs-button">Stop scan</button></div><p id="fs-job-progress" role="status"></p><button id="fs-job-check" type="button" class="fs-button" hidden>Check status</button></div>
         <p id="visualizerStatus" class="fs-status" role="status"></p>
       </section>
       <section id="fs-view-explore" role="tabpanel" aria-labelledby="fs-tab-explore">
-        <div id="fs-empty" class="fs-card fs-empty"><span class="fs-empty-icon" aria-hidden="true">▥</span><h3 id="fs-empty-title">Choose a drive to get started</h3><p id="fs-empty-description">Select a drive or folder above, then choose Scan. Your files stay unchanged.</p></div>
+        <div id="fs-empty" class="fs-card fs-empty"><h3 id="fs-empty-title">Choose a location to get started</h3><p id="fs-empty-description">Select a drive or folder above, then choose Scan. Your files stay unchanged.</p></div>
         <div id="storage-results" class="fs-card" hidden>
           <div id="vis4-summary" class="fs-observation" aria-live="polite"></div>
+          <div id="fs-workspace-actionbar" class="fs-workspace-actionbar"><nav id="fs-browser-views" class="fs-browser-views" aria-label="Browse scan results" hidden></nav><div class="fs-workspace-actions"><button id="fs-ask-chat" type="button" class="fs-button">Prepare Chat summary</button><button id="fs-open-cleanup" type="button" class="fs-button" hidden>Review selected files</button></div></div>
           <div class="fs-heading fs-explorer-heading"><div><h3 id="visualizerCenterTitle" tabindex="-1">Contents</h3><p id="visualizerCenterSubtitle" class="fs-path"></p></div><button id="visualizerBackBtn" type="button" class="fs-button fs-small" disabled>Up one folder</button></div>
           <div class="fs-explorer-toolbar"><nav id="fs-map-breadcrumbs" class="fs-map-breadcrumbs" aria-label="Recorded folder location"></nav>
-          <details id="fs-explorer-filters" class="fs-filter-disclosure" open><summary>Search &amp; filters</summary><div class="fs-filters"><label class="fs-field">Search<input id="visualizerSearchInput" type="search" maxlength="256" placeholder="Name or path"></label><label class="fs-field">Category<select id="visualizerCategoryFilter"><option value="all">All types</option></select></label><label class="fs-field">Extension<input id="fs-extension-filter" type="search" maxlength="40" placeholder="e.g. .gguf"></label><label class="fs-field">Size measure<select id="fs-size-metric"><option value="size">Counted logical size</option><option value="allocated_size">On disk</option></select></label><label class="fs-field">Minimum size<select id="visualizerMinSize"><option value="0">Any size</option><option value="1048576">1 MiB</option><option value="104857600">100 MiB</option><option value="1073741824">1 GiB</option></select></label></div></details>
+          <div id="fs-tree-controls" class="fs-tree-controls"><div class="fs-primary-filters"><label class="fs-field">Search this tree<input id="visualizerSearchInput" type="search" maxlength="256" placeholder="Name or path"></label><label class="fs-field">Size measure<select id="fs-size-metric"><option value="size">Counted logical size</option><option value="allocated_size">On disk</option></select></label></div><details id="fs-explorer-filters" class="fs-filter-disclosure"><summary>Filters</summary><div class="fs-filters"><label class="fs-field">Category<select id="visualizerCategoryFilter"><option value="all">All types</option></select></label><label class="fs-field">Extension<input id="fs-extension-filter" type="search" maxlength="40" placeholder="e.g. .gguf"></label><label class="fs-field">Minimum size<select id="visualizerMinSize"><option value="0">Any size</option><option value="1048576">1 MiB</option><option value="104857600">100 MiB</option><option value="1073741824">1 GiB</option></select></label></div></details></div>
           <p id="visualizerStatusLine" class="fs-help fs-result-count" role="status"></p>
             <details class="fs-folder-shortcuts" hidden><summary>Browse folders</summary><div id="fs-map-folders" class="fs-map-folders" aria-label="Explore scanned folders" hidden></div></details>
           </div>
@@ -1311,18 +1336,17 @@
           <div id="fs-map-hidden" class="fs-map-hidden" role="status" hidden></div>
           <div id="fs-map-workbench" class="fs-map-workbench" data-surface="list" data-layout="split">
             <div id="fs-map-list-panel" class="fs-map-list-panel">
-              <div class="fs-tree-toolbar"><span id="fs-tree-summary" class="fs-help" role="status"></span><button id="fs-tree-collapse" class="fs-button fs-small" type="button">Collapse</button><button id="fs-tree-expand" class="fs-button fs-small" type="button">Expand all</button></div>
-              <div id="fs-table-wrap" class="fs-table-wrap" tabindex="0" role="region" aria-label="Recorded files and folders; scroll horizontally for all measurements"><table id="fs-tree-table" class="fs-table" role="treegrid" aria-label="Recorded storage tree"><caption class="sr-only">Recorded entries; size is counted logical bytes, percentages compare each item with its recorded parent. Unknown measurements remain unknown.</caption><thead><tr><th data-sort="name" aria-sort="none"><button type="button">Name</button></th><th data-sort="category" aria-sort="none"><button type="button">Type</button></th><th data-sort="size" aria-sort="descending"><button type="button">Size</button></th><th data-sort="allocated_size" aria-sort="none"><button type="button">On disk</button></th><th>% parent</th><th data-sort="files" aria-sort="none"><button type="button">Files</button></th><th data-sort="modified_at" aria-sort="none"><button type="button">Modified</button></th><th>Review</th></tr></thead><tbody id="visualizerTableBody"></tbody></table></div>
+              <div id="fs-tree-toolbar" class="fs-tree-toolbar"><span id="fs-tree-summary" class="fs-help" role="status"></span><button id="fs-tree-columns" class="fs-button fs-small" type="button" aria-pressed="false" aria-controls="fs-table-wrap">More columns</button><button id="fs-tree-collapse" class="fs-button fs-small" type="button">Collapse</button><button id="fs-tree-expand" class="fs-button fs-small" type="button">Expand all</button></div>
+              <div id="fs-table-wrap" class="fs-table-wrap" tabindex="0" role="region" aria-label="Recorded files and folders"><table id="fs-tree-table" class="fs-table" role="treegrid" aria-label="Recorded storage tree"><caption class="sr-only">Recorded entries; size is counted logical bytes, percentages compare each item with its recorded parent. Unknown measurements remain unknown. Choose More columns to show all measurements.</caption><thead><tr><th data-sort="name" aria-sort="none"><button type="button">Name</button></th><th data-sort="category" aria-sort="none"><button type="button">Type</button></th><th data-sort="size" aria-sort="descending"><button type="button">Size</button></th><th data-sort="allocated_size" aria-sort="none"><button type="button">On disk</button></th><th>% parent</th><th data-sort="files" aria-sort="none"><button type="button">Files</button></th><th data-sort="modified_at" aria-sort="none"><button type="button">Modified</button></th><th>Review</th></tr></thead><tbody id="visualizerTableBody"></tbody></table></div>
             </div>
             <div id="fs-tree-splitter" class="fs-tree-splitter" role="separator" tabindex="0" aria-label="Resize storage panes" aria-orientation="vertical" aria-valuemin="35" aria-valuemax="75" aria-valuenow="60" aria-controls="fs-map-list-panel fs-tree-map-side"></div>
-            <div id="fs-tree-map-side" class="fs-tree-map-side"><div id="vis4-treemap-container" class="fs-map"></div><div id="visualizerTypeBars" class="fs-types" aria-label="File types in retained entries"></div></div>
+            <div id="fs-tree-map-side" class="fs-tree-map-side"><div id="vis4-treemap-container" class="fs-map"></div><div id="visualizerDetailsBar" class="fs-selection" hidden><button id="fs-selected-close" class="fs-selection-close" type="button" aria-label="Close selection details">×</button><div><strong id="visualizerDetailsName"></strong><p id="visualizerDetailsPath" class="fs-path"></p><p id="fs-selected-metrics" class="fs-selection-metrics"></p></div><div class="fs-actions"><div id="fs-selected-cleanup"></div><button id="fs-selected-explain" class="fs-button fs-primary" type="button">Explain with TLI</button><button id="fs-selected-reveal" class="fs-button" type="button">Open location</button><button id="fs-selected-actions" class="fs-button" type="button" aria-haspopup="dialog">Actions</button><button id="visualizerCopyPathBtn" class="fs-button" type="button" hidden>Copy path</button><button id="visualizerSendToFilesBtn" class="fs-button" type="button" hidden>Review folder in Files</button></div><details class="fs-selection-metadata"><summary>Observation details</summary><p id="visualizerDetailsSize" class="fs-help"></p></details></div><div id="visualizerTypeBars" class="fs-types" aria-label="File types in retained entries"></div></div>
           </div>
-          <div id="visualizerDetailsBar" class="fs-selection" hidden><div><strong id="visualizerDetailsName"></strong><p id="visualizerDetailsPath" class="fs-path"></p><p id="visualizerDetailsSize" class="fs-help"></p></div><div class="fs-actions"><div id="fs-selected-cleanup"></div><button id="fs-selected-reveal" class="fs-button" type="button">Open location</button><button id="fs-selected-explain" class="fs-button fs-primary" type="button">Explain this</button><button id="fs-selected-actions" class="fs-button" type="button" aria-haspopup="dialog">Actions</button><button id="visualizerCopyPathBtn" class="fs-button" type="button">Copy path</button><button id="visualizerSendToFilesBtn" class="fs-button" type="button">Review folder in Files</button></div></div>
           <details id="fs-investigation" class="fs-investigation"><summary>Investigate this scan with TLI</summary><p class="fs-help">Uses verified results held by this TLI host. File contents are not read or sent to a model.</p><label class="fs-field">Storage question<input id="fs-investigation-question" maxlength="500" placeholder="What is taking up space? What should I review?"></label><label class="fs-check"><input id="fs-investigation-baseline" type="checkbox"> Include the baseline selected in Saved scans</label><button id="fs-investigate" type="button" class="fs-button fs-primary">Investigate scan</button><p id="fs-investigation-status" class="fs-status" role="status"></p><div id="fs-investigation-result"></div></details>
-          <div class="fs-actions"><button id="fs-ask-chat" type="button" class="fs-button">Prepare Chat summary</button><button id="fs-open-cleanup" type="button" class="fs-button">Review selected files</button></div>
         </div>
       </section>
       <details id="fs-more-tools" class="fs-card fs-more-tools"><summary>More storage tools <span>Large files, duplicates and saved scans</span></summary>
+      <div class="fs-workspace-tools"><button id="fs-show-changes" class="fs-button fs-small" type="button">Changes</button><button id="fs-show-tools" class="fs-button fs-small" type="button">Storage tools</button><button id="fs-show-monitor" class="fs-button fs-small" type="button">Monitoring</button></div>
       <details class="fs-consumers"><summary>Largest storage consumers</summary><p class="fs-help">Largest retained entries in this scan. Nested folder totals overlap and are not added together.</p><div id="fs-largest-consumers" class="fs-consumer-grid"></div></details>
       <div class="fs-tabs" role="tablist" aria-label="Storage workspace">
         <button id="fs-tab-explore" type="button" role="tab" aria-selected="true" aria-controls="fs-view-explore" data-fs-tab="explore">Scan results</button>
@@ -1750,10 +1774,17 @@
 
         <!-- One native Companion controller; Settings and search link here. -->
         <section class="panel-container" id="panel-companion" hidden>
-          <div class="page-header"><div><h2 class="page-title">Phone Companion</h2><p class="page-subtitle">Pair the installed TLI Companion app and manage its access to this host.</p></div></div>
+          <div class="page-header"><div><h2 class="page-title">TLI on your phone</h2><p class="page-subtitle">Your personal AI, conversations and ideas on Android.</p></div></div>
         </section>
 
         <!-- MESH / NODES PANEL -->
+        <section class="panel-container" id="panel-homelab" hidden>
+          <div class="page-header"><div><h2 class="page-title">HomeLab</h2><p class="page-subtitle">Your computers, devices and infrastructure, together.</p></div></div>
+          <div id="homelab-mount"></div>
+          <div id="pihole-mount"></div>
+          <div id="pihole-sharing-mount"></div>
+        </section>
+
         <section class="panel-container" id="panel-mesh" hidden>
           <div class="card mcd-card">
 
@@ -1807,9 +1838,9 @@
     <div><strong>Name:</strong> <span id="mesh-node-name">—</span></div>
     <div><strong>Role:</strong> <span id="mesh-node-role">—</span></div>
     <div><strong>Join mode:</strong> <span id="mesh-node-join-mode">—</span></div>
-    <div><strong>Host address:</strong> <span id="mesh-node-host-address">—</span></div>
+    <div><strong>Saved host address:</strong> <span id="mesh-node-host-address">—</span></div>
     <div><strong>Created:</strong> <span id="mesh-node-created">—</span></div>
-    <div><strong>Last seen:</strong> <span id="mesh-node-last-seen">—</span></div>
+    <div><strong>Identity updated:</strong> <span id="mesh-node-last-seen">—</span></div>
   </div>
 
   <!-- Buttons for this node -->
@@ -2057,25 +2088,56 @@
 </section>
 <section class="panel-container" id="panel-games" hidden>
   <div class="game-workspace">
-    <header class="page-header"><div><h2 class="page-title">Game Optimizer</h2><p class="page-subtitle">Choose a game and what matters to you. Get a short, practical settings plan for your PC.</p></div><span class="page-tag">Advice you apply yourself</span></header>
+    <header class="page-header"><div><h2 class="page-title">Game Optimizer</h2><p class="page-subtitle">Find a setting that helps. Try one change, compare the same scene, and keep what works.</p></div><span class="page-tag">Trial plans work without AI</span></header>
     <section class="card game-hardware" aria-labelledby="go-hardware-title">
-      <div class="game-hardware-header"><div><h3 id="go-hardware-title">Your PC specs</h3><p id="go-target-computer" class="small-meta">Computer analyzed: checking TLI host identity…</p></div><button type="button" class="btn-outline" id="go-read-hardware-btn">Refresh specs</button></div>
+      <div class="game-hardware-header"><div><h3 id="go-hardware-title">Your PC</h3><p id="go-target-computer" class="small-meta">Computer analyzed: checking TLI host identity…</p></div><button type="button" class="btn-outline" id="go-read-hardware-btn">Refresh specs</button></div>
       <dl id="go-hw-pills" class="go-hw-pills" aria-busy="false"></dl>
       <p id="go-hardware-status" class="small-meta" role="status">PC specs will appear here when Game Optimizer opens.</p>
     </section>
     <div class="game-layout">
       <section class="card game-setup" aria-labelledby="go-setup-title">
-        <h3 id="go-setup-title">What are you playing?</h3>
-        <label class="field-label" for="go-game-input">Game</label><div class="go-game-row"><input id="go-game-input" class="field-input" maxlength="120" placeholder="Enter the game name"><button type="button" id="go-detect-btn" class="btn-outline">Detect running game</button></div><p id="go-detect-status" class="small-meta" role="status"></p>
-        <div class="field-label">Your goal</div><div class="go-presets" id="go-presets"><button type="button" class="go-preset active" data-preset="stable_60" aria-pressed="true"><span class="go-preset-name">Smoother gameplay</span><span class="go-preset-desc">Consistent frame times</span></button><button type="button" class="go-preset" data-preset="high_fps" aria-pressed="false"><span class="go-preset-name">Higher FPS</span><span class="go-preset-desc">Responsiveness first</span></button><button type="button" class="go-preset" data-preset="max_visual" aria-pressed="false"><span class="go-preset-name">Better visuals</span><span class="go-preset-desc">Favor image quality</span></button></div>
-        <button type="button" class="btn-primary" id="go-analyze-btn">Analyze this PC</button><p class="small-meta">Refreshes the PC specs above and reads this game’s available settings. Review the details before asking AI.</p>
-        <div class="game-details-grid"><label for="go-resolution">Playing resolution<input id="go-resolution" class="field-input" maxlength="40" placeholder="For example: 2560 × 1440"></label><label for="go-target-fps">Target FPS<input id="go-target-fps" class="field-input" type="number" min="20" max="1000" value="60"></label></div>
-        <details class="game-corrections"><summary>Correct hardware or add observations</summary><p class="small-meta">Corrections apply only to this advice. Leave blank to use the read details.</p><label for="go-cpu">CPU correction<input class="field-input" id="go-cpu" maxlength="160" placeholder="CPU model"></label><label for="go-gpu">GPU correction<input class="field-input" id="go-gpu" maxlength="160" placeholder="GPU model"></label><label for="go-ram">RAM correction (GB)<input class="field-input" id="go-ram" type="number" min="1" max="4096"></label><label for="go-manual-settings">What you tried and FPS you measured<textarea class="field-textarea" id="go-manual-settings" maxlength="1600" rows="3" placeholder="For example: About 45 FPS in the busy city scene. Shadows at Medium helped."></textarea></label><div class="button-row"><button type="button" class="btn-outline" id="go-read-config-btn">Read game settings</button></div></details>
-        <div id="go-settings-block" style="display:none"><div class="go-settings-header"><strong>Read game settings</strong><span id="go-config-badge" class="go-config-badge"></span></div><div id="go-settings-grid" class="go-settings-grid"></div></div><p id="go-config-note" class="small-meta">Automatic settings readers: Cyberpunk 2077, The Witcher 3 and Red Dead Redemption 2. Other games can use settings you enter.</p>
-        <label class="field-label" for="go-provider">AI for this advice</label><div class="game-provider-row"><select id="go-provider" class="field-select"><option value="bundled">Integrated AI</option><option value="lmstudio">LM Studio</option></select><button type="button" class="btn-outline" id="go-check-provider">Check selection</button></div><p id="go-provider-status" class="small-meta" role="status">Uses the model selected in AI settings. No model is started or switched here.</p>
-        <label class="field-label" for="go-question">What would you like to improve?</label><textarea id="go-question" class="field-textarea" maxlength="1600" rows="3" placeholder="Optional: describe stutter, image quality, or ask a follow-up after trying a suggestion."></textarea><label class="game-history-choice"><input type="checkbox" id="go-include-history" checked> Include the last completed advice for this game in my follow-up</label><div class="button-row"><button type="button" id="go-ask-btn" class="btn-primary">Get my settings plan</button></div>
+        <p class="game-step">01 / YOUR GAME</p><h3 id="go-setup-title">What do you want to improve?</h3>
+        <label class="field-label" for="go-game-input">Game</label>
+        <div class="go-game-row"><input id="go-game-input" class="field-input" maxlength="120" list="go-known-games" placeholder="Type or choose a game"><button type="button" id="go-detect-btn" class="btn-outline">Detect running game</button></div>
+        <datalist id="go-known-games"><option value="Cyberpunk 2077"></option><option value="The Witcher 3"></option><option value="Red Dead Redemption 2"></option></datalist>
+        <p id="go-detect-status" class="small-meta" role="status"></p>
+        <div class="field-label">Your goal</div>
+        <div class="go-presets" id="go-presets">
+          <button type="button" class="go-preset active" data-preset="stable_60" aria-pressed="true"><span class="go-preset-name">Smoother play</span><span class="go-preset-desc">Reduce uneven frame times</span></button>
+          <button type="button" class="go-preset" data-preset="high_fps" aria-pressed="false"><span class="go-preset-name">Higher FPS</span><span class="go-preset-desc">Favor responsiveness</span></button>
+          <button type="button" class="go-preset" data-preset="max_visual" aria-pressed="false"><span class="go-preset-name">Better visuals</span><span class="go-preset-desc">Compare detail and cost</span></button>
+        </div>
+        <div class="game-read-row"><button type="button" class="btn-outline" id="go-analyze-btn">Read saved settings</button><span class="small-meta">Optional. You can enter the values yourself.</span></div>
+        <p id="go-config-note" class="small-meta">Settings readers: Cyberpunk 2077, The Witcher 3, and Red Dead Redemption 2. You can enter exact menu options for any game.</p>
+        <div id="go-trial-values"></div>
+        <button type="button" id="go-plan-btn" class="btn-primary game-plan-button">Choose settings to compare <span aria-hidden="true">→</span></button>
+        <p id="go-plan-status" class="small-meta" role="status">Start with a known current value. No AI model is needed, and TLI won't change your settings.</p>
+        <details class="game-ai-options">
+          <summary>Ask AI for more help <span>Optional</span></summary>
+          <p class="small-meta">Use your PC details and observations for a separate AI conversation about this game.</p>
+          <div class="game-details-grid"><label for="go-resolution">Playing resolution<input id="go-resolution" class="field-input" maxlength="40" placeholder="For example: 2560 × 1440"></label><label for="go-target-fps">Target FPS<input id="go-target-fps" class="field-input" type="number" min="20" max="1000" value="60"></label></div>
+          <details class="game-corrections"><summary>Correct PC details or review saved settings</summary><p class="small-meta">Corrections are used only for AI advice.</p><label for="go-cpu">CPU correction<input class="field-input" id="go-cpu" maxlength="160" placeholder="CPU model"></label><label for="go-gpu">GPU correction<input class="field-input" id="go-gpu" maxlength="160" placeholder="GPU model"></label><label for="go-ram">RAM correction (GB)<input class="field-input" id="go-ram" type="number" min="1" max="4096"></label><label for="go-manual-settings">What you tried and measured<textarea class="field-textarea" id="go-manual-settings" maxlength="1600" rows="3" placeholder="For example: 45 FPS in the city. Lower shadows reduced stutter."></textarea></label><div class="button-row"><button type="button" class="btn-outline" id="go-read-config-btn">Read game settings</button></div><div id="go-settings-block" style="display:none"><div class="go-settings-header"><strong>Read game settings</strong><span id="go-config-badge" class="go-config-badge"></span></div><div id="go-settings-grid" class="go-settings-grid"></div></div></details>
+          <label class="field-label" for="go-provider">AI for this advice</label><div class="game-provider-row"><select id="go-provider" class="field-select"><option value="bundled">Integrated AI</option><option value="lmstudio">LM Studio</option></select><button type="button" class="btn-outline" id="go-check-provider">Check selection</button></div><p id="go-provider-status" class="small-meta" role="status">Uses your selected model. Nothing is started or switched here.</p>
+          <label class="field-label" for="go-question">Your question or results</label><textarea id="go-question" class="field-textarea" maxlength="1600" rows="3" placeholder="Describe the scene, setting you changed, and what happened."></textarea>
+          <label class="game-history-choice"><input type="checkbox" id="go-include-history" checked> Include the last completed AI advice for this game</label><div class="button-row"><button type="button" id="go-ask-btn" class="btn-primary">Ask AI about this game</button></div>
+        </details>
       </section>
-      <section class="card game-advice"><div id="go-empty-advice"><h3>A few changes worth trying</h3><p>Start with your game and goal, then review your PC details. Your plan will prioritize settings, explain each tradeoff, and suggest a repeatable comparison.</p><p class="small-meta">TLI does not measure FPS or change game settings. You can add your own readings to refine the advice.</p></div><div id="go-output-wrap" style="display:none"><div class="go-output-header"><h3 id="go-output-title">Your settings plan</h3><div class="go-output-actions"><button class="btn-outline" id="go-copy-btn" type="button">Copy</button><button class="btn-outline" id="go-clear-btn" type="button">Clear advice</button></div></div><p id="go-output-source" class="small-meta"></p><p id="go-context-receipt" class="small-meta"></p><div id="go-output" class="go-output" aria-live="polite"></div></div></section>
+      <div class="game-results-column">
+        <section class="card game-trial-card" aria-labelledby="go-trials-title">
+          <p class="game-step">02 / ONE CHANGE AT A TIME</p><h3 id="go-trials-title">Your next setting to try</h3>
+          <div id="go-trial-cards"><div class="game-trial-empty"><span class="game-trial-symbol" aria-hidden="true">↔</span><h4>A clear before and after</h4><p>Choose your game and current settings. You'll get a small set of trials with the exact change and its tradeoff.</p><ol><li>Record a baseline in a repeatable scene.</li><li>Change one setting in the game.</li><li>Compare your readings here.</li></ol></div></div>
+        </section>
+        <section id="go-comparison" class="card game-comparison" hidden aria-labelledby="go-compare-title">
+          <p class="game-step">03 / CHECK THE RESULT</p><h3 id="go-compare-title">Did it help?</h3><p id="go-compare-setting" class="game-selected-trial"></p>
+          <label for="go-compare-scene">Scene or benchmark<input id="go-compare-scene" class="field-input" maxlength="160" placeholder="For example: the same 60-second city route"></label>
+          <label for="go-compare-metric">What you measured<select id="go-compare-metric" class="field-select"><option value="fps">Average FPS</option><option value="low-fps">1% low FPS</option><option value="frame-time">Frame time (ms)</option></select></label>
+          <div class="game-details-grid"><label for="go-compare-before">Before<input id="go-compare-before" class="field-input" type="number" min="0.01" max="10000" step="any" placeholder="Your reading"></label><label for="go-compare-after">After<input id="go-compare-after" class="field-input" type="number" min="0.01" max="10000" step="any" placeholder="Your reading"></label></div>
+          <label class="game-history-choice"><input id="go-compare-same" type="checkbox"> I used the same scene, resolution, test duration and measurement method, changing only this setting.</label>
+          <div class="button-row"><button id="go-compare-btn" class="btn-primary" type="button">Compare my readings</button><button id="go-copy-comparison" class="btn-outline" type="button" hidden>Copy comparison</button></div>
+          <div id="go-compare-result" class="game-comparison-result" role="status"></div><p class="small-meta">These are your readings, not a TLI benchmark. Repeat the run to check consistency. Restore the previous setting if the result is worse. This comparison stays only in this open view.</p>
+        </section>
+        <section class="card game-advice"><div id="go-empty-advice"><h3>Need more help?</h3><p>Open “Ask AI for more help” to discuss a specific problem or the result of your trial.</p></div><div id="go-output-wrap" style="display:none"><div class="go-output-header"><h3 id="go-output-title">AI advice</h3><div class="go-output-actions"><button class="btn-outline" id="go-copy-btn" type="button">Copy</button><button class="btn-outline" id="go-clear-btn" type="button">Clear advice</button></div></div><p id="go-output-source" class="small-meta"></p><p id="go-context-receipt" class="small-meta"></p><div id="go-output" class="go-output" aria-live="polite"></div></div></section>
+      </div>
     </div>
   </div>
 </section>
@@ -2087,7 +2149,7 @@
               <div class="card-header-row">
                 <div>
                   <div class="card-title">Scripts — Code Generator <span class="badge">PowerShell · Bash · Python</span></div>
-                  <div class="card-subtitle">AI-generated scripts for your local machine. Always review before running — TLI flags high-risk operations automatically.</div>
+                  <div class="card-subtitle">Draft script source for review and copying. Pattern warnings are advisory; TLI does not execute these scripts.</div>
                 </div>
               </div>
 
@@ -2479,15 +2541,15 @@
                 <div id="pub-fields-app" hidden>
                   <div class="hub-field-label" style="margin-top:10px;">Nav Icon <span class="hub-field-hint">(emoji)</span></div>
                   <input type="text" id="pub-app-icon" class="hub-url-field" placeholder="📦" style="max-width:80px;" />
-                  <div class="hub-field-label" style="margin-top:10px;">Permissions <span class="hub-field-hint">(comma-separated)</span></div>
+                  <div class="hub-field-label" style="margin-top:10px;">Requested host features <span class="hub-field-hint">(comma-separated declarations)</span></div>
                   <input type="text" id="pub-app-perms" class="hub-url-field"
                     placeholder="mesh.devices, notifications, storage.local" />
                   <div class="hub-settings-note" style="margin-top:6px;">
-                    Available: <code>mesh.devices</code> · <code>notifications</code> · <code>settings.read</code> · <code>storage.local</code> · <code>shell.badge</code>
+                    Host features are unavailable in installed apps. These declarations are saved as metadata and grant no access to TLI or saved bridge storage.
                   </div>
-                  <div class="hub-field-label" style="margin-top:10px;">App HTML <span class="hub-field-hint">(single-file, include /tli-bridge.js)</span></div>
+                  <div class="hub-field-label" style="margin-top:10px;">App HTML <span class="hub-field-hint">(single file with inline styles and scripts)</span></div>
                   <textarea id="pub-app-html" class="hub-url-field" rows="12"
-                    placeholder='&lt;!DOCTYPE html&gt;&#10;&lt;html&gt;&lt;head&gt;&lt;script src="/tli-bridge.js?v=665e60a792e7"&gt;&lt;/script&gt;&lt;/head&gt;&#10;&lt;body&gt;Hello from my TLI App!&lt;/body&gt;&lt;/html&gt;'
+                    placeholder='&lt;!DOCTYPE html&gt;&#10;&lt;html&gt;&lt;head&gt;&lt;title&gt;My local app&lt;/title&gt;&lt;/head&gt;&#10;&lt;body&gt;Hello from my TLI App!&lt;/body&gt;&lt;/html&gt;'
                     style="font-family:monospace;font-size:11px;"></textarea>
                 </div>
 
@@ -2625,6 +2687,7 @@
                   <div class="button-row">
                     <button class="btn-primary" id="settings-mesh-ai-save">Save host AI routing</button>
                     <button class="btn-outline" id="settings-system-profile-save">Save host profile</button>
+                    <button class="btn-outline" id="settings-system-profile-refresh">Refresh saved profile</button>
                   </div>
                   <div class="small-meta" id="settings-mesh-ai-status"></div>
                   <p class="small-meta" id="settings-profile-help">The profile controls background activity limits. It does not switch models or replace chat preferences.</p>
@@ -2809,7 +2872,7 @@
                       <div class="settings-row-desc">A friendly name, such as Living Room PC.</div>
                     </div>
                     <div class="settings-row-actions">
-                      <input id="settings-node-name" class="field-input compact-input" type="text" maxlength="64" placeholder="e.g. Living Room PC" />
+                      <input id="settings-node-name" class="field-input compact-input" type="text" placeholder="e.g. Living Room PC" />
                     </div>
                   </div>
                   <div class="settings-row">
@@ -2907,7 +2970,7 @@
                 <div class="settings-section-header" role="button" tabindex="0">
                   <div>
                     <div class="settings-section-title">Software Updates</div>
-                    <div class="settings-section-subtitle">Download a verified update, then finish installation when you are ready.</div>
+                    <div class="settings-section-subtitle">Download a verified update, then review installation and restart when you are ready.</div>
                   </div>
                   <div class="settings-section-chevron">▾</div>
                 </div>
@@ -2936,8 +2999,10 @@
                     <a class="btn-outline" id="settings-update-manual-link" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Download from releases</a>
                     <button class="btn-outline" id="settings-update-notes-btn" type="button" hidden>What's new</button>
                   </div>
-                  <div id="settings-update-ready" hidden>
+                  <details id="settings-update-ready" class="tli-update-manual" hidden>
+                    <summary>Manual installation options</summary>
                     <p>The verified package is ready. Installation has not started.</p>
+                    <button class="btn-outline" id="settings-update-open-btn" type="button">Open update folder</button>
                     <ol>
                       <li>Open the update folder and keep it open.</li>
                       <li id="settings-update-stop">Finish active work, then choose Quit TLI below and review the confirmation. Stop any optional Host Start helper too. Closing this browser alone does not stop TLI.</li>
@@ -2946,7 +3011,7 @@
                     </ol>
                     <p id="settings-update-path" class="small-meta" style="overflow-wrap:anywhere"></p>
                     <button class="btn-outline" id="settings-update-quit-btn" type="button" aria-haspopup="dialog" aria-controls="tli-host-lifecycle-dialog" hidden>Quit TLI…</button>
-                  </div>
+                  </details>
                   <details class="tli-release-settings">
                     <summary>Running host &amp; application files</summary>
                     <p id="settings-release-state" role="status">Running application identity has not been checked.</p>
@@ -2986,10 +3051,10 @@
                     <span class="settings-pin-callout-icon">⚠</span>
                     <div class="settings-pin-callout-text">
                       <strong>No PIN set</strong>
-                      Anyone on your LAN can open TLI. Set a PIN to restrict access to this session.
+                      Set a PIN on this TLI computer to protect browser access to private controls.
                     </div>
                   </div>
-                  <div class="small-meta" id="settings-pin-status-desc">No PIN set — anyone on your LAN can access TLI.</div>
+                  <div class="small-meta" id="settings-pin-status-desc">No PIN set. Protected private controls are limited to this TLI computer.</div>
                   <div id="settings-pin-set-block">
                     <div class="settings-row">
                       <div>
@@ -3249,11 +3314,11 @@
         <button class="btn-icon" data-close-modal aria-label="Close About TLI">&times;</button>
       </div>
       <div class="modal-body">
-        <p><strong>Version:</strong> <span id="about-version">v1.4.5-beta</span></p>
+        <p><strong>Version:</strong> <span id="about-version">v1.4.7-beta</span></p>
         <p><strong>Purpose:</strong> Your private home console for computers, devices, files and local AI.</p>
         <p><strong>AI:</strong> Bundled local inference, optional LM Studio and connected TLI computers. Check AI &amp; chat settings for current model availability.</p>
         <p><strong>Saved work:</strong> Notes &amp; fixes holds setup details, preferences and past fixes. Vault notes use a separate passphrase.</p>
-        <p><strong>Your phone:</strong> Open Phone Companion under Home &amp; network to review native-app pairing. Browser satellite is a separate connection.</p>
+        <p><strong>Your phone:</strong> Choose Connect phone under Home &amp; network for guided Android setup. Browser satellite is a separate connection.</p>
         <p><strong>Created by:</strong> Anonymous</p>
         <p><a class="btn-outline" href="/history/index.html" target="_blank" rel="noopener">TLI through the years ↗</a></p>
         <p class="modal-subtext">Explore retained historical views with synthetic examples. To use TLI in its early layout, choose Classic UI in the header or Settings → Appearance. Classic and Modern use the same current features and protections; neither rolls back the application or its data.</p>
@@ -3273,18 +3338,39 @@
     <div class="tli-host-lifecycle-actions"><button id="tli-host-lifecycle-cancel" class="btn-outline" type="button" autofocus>Keep TLI running</button><button id="tli-host-lifecycle-check" class="btn-outline" type="button" hidden>Check connection</button><button id="tli-host-lifecycle-confirm" class="btn-primary" type="button" disabled>Confirm</button><button id="tli-host-lifecycle-reload" class="btn-primary" type="button" hidden>Reload TLI</button></div>
   </dialog>
 
+  <dialog id="tli-update-install-dialog" class="tli-host-lifecycle-dialog tli-update-install-dialog" aria-labelledby="tli-update-install-title" aria-describedby="tli-update-install-warning">
+    <h2 id="tli-update-install-title">Install update and restart?</h2>
+    <p id="tli-update-install-version"></p>
+    <p id="tli-update-install-destination" class="small-meta"></p>
+    <p id="tli-update-install-warning">Finish active chats, tasks, scans and downloads before continuing. TLI will stop, install the verified application files, and restart. Connected phones and other browsers will disconnect.</p>
+    <p id="tli-update-install-preserves">Your original installation keeps its saved data, settings and models. Keep using its existing folder and shortcuts.</p>
+    <p id="tli-update-install-details"></p>
+    <p id="tli-update-install-status" role="status" aria-live="polite"></p>
+    <div class="tli-host-lifecycle-actions">
+      <button id="tli-update-install-cancel" class="btn-outline" type="button" autofocus>Not now</button>
+      <button id="tli-update-install-check" class="btn-outline" type="button" hidden>Check connection</button>
+      <button id="tli-update-install-confirm" class="btn-primary" type="button" disabled>Install and restart</button>
+      <button id="tli-update-install-reload" class="btn-primary" type="button" hidden>Reload updated TLI</button>
+    </div>
+    <a id="tli-update-install-manual" href="https://github.com/TheLANIntelligence/TLI/releases" target="_blank" rel="noopener noreferrer" hidden>Manual update and recovery instructions</a>
+  </dialog>
+
   <!-- Main JS bundle -->
-  <script src="/js/host-identity.js?v=1c681b225322"></script>
-  <script src="/js/ui-foundation.js?v=950fd0ae324f"></script>
-  <script src="/js/simplification.js?v=e33126f9622a"></script>
+  <script src="/js/host-identity.js?v=35bef5d597fd"></script>
+  <script src="/js/ui-foundation.js?v=88e9f2ff32df"></script>
+  <script src="/js/simplification.js?v=3a379baccddf"></script>
   <script src="/js/device-details.js?v=d63b700c50fe"></script>
   <script src="/js/room-display.js?v=52948454ea67"></script>
   <script src="/js/ui-health.js?v=f0512d10910f"></script>
   <script src="/js/local-voice.js?v=23aa2949b2d5"></script>
+  <script src="/js/task-agent.js?v=dfe7d773a7c4"></script>
+  <script src="/js/sonos.js?v=7"></script>
+  <script src="/js/sonos-player.js?v=3"></script>
+  <script src="/js/voice-conversation.js?v=1"></script>
   <script src="/js/workspace-client.js?v=2ce68c918bcc"></script>
-  <script src="/app.js?v=5e925a8d2fb3"></script>
-  <script src="/js/onboarding.js?v=fa6217060510"></script>
-  <script src="/js/lan-inference.js?v=11031503d49b"></script>
+  <script src="/app.js?v=10e9cc4df9ed"></script>
+  <script src="/js/onboarding.js?v=fffd6a070e61"></script>
+  <script src="/js/lan-inference.js?v=6aeef64d9850"></script>
   <script src="/js/vault.js?v=f12ddafda69f"></script>
   <script src="/js/vault-backups.js?v=a01c7a5a5e84"></script>
   <script src="/js/guided-checks.js?v=f51836795ee8"></script>
@@ -3292,58 +3378,61 @@
   <script src="/js/case-context.js?v=8989d3eff52c"></script>
   <script src="/js/case-guides.js?v=a08feba3e7b1"></script>
   <script src="/js/case-exports.js?v=65914700f9cc"></script>
-  <script src="/js/files.js?v=236a84147869"></script>
-  <script src="/js/storage-cleanup.js?v=71510e526030"></script>
+  <script src="/js/files.js?v=4145e292dc7e"></script>
+  <script src="/js/storage-cleanup.js?v=7ceeb6584079"></script>
   <script src="/js/storage-map.js?v=e0d71a2e9317"></script>
-  <script src="/js/visualizer.js?v=eda07c706257"></script>
-  <script src="/js/tools.js?v=70a69656ca97"></script>
-  <script src="/js/mesh.js?v=ba20e39dc3a0"></script>
+  <script src="/js/visualizer.js?v=18e17299fa43"></script>
+  <script src="/js/tools.js?v=fe5079941295"></script>
+  <script src="/js/mesh.js?v=1d17efee007f"></script>
   <script src="/js/peer-pairing.js?v=0e01ce2d8946"></script>
-  <script src="/js/settings.js?v=f8f068e2d980"></script>
+  <script src="/js/settings.js?v=01aa9a487bbf"></script>
   <script src="/js/host-lifecycle.js?v=ea9085f5fef0"></script>
   <script src="/js/uninstall.js?v=0ba8c5adbe82"></script>
-  <script src="/js/home-auto.js?v=29cbf030a921"></script>
-  <script src="/js/satellite.js?v=31ccd65094b9"></script>
-  <script src="/js/federation.js?v=56198040a905"></script>
-  <script src="/js/hub.js?v=b0ad918029b2"></script>
-  <script src="/js/tli-apps.js?v=3b2b0820b8bc"></script>
-  <script src="/js/tli-update.js?v=a84095bffb80"></script>
+  <script src="/js/home-auto.js?v=2189a12da639"></script>
+  <script src="/js/bluetooth-devices.js?v=df2997164295"></script>
+  <script src="/js/satellite.js?v=c42c647b56dd"></script>
+  <script src="/js/federation.js?v=380d68ea74d1"></script>
+  <script src="/js/hub.js?v=d4310dca45d5"></script>
+  <script src="/js/tli-apps.js?v=f9acc95f2189"></script>
+  <script src="/js/tli-update.js?v=7927cbe8b846"></script>
   <!-- app.js second-pass split (2026-04-11) -->
   <script src="/js/peer-transfers.js?v=a486068529b8"></script>
-  <script src="/js/tli-chat.js?v=140a99440ba1"></script>
-  <script src="/js/routine-workspace.js?v=1c80b6bd1585"></script>
+  <script src="/js/tli-chat.js?v=1f5607697c78"></script>
+  <script src="/js/routine-workspace.js?v=8a4e67735d9a"></script>
   <script src="/js/automations.js?v=91f7bcfa81ab"></script>
-  <script src="/js/ai-source.js?v=bfd4acaf1dd1"></script>
-  <script src="/js/ai-model-manager.js?v=52970e3a6385"></script>
-  <script src="/js/live-feed.js?v=9b9bdba2c5ac"></script>
-  <script src="/js/activity-summary.js?v=28c2ec5b447e"></script>
-  <script src="/js/mesh-control.js?v=b5a61738cd2f"></script>
-  <script src="/js/printers-ext.js?v=b6978ef09172"></script>
+  <script src="/js/ai-source.js?v=f1cff4d659e3"></script>
+  <script src="/js/ai-model-manager.js?v=d63ff48ef9a3"></script>
+  <script src="/js/live-feed.js?v=e93f89b0e2fc"></script>
+  <script src="/js/activity-summary.js?v=762f96d06a11"></script>
+  <script src="/js/narrator-briefing.js?v=fddc3a91c205"></script>
+  <script src="/js/mesh-control.js?v=d71b652de2ea"></script>
+  <script src="/js/printers-ext.js?v=63bd79a1bb06"></script>
   <script src="/js/action-engine.js?v=8299f0ce9d05"></script>
   <script src="/js/pwa.js?v=285162ce5d41"></script>
   <!-- Persistent chat history (defines missing history functions + restores last session) -->
-  <script src="/chat_history.js?v=f58f04ff9098"></script>
+  <script src="/chat_history.js?v=59467d71f9e0"></script>
   <!-- JS modules (extracted from app.js for maintainability) -->
   <script src="/js/performance-workspace.js?v=6f7816b380b2"></script>
-<script src="/js/tli-games.js?v=8e346a9f4b74"></script>
-  <script src="/js/tli-system.js?v=b9db8b973af6"></script>
+<script src="/js/tli-games.js?v=90e4006865fe"></script>
+<script src="/js/game-trials.js?v=a970b33fd899"></script>
+  <script src="/js/tli-system.js?v=b96eec356737"></script>
   <script src="/js/builder-web-apps.js?v=75e5488a05eb"></script>
   <script src="/js/builder.js?v=a1cef232b467"></script>
-  <script src="/js/mesh-service.js?v=0b20fc7eddb3"></script>
-<script src="/js/pin-lock.js?v=e366f62ec3f7"></script>
-<script src="/js/cmd-palette.js?v=043431b7c323"></script>
-  <script src="/js/fetch-interceptor.js?v=eae0038f9c0b"></script>
+  <script src="/js/mesh-service.js?v=eab6cb86cef6"></script>
+<script src="/js/pin-lock.js?v=53c498f5e9fe"></script>
+<script src="/js/cmd-palette.js?v=820dfaa9c3dc"></script>
+  <script src="/js/fetch-interceptor.js?v=3e208b6d1057"></script>
   <script src="/js/release-status.js?v=eb36ce4767d8"></script>
-  <script src="/js/tli-search.js?v=80933b028e48"></script>
+  <script src="/js/tli-search.js?v=2095fce17b82"></script>
 <script src="/js/chat-format.js?v=44424705fb52"></script>
 <script src="/chat_enhanced.js?v=9bfe4229532a"></script>
-  <script src="/settings_enhanced.js?v=a1f024864bf0"></script>
+  <script src="/settings_enhanced.js?v=5504708152d6"></script>
   <script src="/panel_cleanup.js?v=b8bd85032130"></script>
   <script src="/nerve.js?v=e8ce4f54cb0c"></script>
   <!-- TLI v1.3 — Dashboard Presence Layer -->
-  <script src="/js/event_interpreter.js?v=92f0cd5da186"></script>
-  <script src="/js/system-state-bar.js?v=0727bbe4a45a"></script>
-  <script src="/js/shell-refinement.js?v=b35077e49424"></script>
+  <script src="/js/event_interpreter.js?v=5b5595299c60"></script>
+  <script src="/js/system-state-bar.js?v=4ffcab669010"></script>
+  <script src="/js/shell-refinement.js?v=a8440c1e7763"></script>
 
 
 
@@ -3578,23 +3667,26 @@
 <script src="/js/memory-continuity.js?v=d2be0de58be9"></script>
 <script src="/js/document-context.js?v=47d6c3a3d184"></script>
 <script src="/js/data-recovery.js?v=a7ffad975e2e"></script>
-<script src="/js/saved-places.js?v=ae76fc521040"></script>
-<script src="/js/native-companion.js?v=0ec9fa115d79"></script>
+<script src="/js/saved-places.js?v=a6067955af8f"></script>
+<script src="/js/native-companion.js?v=394042448c5c"></script>
 <script src="/js/chat-workspace.js?v=90c2adc4bec8"></script>
 <script src="/js/tli-experience.js?v=98b34d5179ff"></script>
-<script src="/js/settings-workspace.js?v=ad50ac7c12cf"></script>
+<script src="/js/settings-workspace.js?v=2aa7615280e2"></script>
 <script src="js/theme-library.js?v=8594ac9f72d2"></script>
-<script src="/js/storage-workspace.js?v=9b1e04e9e4e3"></script>
+<script src="/js/storage-workspace.js?v=28d0c5df4069"></script>
 <script src="/js/network-workspace.js?v=4dd891ec2eb7"></script>
-<script src="/js/connection-setup.js?v=2c8454d2fb45"></script>
-<script src="/js/connect-device.js?v=4d3f3ab61127"></script>
+<script src="/js/connection-setup.js?v=c49cde6c43e4"></script>
+<script src="/js/connect-device.js?v=ae55fb850d97"></script>
 <script src="/js/mcp-bridge.js?v=88ed3d81fbee"></script>
 <script src="/js/mcp-client.js?v=15f66dddf270"></script>
 <script src="/js/home-assistant.js?v=c470463eeed7"></script>
+<script src="/js/homelab.js?v=50f83e081c68"></script>
+<script src="/js/pihole.js?v=96a30857994e"></script>
+<script src="/js/pihole-sharing.js?v=3973d587c1eb"></script>
 <script src="/js/note-search.js?v=e9a3a310ce57"></script>
 <script src="/js/note-links.js?v=25f0ceaffe06"></script>
 <script src="/js/workflow-assistant.js?v=956e2811c9e2"></script>
-<script src="/js/smart-hub.js?v=3faf58780c66"></script>
+<script src="/js/smart-hub.js?v=67f5a32ca696"></script>
 <script src="/js/premium-shell.js?v=463ebb5817e6"></script>
 <script src="/js/header-status-facts.js?v=891e606eec03"></script>
 <script src="/js/header-status.js?v=017ce4ff07d8"></script>

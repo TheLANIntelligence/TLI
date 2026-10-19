@@ -7,8 +7,8 @@ const source = fs.readFileSync(path.join(__dirname, '../js/system-state-bar.js')
 const tick = () => new Promise(resolve => setImmediate(resolve));
 const snapshot = (state = {}, ts = 1000) => ({ ok: true, ts, state: { cpu_pct: 37, ram_pct: 46, disk_pct_by_drive: { 'C:\\': 96 }, device_count: 2, last_event_ts: 999, probed_ts: ts, ...state } });
 
-function fixture(initial = snapshot()) {
-  let now = 1000000, respond = async () => ({ data: initial });
+function fixture(initial = snapshot(), {narrator,intercepted=false,idle=false} = {}) {
+  let now = idle ? 3000000 : 1000000, respond = async () => ({ data: initial });
   const nodes = {}, intervals = [], requests = [], events = {};
   function element() {
     const classes = new Set(), values = [];
@@ -23,19 +23,28 @@ function fixture(initial = snapshot()) {
   for (const id of ['tli-state-bar', 'cpu', 'ram', 'disk', 'dev', 'ts', 'diskMetric']) nodes[id] = element();
   const Interpreter = { init() {}, on: (key, fn) => { events[key] = fn; } };
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
-  const ctx = vm.createContext({ console, Date: Clock, AbortSignal, EventInterpreter: Interpreter,
-    window: { EventInterpreter: Interpreter },
+  const window = {EventInterpreter: Interpreter, location:{href:'http://localhost/',origin:'http://localhost'},
+    addEventListener:(name,fn)=>(events[name] ||= []).push(fn),
+    dispatchEvent:event=>{for(const fn of events[event.type] || [])fn(event);}};
+  const ctx = vm.createContext({ console, Date: Clock, AbortSignal, EventInterpreter: Interpreter, URL, Headers, CustomEvent,
+    window,
     document: { readyState: 'complete', getElementById: id => nodes[id] || null, createElement: element, addEventListener() {} },
     setInterval: (fn, ms) => { intervals.push({ fn, ms }); return intervals.length; }, clearInterval() {}, setTimeout() {},
-    localStorage: { getItem: () => null, setItem() { assert.fail('No persistence during metric checks'); } },
+    localStorage: { getItem: () => idle ? '1' : null, setItem() { assert.fail('No persistence during metric checks'); } },
     fetch: async (url, options) => {
       requests.push({ url, options });
-      const reply = url.includes('/dashboard/narrator') ? { data: null } : await respond(url, options);
-      return { ok: !reply.status || reply.status === 200, status: reply.status || 200, json: async () => reply.data };
+      const reply = url.includes('/dashboard/narrator') ? narrator ? await narrator() : { data: null } : await respond(url, options);
+      return { ok: !reply.status || reply.status === 200, status: reply.status || 200, json: async () => reply.data, clone(){return this;} };
     },
   });
+  if(intercepted){
+    window.fetch=ctx.fetch;window.TLIPinLock={checkAndLock:async()=>{await tick();window.dispatchEvent(new CustomEvent('tli-session-unlocked'));}};
+    vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/fetch-interceptor.js'),'utf8'),ctx);
+    ctx.fetch=(...args)=>window.fetch(...args);
+  }
   vm.runInContext(source, ctx);
   return { nodes, events, requests, presence:ctx.window.TLIPresence, context:ctx, respond: fn => { respond = fn; },
+    event:name=>window.dispatchEvent(new CustomEvent(name)),
     status: () => nodes['ssb-monitoring-status'].textContent,
     async poll() { intervals.find(t => t.ms === 10000).fn(); await tick(); },
     advance(ms) { now += ms; intervals.filter(t => t.ms === 1000).forEach(t => t.fn()); },
@@ -127,9 +136,51 @@ test('legacy fallback retains its contract but cannot imply fresh metrics, and a
   f.respond(async url => url === '/dashboard/command-center' ? { status: 404 } : { data: { cpu_pct: 40, ram_pct: 60, device_count: 2 } });
   await f.poll(); assert.equal(f.status(), 'Monitoring freshness unknown'); assert.equal(f.nodes.cpu.textContent, '--');
   const fallbacks = f.requests.filter(r => r.url === '/dashboard/state').length;
-  f.respond(async () => ({ status: 401 })); await f.poll(); assert.match(f.status(), /Monitoring unavailable/);
+  f.respond(async () => ({ status: 401 })); await f.poll(); assert.match(f.status(), /Monitoring paused.*Unlock TLI/);
   assert.equal(f.requests.filter(r => r.url === '/dashboard/state').length, fallbacks);
   assert.ok(f.requests.every(r => !r.options.method || r.options.method === 'GET'));
+});
+
+for(const status of [401,403])test(`monitoring ${status} clears private observations and pauses polling until a guarded access check succeeds`,async()=>{
+  const f=fixture({...snapshot(),smart_home:{count:1,names:['Private printer']}});await tick();
+  f.respond(async()=>({status,data:{detail:'Use an authorized browser on localhost.'}}));await f.poll();
+  assert.equal(f.presence.getObservation().devNames.length,0);assert.equal(f.nodes.cpu.textContent,'--');
+  assert.match(f.status(),/authorized browser/);const count=f.requests.length;
+  f.event('tli-session-unlocked');await f.poll();await f.presence.fetchActionCurrent();assert.equal(f.requests.length,count);
+  f.respond(async url=>({data:url.endsWith('/action/current')?null:snapshot()}));f.events.access_ready();await tick();
+  assert.equal(f.status(),'Metrics current');assert.equal(f.requests.length,count+2);
+});
+
+test('the real global 401 interceptor and PIN-off unlock cannot restart monitoring or action reads',async()=>{
+  const f=fixture(snapshot(),{intercepted:true});await tick();
+  f.respond(async()=>({status:401,data:{detail:'Clear cookies.'}}));await f.poll();await tick();
+  const count=f.requests.length;await f.poll();await f.presence.fetchActionCurrent();
+  assert.equal(f.requests.length,count);assert.equal(f.nodes.cpu.textContent,'--');
+  assert.match(f.status(),/paused/);
+});
+
+test('initial narrator result from an old session cannot populate the unlocked dashboard',async()=>{
+  let finish;const f=fixture(snapshot(),{narrator:()=>new Promise(resolve=>{finish=resolve;})});const messages=[];
+  f.context.window.TLIDash2={setEventMessage:message=>messages.push(message)};
+  f.event('tli-session-locked');f.event('tli-session-unlocked');
+  finish({data:{text:'Private old narrator',type:'status'}});await tick();assert.deepEqual(messages,[]);
+  f.events.narrator_update({text:'Queued narrator'});assert.deepEqual(messages,[]);
+  f.events.access_ready();await tick();f.events.narrator_update({text:'Fresh narrator'});assert.equal(messages.length,1);
+});
+
+test('pending return-visit narrator cannot paint after locking and entering a new session',async()=>{
+  let reads=0,finish;const f=fixture(snapshot(),{idle:true,narrator:()=>++reads===1?{data:null}:new Promise(resolve=>{finish=resolve;})});
+  const messages=[];f.context.window.TLIDash2={setEventMessage:message=>messages.push(message)};
+  assert.equal(reads,2);f.event('tli-session-locked');f.event('tli-session-unlocked');f.events.access_ready();
+  finish({data:{text:'Private old return-visit narrator'}});await tick();assert.deepEqual(messages,[]);
+});
+
+for(const status of [401,403])test(`return-visit narrator ${status} pauses monitoring without automatic retries`,async()=>{
+  let reads=0,finish;const f=fixture(snapshot(),{idle:true,narrator:()=>++reads===1?{data:null}:new Promise(resolve=>{finish=resolve;})});
+  await tick();finish({status,data:{detail:'Unlock the authorized browser before returning.'}});await tick();
+  assert.match(f.status(),/authorized browser/);assert.equal(f.nodes.cpu.textContent,'--');
+  const count=f.requests.length;f.event('tli-session-unlocked');await f.poll();await f.presence.fetchActionCurrent();
+  assert.equal(f.requests.length,count);
 });
 
 test('server timestamps handle browser clock skew and late fetches cannot replace a newer SSE observation', async () => {

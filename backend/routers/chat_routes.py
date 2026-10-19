@@ -23,7 +23,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import tli_state as S
@@ -42,6 +42,7 @@ from intelligence.chat import diagnostic_answer, image_reply
 from intelligence.screenshots import ScreenshotOptions, public_receipt, validate_request as validate_screenshot
 from conversation_guard import exclusive_turn, assert_idle
 from companion_auth import operation_access
+from private_client_authority import private_client_access, checked_call, checked_json
 from vault_security import is_vault_unlocked, is_initialized as vault_is_initialized
 
 router = APIRouter(tags=["chat"])
@@ -160,7 +161,9 @@ def build_system_prompt(user_id, device_id, mode, teaching_mode, user_nickname=N
                 f"{peers} peer(s)"
                 + (f", recorded allowed peers: {', '.join(online)}" if online else "")
             )
-        if home_snapshot.get("alert_count"):
+        if home_snapshot.get("alerts_available") is False:
+            home_lines.append("Saved alerts are unavailable; current alert status is unknown.")
+        elif home_snapshot.get("alert_count"):
             msgs = "; ".join(home_snapshot.get("alert_messages") or [])
             home_lines.append(
                 f"Active alerts ({home_snapshot['alert_count']}): {msgs}"
@@ -675,26 +678,35 @@ def add_memory(update: MemoryUpdate, session_user: str = Depends(require_session
 
 
 @router.get("/conversations")
-def list_conversations(session_user: str = Depends(require_session), device_id: Optional[str] = None):
-    conversations = S.load_conversations()
-    items = [c for c in conversations.values() if c.get("user_id") == session_user]
-    if device_id:
-        items = [c for c in items if c.get("device_id") == device_id]
-    items.sort(key=lambda c: c.get("last_updated", ""), reverse=True)
-    return [{"id": c.get("id"), "title": c.get("title") or "(untitled)",
-             "user_id": c.get("user_id"), "device_id": c.get("device_id"),
-             "last_updated": c.get("last_updated")} for c in items]
+def list_conversations(request: Request, response: Response, device_id: Optional[str] = None):
+    session_user, check = private_client_access(request, response)
+    def read():
+        conversations = S.load_conversations(check=check)
+        items = []
+        for conv in conversations.values():
+            check()
+            if conv.get("user_id") == session_user and (not device_id or conv.get("device_id") == device_id):
+                items.append(conv)
+        items.sort(key=lambda c: c.get("last_updated", ""), reverse=True)
+        check()
+        return [{"id": c.get("id"), "title": c.get("title") or "(untitled)",
+                 "user_id": c.get("user_id"), "device_id": c.get("device_id"),
+                 "last_updated": c.get("last_updated")} for c in items]
+    return checked_json(check, checked_call(check, read))
 
 
 @router.get("/conversations/{conv_id}")
-def get_conversation(conv_id: str, session_user: str = Depends(require_session)):
-    conversations = S.load_conversations()
-    conv = conversations.get(conv_id)
-    if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    if conv.get("user_id") != session_user:
-        raise HTTPException(status_code=403, detail="Access denied")
-    return conv
+def get_conversation(conv_id: str, request: Request, response: Response):
+    session_user, check = private_client_access(request, response)
+    def read():
+        conv = S.load_conversations(check=check).get(conv_id)
+        check()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        if conv.get("user_id") != session_user:
+            raise HTTPException(status_code=403, detail="Access denied")
+        return conv
+    return checked_json(check, checked_call(check, read))
 
 
 @router.delete("/conversations/{conv_id}")

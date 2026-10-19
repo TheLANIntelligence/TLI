@@ -9,11 +9,14 @@
     let generation = 0, locked = false, identity = null;
     const rank = source => source === 'status' ? 1 : 2;
     const clean = value => typeof value === 'string' && value.trim().length <= 160 && !/[\x00-\x1f\x7f]/.test(value) ? value.trim() : '';
+    // Saved names can predate the current write limit; keep them reviewable.
+    const cleanName = value => typeof value === 'string' && Array.from(value).length <= 4096 && !/[\u0000-\u001f\u007f-\u009f]/.test(value) ? value.trim() : '';
     const get = () => identity ? {...identity, generation, status: 'known'} : {id: null, name: null, observedAt: null, source: null, generation, status: locked ? 'locked' : 'unknown'};
     function observe(record) {
       if (locked || !record || (record.generation !== undefined && record.generation !== generation)) return false;
-      const name = clean(record.name), id = clean(record.id) || null, source = record.source;
-      if (!name || /^(?:[-—…]+|unknown|not confirmed|checking[. …]*|connecting[. …]*|tli node)$/i.test(name)) return false;
+      const name = cleanName(record.name), id = clean(record.id) || null, source = record.source;
+      const confirmedRename = source === 'host-rename' && id !== null;
+      if (!name || (!confirmedRename && /^(?:[-—…]+|unknown|not confirmed|checking[. …]*|connecting[. …]*|tli node)$/i.test(name))) return false;
       if (!['status', 'dashboard/command-center', 'host-rename'].includes(source)) return false;
       const observedAt = record.observedAt ?? clock();
       if (!Number.isFinite(observedAt) || observedAt <= 0 || observedAt > clock() + 30000) return false;

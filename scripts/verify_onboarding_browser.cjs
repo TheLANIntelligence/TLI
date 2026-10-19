@@ -124,10 +124,23 @@ async function makePage(browser, options = {}) {
     }
     if (call.method === 'POST') {
       if (!allowedMutation.test(pathname)) return route.fulfill(json({ ok: false, detail: 'Synthetic fixture: operation prohibited.' }, 409));
-      if (pathname === '/system/onboarding/start') state.started = true;
-      if (pathname === '/system/onboarding/complete') state.complete = true;
+      if (pathname === '/system/onboarding/start') {
+        if (!state.complete) state.started = true;
+        return route.fulfill(json({ ok: true, complete: state.complete, started: !state.complete && state.started }));
+      }
+      if (pathname === '/system/onboarding/complete') {
+        state.complete = true; state.started = false;
+        return route.fulfill(json({ ok: true }));
+      }
       if (pathname === '/system/pin/set') state.pinEnabled = true;
-      if (pathname === '/system/node/name') state.name = body.name;
+      if (pathname === '/system/node/name') {
+        state.name = body.name;
+        return route.fulfill(json({ ok: true, node_name: state.name, node_id: baseFixtures['/agent/ping'].node_id }));
+      }
+      if (pathname === '/device/nickname') {
+        state.name = body.nickname;
+        return route.fulfill(json({ status: 'ok', nickname: state.name, device_id: 'default-device', node_id: baseFixtures['/agent/ping'].node_id }));
+      }
       if (pathname === '/api/ai/model/download') state.download = { ok: true, status: 'downloading', state: 'downloading', in_progress: true, active: true, bytes_done: 32, bytes_total: 100, progress: 32, preset_id: 'standard' };
       if (pathname === '/api/ai/model/download/cancel') state.download = { ok: true, status: 'cancelled', state: 'cancelled', in_progress: false, active: false };
       if (/\/models\/(?:select|check)$/.test(pathname)) { state.aiReady = true; return route.fulfill(json({ ok: true, healthy: true })); }
@@ -138,6 +151,7 @@ async function makePage(browser, options = {}) {
       '/system/pin/status': { enabled: state.pinEnabled },
       '/agent/ping': { ...baseFixtures['/agent/ping'], node_name: state.name },
       '/system/node': { ...baseFixtures['/system/node'], node_name: state.name },
+      '/status': { ...baseFixtures['/status'], device_nickname: state.name },
       '/api/ai/model/download/status': state.download,
       '/api/ai/model/progress': state.download,
       '/api/ai/models/presets': { ok: true, active: 'standard', presets: [{ ...model, running: state.aiReady, is_active: state.aiReady, downloaded: state.aiReady || installed, installation_complete: state.aiReady || installed, compatibility: { ...model.compatibility, installation: { complete: state.aiReady || installed, components: [] } } }] },
@@ -326,7 +340,39 @@ async function main() {
         await errorVisible(run);
         assert.equal(await run.page.locator('#tli-onboard').getAttribute('data-step'), failedPath.endsWith('start') ? '0' : '1');
         await noCompletion(run);
-        if (failedPath.endsWith('start')) assert.equal(count(run, '/system/node/name'), 0);
+        if (failedPath.endsWith('start')) {
+          assert.equal(count(run, '/system/node/name'), 0);
+          assert.equal(count(run, failedPath), 1, 'An uncertain start is not retried automatically');
+          assert.match(await next(run.page).innerText(), /Check saved setup/);
+          const readsBefore = count(run, '/system/onboarding/status', 'GET');
+          delete run.overrides[`POST ${failedPath}`];
+          await next(run.page).click();
+          await run.page.waitForFunction(() => document.querySelector('#tli-onboard-status')?.textContent.includes('Saved setup checked.'));
+          assert.equal(count(run, '/system/onboarding/status', 'GET'), readsBefore + 1);
+          assert.equal(count(run, failedPath), 1, 'Reconciliation does not repeat start or advance welcome');
+          assert.equal(await run.page.locator('#tli-onboard').getAttribute('data-step'), '0');
+          await next(run.page).click(); await waitStep(run, 1);
+          assert.equal(count(run, failedPath), 2, 'A second start needs a deliberate continuation after checking saved state');
+          assert.equal(count(run, '/system/node/name'), 0); await noCompletion(run);
+        }
+        else {
+          assert.equal(count(run, '/system/node/name'), 1, 'An uncertain save is not retried automatically');
+          assert.match(await next(run.page).innerText(), /Check saved name/);
+          const readsBefore = count(run, '/status', 'GET');
+          delete run.overrides[`POST ${failedPath}`];
+          await next(run.page).click();
+          await run.page.waitForFunction(() => document.querySelector('#tli-onboard-status')?.textContent.includes('Saved name checked.'));
+          assert.ok(count(run, '/status', 'GET') > readsBefore, 'Explicit recovery reads the saved canonical name');
+          assert.equal(count(run, '/system/node/name'), 1, 'Checking the saved name cannot repeat the write');
+          assert.equal(await run.page.locator('#tli-onboard').getAttribute('data-step'), '1');
+          assert.equal(await run.page.locator('#onboard-node-name').inputValue(), 'Studio');
+          await run.page.locator('#onboard-node-name').fill('Deliberately saved studio');
+          await next(run.page).click(); await waitStep(run, 2);
+          assert.equal(count(run, '/system/node/name'), 2, 'A second write requires another explicit name submission');
+          assert.equal(mutations(run, '/system/node/name')[1].body.name, 'Deliberately saved studio');
+          assert.equal(run.state.name, 'Deliberately saved studio');
+          await noCompletion(run);
+        }
       });
     }
     for (const status of [503, 200]) {
@@ -335,6 +381,18 @@ async function main() {
         assert.equal(await run.page.locator('#tli-onboard').isVisible(), true);
         assert.equal(await run.page.locator('[data-onboard-destination]').count(), 4);
         assert.notEqual(await run.page.evaluate(() => localStorage.getItem('tli_onboard_seen_v1')), '1');
+        assert.equal(count(run, '/system/onboarding/complete'), 1);
+        assert.match(await next(run.page).innerText(), /Check saved setup/);
+        const readsBefore = count(run, '/system/onboarding/status', 'GET');
+        await next(run.page).click();
+        await run.page.waitForFunction(() => document.querySelector('#tli-onboard-status')?.textContent.includes('Saved setup checked.'));
+        assert.equal(count(run, '/system/onboarding/status', 'GET'), readsBefore + 1);
+        assert.equal(count(run, '/system/onboarding/complete'), 1, 'Checking incomplete setup cannot replay completion');
+        assert.equal(await run.page.locator('#tli-onboard').isVisible(), true);
+        delete run.overrides['POST /system/onboarding/complete'];
+        await next(run.page).click();
+        await run.page.locator('#tli-onboard').waitFor({state:'hidden'});
+        assert.equal(count(run, '/system/onboarding/complete'), 2, 'Completion requires another explicit click after the saved-state check');
       });
     }
     await runCase(browser, 'pin-mismatch', {}, async run => {

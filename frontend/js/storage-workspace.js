@@ -52,7 +52,9 @@
   function renderContext() {
     for (const view of ['organize','space']) {
       const id = 'storage-context-' + view; el(id)?.remove();
-      if (!context || context.view !== view) continue;
+      // Free Space owns its selected location and scan provenance. A second
+      // preparation banner can outlive a drive selection and contradict them.
+      if (view === 'space' || !context || context.view !== view) continue;
       const panel = el(view === 'organize' ? 'panel-files' : 'panel-visualizer'); if (!panel) continue;
       const box = make('div', '', 'storage-folder-context'); box.id = id;
       box.append(make('p', `Prepared location: ${context.root}`));

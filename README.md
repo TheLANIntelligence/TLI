@@ -11,7 +11,7 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Desktop release: 1.4.5-beta.** Download the prepared
+**Desktop release: 1.4.7-beta.** Download the prepared
 [Windows and macOS packages](https://thelanintelligence.com/download/), then follow
 [START_HERE.md](START_HERE.md). Each includes the current desktop experience and
 its platform's inference runtime; Python dependencies and model weights are
@@ -19,6 +19,25 @@ separate downloads. Native Phone Companion builds are distributed separately.
 TLI remains beta software. Source tests do not establish physical-device,
 two-computer, offline or platform acceptance; see the recorded limits in the
 [everyday experience guide](docs/TLI_EVERYDAY_EXPERIENCE.md).
+
+The [October 15, 2026 audit](docs/TLI_AUDIT.md) records current implementation
+evidence, risks and remaining acceptance checks. The
+[product roadmap](docs/TLI_PRODUCT_ROADMAP.md) guides a Windows-first household
+pilot while preserving general-purpose AI as TLI's starting point.
+The [partial route-authority inventory](docs/TLI_ROUTE_AUTHORITY_INVENTORY.md)
+tracks reviewed HTTP boundaries and the remaining private-operation work.
+The [Windows household pilot preparation](docs/TLI_WINDOWS_HOUSEHOLD_PILOT.md)
+records the intended Govee H6125 trial, its experimental Bluetooth profile, and
+the installation, privacy and recovery evidence still required.
+The [Bluetooth setup guide](docs/TLI_BLUETOOTH.md) covers the optional Windows 11
+host component, brand/model selection, other existing connection paths and the
+H6125 profile's current limits. The shared Bluetooth catalog currently ships
+one experimental profile; it is not a claim of universal light compatibility.
+
+The [printer onboarding design](docs/TLI_PRINTER_ONBOARDING.md) defines the planned
+experience from a new printer in its box to a working household device. The
+[print and scan investigation](docs/TLI_PRINT_SCAN_RESEARCH.md) records supporting
+HP evidence and inherited scanner issues. Setup and hardware acceptance remain open.
 
 ## Start here
 
@@ -102,6 +121,13 @@ older backend automatically.
 
 ## Find your task
 
+Ask TLI now has an explicit **Work on a task** mode for investigating approved
+folders, making reversible text edits, and running task-approved checks. See the
+[task setup guide](docs/TLI_TASK_AGENT.md). Optional [Sonos room controls](docs/TLI_SONOS.md)
+and [Windows host voice](docs/TLI_HOST_VOICE.md) add music, compatible clip
+announcements, and phone/PC push-to-talk. These additions require setup; automated
+fixtures do not establish physical speaker or microphone acceptance.
+
 Home starts with editable task shortcuts, observed status, saved places,
 favorite routines and recent activity. **Edit shortcuts** changes only this
 browser's Home. **Back to** lists up to three workspaces opened during the visit
@@ -132,6 +158,17 @@ Related tools offer reviewed next steps: carry a folder into a problem
 checklist, prepare a backup-script request, or record a manual game-settings
 trial. A prepared draft still needs its own review and Save, Send or Run.
 Routines are manual in this release; automatic schedules are not enabled.
+
+Scripts supports drafting and copying code; legacy host-script execution is
+retired. Saved source remains available for private review, and fixed built-in
+diagnostics remain available after authorization. The old room-code relay is
+also retired; see the [audit](docs/TLI_AUDIT.md) for scope and verification.
+
+Installed apps run local single-file HTML/JavaScript in an isolated browser view.
+Host-connected app features and the old storage bridge are unavailable; their
+saved data remains preserved. Hub package changes retain recovery copies and
+stop on damaged metadata or an unconfirmed transaction. See the
+[Hub guide](TLI_MANUAL.md#hub) for compatibility and recovery limitations.
 
 **Connected tools** in Ask TLI also opens computer help, smart-home controls and
 Builder. Builder creates small HTML/CSS/JavaScript apps with saved revisions and

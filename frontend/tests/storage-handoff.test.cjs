@@ -36,7 +36,9 @@ function fixture() {
 test('shared preparation navigates both views without launching scans or operations',()=>{
   const f=fixture();const api=f.window.TLIStorageWorkspace;
   assert.equal(api.prepare({view:'space',root,source:'saved-place'}).status,'prepared');
+  assert.equal(f.nodes['storage-context-space'],undefined,'Free Space owns its location display');
   assert.equal(api.prepare({view:'organize',root,source:'dashboard'}).status,'prepared');
+  assert.ok(f.nodes['storage-context-organize'],'Organize keeps its prepared handoff context');
   assert.deepEqual(f.navigation,['panel-visualizer','panel-files']);assert.deepEqual(f.space,[root]);assert.equal(f.calls.length,0);
   assert.equal(f.ctx.filesDescribeDraft().selectedCount,1);
 });

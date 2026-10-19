@@ -68,13 +68,19 @@ def context_revision(ident: str, overlays: dict | None = None) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def refresh_printers() -> list:
+def refresh_printers(check=None) -> list:
     from routers.printers import get_printers
-    result = get_printers()
+    if check:
+        check()
+    result = get_printers(check=check) if check else get_printers()
     if not isinstance(result, list):
         raise HTTPException(503, "The host printer list is unavailable. Existing cached printers were retained.")
     with LOCK:
+        if check:
+            check()
         S.save_json_file(root() / "printer_cache.json", {"checked_at": S.now_iso(), "printers": result})
+    if check:
+        check()
     return result
 
 

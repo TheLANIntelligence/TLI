@@ -153,10 +153,12 @@ function directoryRow(values = {}) {
 }
 function renderDirectory(rows) {
   const elements = {};
-  const context = vm.createContext({ window: {}, currentNodeConfig: { role: 'host' }, console,
+  const context = vm.createContext({ window: {addEventListener() {}}, document:{addEventListener() {},getElementById() {return null;}},
+    setInterval() {return 1;}, clearInterval() {}, currentNodeConfig: { role: 'host' }, console,
     $: id => elements[id] ||= { style: {}, textContent: '', innerHTML: '' },
     fetch() { throw Error('Directory rendering must not probe peers.'); },
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/mesh-service.js'), 'utf8'), context);
   vm.runInContext(mesh.slice(mesh.indexOf('const meshEscape ='), mesh.indexOf('const meshUiCurrent =')) +
     mesh.slice(mesh.indexOf('function renderMeshDirectory('), mesh.indexOf('async function refreshMeshDirectory(')), context);
   context.renderMeshDirectory({ devices: rows }); return elements['mesh-directory-list'].innerHTML;
@@ -172,7 +174,12 @@ test('Node directory rows report on-demand availability without full-host action
 test('full-host directory controls and revoked Node status remain visible', () => {
   const host = renderDirectory([directoryRow({ peer_profile: undefined, last_seen: new Date().toISOString() })]);
   for (const action of ['info', 'ping', 'maint', 'open']) assert.match(host, new RegExp('data-mesh-' + action + '='));
-  assert.match(host, /Online/); assert.doesNotMatch(host, /Compute only/);
+  assert.match(host, /Connection not checked/); assert.doesNotMatch(host, /Compute only|>\s*Online\s*</);
+  const connection={state:'connected',fresh:true,ready_grants:['messages'],expires_at:new Date(Date.now()+90000).toISOString()};
+  const checked=renderDirectory([directoryRow({peer_profile:undefined,connection})]);
+  assert.match(checked, /mesh-pill-good/);assert.match(checked, />\s*Connected\s*</);
+  const expired=renderDirectory([directoryRow({peer_profile:undefined,connection:{...connection,expires_at:'2000-01-01T00:00:00Z'}})]);
+  assert.match(expired,/Connection not checked/);assert.doesNotMatch(expired,/mesh-pill-good/);
   const revoked = renderDirectory([directoryRow({ status: 'blocked' })]);
   assert.match(revoked, /Blocked/); assert.match(revoked, /Review trust/);
   assert.doesNotMatch(revoked, /data-mesh-(info|ping|maint|open)=/);

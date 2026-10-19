@@ -1,3 +1,4 @@
+export const ANDROID_DOWNLOAD_URL = 'https://thelanintelligence.com/download/#android';
 export type HostRelease = { source_id: string | null; backend_id: string | null; frontend_id: string | null; started_at: string; checked_at: string; identity_scope: string; capabilities: string[]; compatibility: { state: 'matched' | 'restart_required' | 'unknown'; reasons: string[] } };
 const record = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 const text = (v: unknown, max = 256): v is string => typeof v === 'string' && v.length > 0 && v.length <= max;

@@ -3,6 +3,8 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from routers import actions_engine as actions, dashboard_presence as dp
 from narrator_policy import NarratorPolicy
 from action_results import driver_succeeded
@@ -41,16 +43,29 @@ def saved_actions(monkeypatch, tmp_path):
     return save, calls, responses
 
 
-def test_ambiguous_later_step_prevents_all_execution(authed_client, saved_actions):
+@pytest.fixture
+def action_browser_client(app, saved_actions):
+    """Use the saved-action fixture's browser identity over supported transport."""
+    # Do not enter the full app's lifespan for these route tests.
+    api = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                     headers={"Origin": "http://localhost"},
+                     cookies={"tli_session": "routine-fixture-session"})
+    try:
+        yield api
+    finally:
+        api.close()
+
+
+def test_ambiguous_later_step_prevents_all_execution(action_browser_client, saved_actions):
     save, calls, _ = saved_actions
     save(["Office Lamp", "Office"])
-    body = authed_client.post("/actions/run/test").json()
+    body = action_browser_client.post("/actions/run/test").json()
     assert body["ok"] is False
     assert calls == []
     assert body["review_required"] and not body["actions_performed"]
-    review = authed_client.get("/actions/test/review").json()
+    review = action_browser_client.get("/actions/test/review").json()
     assert not review["available"] and "Multiple devices" in review["errors"]["1"]
-    assert run_reviewed(authed_client).status_code == 409
+    assert run_reviewed(action_browser_client).status_code == 409
 
 
 @pytest.mark.parametrize("responses, expected, word", [
@@ -58,15 +73,23 @@ def test_ambiguous_later_step_prevents_all_execution(authed_client, saved_action
     ([True, False], False, "Partially"),
     ([False, RuntimeError("unreachable")], False, "Failed"),
 ])
-def test_saved_action_truthful_results_and_receipts(authed_client, saved_actions, responses, expected, word):
+def test_saved_action_truthful_results_and_receipts(action_browser_client, saved_actions, responses, expected, word):
     save, calls, replies = saved_actions
     save(["Office Lamp", "Office Fan"])
     replies[:] = responses
-    body = run_reviewed(authed_client).json()
+    body = run_reviewed(action_browser_client).json()
     assert body["ok"] is expected
     assert word in body["summary"]
     assert len(calls) == 2
-    receipt = next(row for row in authed_client.get("/actions/receipts").json()["items"] if row.get("kind") == "action_run")
+    receipt_app = FastAPI()
+    receipt_app.include_router(actions.router)
+    # Keep the existing execution fixture; receipt reads exercise real route
+    # dependencies over direct loopback with its captured browser credential.
+    with TestClient(receipt_app, base_url="http://localhost", client=("127.0.0.1", 40000),
+                    cookies={"tli_session": "routine-fixture-session"}) as receipt_client:
+        response = receipt_client.get("/actions/receipts")
+    assert response.status_code == 200
+    receipt = next(row for row in response.json()["items"] if row.get("kind") == "action_run")
     assert receipt["ok"] is expected
     assert receipt["results"] == body["results"]
 
@@ -78,14 +101,14 @@ def test_legacy_and_current_driver_results(result, expected):
     assert driver_succeeded(result) is expected
 
 
-def test_bundled_shelly_driver_contract_is_supported(authed_client, saved_actions, monkeypatch):
+def test_bundled_shelly_driver_contract_is_supported(action_browser_client, saved_actions, monkeypatch):
     save, calls, _ = saved_actions
     save(["Office Lamp"])
     def turn_off(**kw):
         calls.append(kw)
         return {"raw": {"was_on": True}, "summary": "status loaded"}
     monkeypatch.setitem(actions._CTX, "shelly_driver", SimpleNamespace(turn_off=turn_off))
-    assert run_reviewed(authed_client).json()["ok"] is True
+    assert run_reviewed(action_browser_client).json()["ok"] is True
     assert calls == [{"ip": "192.168.1.10", "relay": 0}]
 
 
@@ -101,9 +124,9 @@ def dashboard(monkeypatch):
     return action, receipts
 
 
-def test_navigation_reports_opened_panel(authed_client, dashboard):
+def test_navigation_reports_opened_panel(browser_client, dashboard):
     action, receipts = dashboard
-    body = authed_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
+    body = browser_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
     assert body["ok"] is True
     assert body["receipt"]["navigate_to"] == "panel-visualizer"
     assert "Opened Free Space for review" in dp._get_narrator()["text"]
@@ -111,14 +134,14 @@ def test_navigation_reports_opened_panel(authed_client, dashboard):
     assert receipts[0]["ok"] is True
 
 
-def test_failed_action_stays_for_explicit_retry(authed_client, dashboard, monkeypatch):
+def test_failed_action_stays_for_explicit_retry(browser_client, dashboard, monkeypatch):
     action, receipts = dashboard
     calls = []
-    def handler(_):
+    def handler(_, **kwargs):
         calls.append(1)
         return {"ok": False, "error": "Device unreachable"}
     monkeypatch.setattr(dp, "_dispatch_handler", handler)
-    body = authed_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
+    body = browser_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
     assert body["ok"] is False
     assert dp._get_narrator()["type"] == "alert"
     assert "failed" in dp._get_narrator()["text"]
@@ -126,18 +149,18 @@ def test_failed_action_stays_for_explicit_retry(authed_client, dashboard, monkey
     assert calls == [1] and receipts[0]["ok"] is False
 
 
-def test_simultaneous_confirmations_execute_once(authed_client, dashboard, monkeypatch):
+def test_simultaneous_confirmations_execute_once(browser_client, dashboard, monkeypatch):
     action, _ = dashboard
     entered, release = Event(), Event()
     calls = []
-    def handler(_):
+    def handler(_, **kwargs):
         calls.append(1)
         entered.set()
         assert release.wait(5)
         return {"ok": True}
     monkeypatch.setattr(dp, "_dispatch_handler", handler)
     def request():
-        return authed_client.post("/dashboard/action/confirm", json={"action_id": action["id"]})
+        return browser_client.post("/dashboard/action/confirm", json={"action_id": action["id"]})
     with ThreadPoolExecutor(2) as pool:
         first = pool.submit(request)
         try:
@@ -150,10 +173,10 @@ def test_simultaneous_confirmations_execute_once(authed_client, dashboard, monke
     assert request().status_code == 404
 
 
-def test_secondary_failure_preserves_card_and_status(authed_client, dashboard, monkeypatch):
+def test_secondary_failure_preserves_card_and_status(browser_client, dashboard, monkeypatch):
     action, _ = dashboard
     action["secondary_handler"] = "unknown"
-    body = authed_client.post("/dashboard/action/secondary", json={"action_id": action["id"]}).json()
+    body = browser_client.post("/dashboard/action/secondary", json={"action_id": action["id"]}).json()
     assert body["ok"] is False
     assert action in dp._action_queue
 
@@ -167,7 +190,7 @@ def test_partial_scene_is_not_success(monkeypatch):
     assert "Partially" in receipt["narrator_msg"]
 
 
-def test_missing_explicit_id_prevents_earlier_shelly_step(authed_client, saved_actions, monkeypatch):
+def test_missing_explicit_id_prevents_earlier_shelly_step(action_browser_client, saved_actions, monkeypatch):
     save, calls, _ = saved_actions
     save(["Office Lamp"])
     path = actions._paths()[0]
@@ -175,12 +198,12 @@ def test_missing_explicit_id_prevents_earlier_shelly_step(authed_client, saved_a
     store["actions"][0]["steps"].append({"type": "homepower.execute", "device_id": "missing", "capability": "switch.off"})
     actions._save_json(path, store)
     monkeypatch.setitem(actions._CTX, "home_power_runtime", SimpleNamespace(_find_device=lambda _: None))
-    assert authed_client.post("/actions/run/test").json()["ok"] is False
-    assert run_reviewed(authed_client).status_code == 409
+    assert action_browser_client.post("/actions/run/test").json()["ok"] is False
+    assert run_reviewed(action_browser_client).status_code == 409
     assert not calls
 
 
-def test_explicit_id_action_keeps_its_target(authed_client, saved_actions, monkeypatch):
+def test_explicit_id_action_keeps_its_target(action_browser_client, saved_actions, monkeypatch):
     save, calls, _ = saved_actions
     save([])
     path = actions._paths()[0]
@@ -194,7 +217,7 @@ def test_explicit_id_action_keeps_its_target(authed_client, saved_actions, monke
     runtime = SimpleNamespace(_find_device=lambda ident: device if ident == "lamp-1" else None,
                               _driver_registry={"test": SimpleNamespace(execute=execute)})
     monkeypatch.setitem(actions._CTX, "home_power_runtime", runtime)
-    assert run_reviewed(authed_client).json()["ok"] is True
+    assert run_reviewed(action_browser_client).json()["ok"] is True
     assert calls == [(device, "switch.off")]
 
 
@@ -209,8 +232,8 @@ def test_legacy_cleanup_action_opens_review_without_moving_or_scanning(monkeypat
     assert "Nothing was moved" in receipt["narrator_msg"] and "receipt" not in receipt
 
 
-def test_failure_cannot_return_a_success_message_to_frontend(authed_client, dashboard, monkeypatch):
+def test_failure_cannot_return_a_success_message_to_frontend(browser_client, dashboard, monkeypatch):
     action, _ = dashboard
-    monkeypatch.setattr(dp, "_dispatch_handler", lambda _: {"ok": False, "narrator_msg": "Done"})
-    body = authed_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
+    monkeypatch.setattr(dp, "_dispatch_handler", lambda _, **kwargs: {"ok": False, "narrator_msg": "Done"})
+    body = browser_client.post("/dashboard/action/confirm", json={"action_id": action["id"]}).json()
     assert body["receipt"]["narrator_msg"].startswith("Action failed:")

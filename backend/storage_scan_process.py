@@ -10,7 +10,9 @@ import sys
 import threading
 import time
 
-from storage_scan_worker import MAX_REQUEST, MAX_RESULT, MAX_MEMORY, canonical
+from storage_scan_worker import MAX_REQUEST, MAX_RESULT, MAX_MEMORY, MAX_INVENTORY_FRAME, canonical
+
+MAX_INVENTORY_WIRE = 512 * 1024 * 1024
 
 
 class WindowsJob:
@@ -193,7 +195,7 @@ def launch():
         raise LaunchStopped("The isolated reader could not start") from error
 
 
-def run(request, cancel, progress, authorized, *, grace=2.0):
+def run(request, cancel, progress, authorized, *, grace=2.0, inventory=None):
     """Return only after this owned child exits. An unconfirmed stop keeps admission held."""
     payload = canonical(request) + b"\n"
     if len(payload) > MAX_REQUEST:
@@ -203,7 +205,7 @@ def run(request, cancel, progress, authorized, *, grace=2.0):
     except LaunchStopped:
         return {"type": "error", "error": {"code": "worker_start_failed", "status_code": 503,
                 "message": "The isolated reader could not start. No files were changed."}, "worker_stopped": True}
-    received = {"frame": None, "error": None, "bytes": 0}
+    received = {"frame": None, "error": None, "bytes": 0, "inventory_bytes": 0, "inventory_rows": 0, "inventory_started": False}
     lock = threading.Lock()
     reader_done = threading.Event()
     started = time.monotonic()
@@ -217,20 +219,45 @@ def run(request, cancel, progress, authorized, *, grace=2.0):
                 line = child.stdout.readline(MAX_RESULT + 2)
                 if not line:
                     break
-                received["bytes"] += len(line)
-                if len(line) > MAX_RESULT + 1 or received["bytes"] > MAX_RESULT + 2 * 1024 * 1024 or not line.endswith(b"\n"):
+                if len(line) > MAX_RESULT + 1 or not line.endswith(b"\n"):
                     raise ValueError("Worker output exceeded a framing or byte limit")
                 frame = json.loads(line)
-                if not isinstance(frame, dict) or frame.get("type") not in {"progress", "result", "error", "cancelled"}:
+                if not isinstance(frame, dict) or frame.get("type") not in {"progress", "result", "error", "cancelled", "inventory_start", "inventory_rows"}:
                     raise ValueError("Unsupported worker frame")
                 with lock:
                     if received["frame"] is not None:
                         raise ValueError("Worker emitted data after its final frame")
+                if frame["type"].startswith("inventory_"):
+                    received["inventory_bytes"] += len(line)
+                    if request.get("inventory_version") != 1 or len(line) > MAX_INVENTORY_FRAME or received["inventory_bytes"] > MAX_INVENTORY_WIRE:
+                        raise ValueError("Inventory output exceeds its protocol limits")
+                    if not authorized() or cancel.is_set():
+                        raise ValueError("Inventory session ended")
+                    if frame["type"] == "inventory_start":
+                        root = frame.get("root")
+                        if received["inventory_started"] or not isinstance(root, str) or not 0 < len(root) <= 4096 or "\x00" in root:
+                            raise ValueError("Invalid inventory start")
+                        received["inventory_started"] = True
+                    else:
+                        rows = frame.get("rows")
+                        if not received["inventory_started"] or not isinstance(rows, list) or not 1 <= len(rows) <= 128 or any(not isinstance(row, dict) for row in rows):
+                            raise ValueError("Invalid inventory batch")
+                        received["inventory_rows"] += len(rows)
+                        if received["inventory_rows"] > request["limits"]["max_entries"] + 1:
+                            raise ValueError("Inventory row count exceeds acquisition limits")
+                    # Backpressure bounds memory: one batch is indexed before
+                    # reading the next. The child still has no write access.
+                    if inventory is not None:
+                        inventory(frame)
+                    continue
+                received["bytes"] += len(line)
+                if received["bytes"] > MAX_RESULT + 2 * 1024 * 1024:
+                    raise ValueError("Worker result exceeded its byte limit")
                 if frame["type"] == "progress":
                     if len(line) > 4096 or not isinstance(frame.get("progress"), dict):
                         raise ValueError("Invalid progress frame")
-                    clean = {k: v for k, v in frame["progress"].items() if k in {"phase", "entries_seen", "files", "found", "files_hashed"}}
-                    if any(not (isinstance(v, str) and k == "phase" and len(v) <= 40 or type(v) is int and 0 <= v <= 500_000) for k, v in clean.items()):
+                    clean = {k: v for k, v in frame["progress"].items() if k in {"phase", "entries_seen", "files", "found", "files_hashed", "records_examined", "records_total", "bytes_read"}}
+                    if any(not (isinstance(v, str) and k == "phase" and len(v) <= 40 or type(v) is int and 0 <= v <= (2**63 - 1 if k in {"bytes_read", "records_examined", "records_total"} else 500_000)) for k, v in clean.items()):
                         raise ValueError("Invalid progress values")
                     progress(clean)
                 else:
@@ -277,7 +304,24 @@ def run(request, cancel, progress, authorized, *, grace=2.0):
                 killed = True
             time.sleep(.05)
         child.wait()
-        reader.join(timeout=2)
+        # The final batch may still be in the parent's bounded index writer
+        # after the child has exited. Keep admission/ownership until that
+        # callback has finished; closing pipes or aborting its database beneath
+        # it would race publication. Index callbacks check cancellation during
+        # SQLite work. A blocked host disk remains visibly stopping, never a
+        # falsely completed reader that admits another intensive scan.
+        while not reader_done.wait(.05):
+            try:
+                valid = authorized()
+            except Exception:
+                valid = False
+            reason = "revoked" if not valid else "cancelled" if cancel.is_set() else "deadline" if time.monotonic() - started > request["limits"]["max_seconds"] + 5 else None
+            if reason:
+                if stop_reason is None:
+                    stop_reason = reason
+                    progress({"phase": "stopping"})
+                cancel.set()
+        reader.join()
         with lock:
             frame, error = received["frame"], received["error"]
         if not reader_done.is_set():

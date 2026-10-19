@@ -18,6 +18,7 @@
   let routeInFlight = null;
   let epoch = 0;
   let locked = false;
+  let accessReady = true;
   let displayCheckedAt = null;
   const probes = new Set();
 
@@ -39,7 +40,7 @@
   // Existing SSE callers report the source of an actual answer. Keep both
   // displays together without changing the selected provider or route policy.
   window.__tliSetAIPill = (text, state, title) => {
-    if (!locked) {
+    if (!locked && accessReady) {
       setPill(text, state, title);
       publishDisplay({ text, state, title, kind: 'answer' }, Date.now());
     }
@@ -85,7 +86,7 @@
     finally { clearTimeout(timer); probes.delete(controller); }
   }
 
-  async function probeBundled() {
+  async function probeBundled(generation) {
     const [info, runtime, mesh] = await Promise.all([
       readJSON("/api/ai/model/info"), readJSON("/api/ai/bundled/status"), readJSON("/api/ai/mesh/status"),
     ]);
@@ -94,7 +95,7 @@
     if (typeof info.data?.exists === "boolean") out.modelExists = info.data.exists;
     else if (typeof runtime.data?.model_exists === "boolean") out.modelExists = runtime.data.model_exists;
     let status = runtime.data;
-    if (typeof status?.healthy !== "boolean" && !out.auth) {
+    if (typeof status?.healthy !== "boolean" && !out.auth && generation === epoch && !locked && accessReady) {
       const fallback = await readJSON("/api/ai/status");
       status = fallback.data;
       out.auth = !!fallback.auth;
@@ -114,7 +115,7 @@
 
   function displayFromRoute(route, bundled) {
     const unknown = { text: "AI: Not confirmed", state: "warn", title: "AI availability could not be confirmed. Open the model library to check providers.", kind: "unknown" };
-    if (locked || bundled?.auth) return { text: "AI: Check access", state: "warn", title: "Unlock TLI to check AI availability.", kind: "unknown" };
+    if (locked || !accessReady || bundled?.auth) return { text: "AI: Check access", state: "warn", title: "Unlock TLI to check AI availability.", kind: "unknown" };
     const selected = window.TLILanInference?.display?.();
     if (selected) return { text: `AI: ${selected.peer_name} · Selected`, state: "warn",
       title: `${selected.label} is selected on ${selected.peer_name}. Availability and permissions are checked when you send.`, kind: "lan-selected" };
@@ -152,25 +153,33 @@
   }
 
   function refreshAll({ force = false } = {}) {
-    if (locked) return Promise.resolve(renderRoute());
+    if (locked || !accessReady) return Promise.resolve(renderRoute());
     if (inFlight) return inFlight;
     if (!lastDisplay) setPill("AI: Checking…", "warn", "Checking AI availability…");
     const generation = epoch;
     // Existing route resolution remains authoritative. Do not start overlapping
     // route probes or hold the bundled display hostage to a slow provider.
     if (!routeInFlight && typeof resolveIntelligenceRoute === "function") {
-      routeInFlight = Promise.resolve().then(() => resolveIntelligenceRoute({ forceRefresh: !!force }))
-        .then(route => { if (generation === epoch) renderRoute(route); }).catch(() => {})
-        .finally(() => { routeInFlight = null; });
+      const routeCheck = Promise.resolve().then(() => {
+        if (generation === epoch && !locked && accessReady) return resolveIntelligenceRoute({ forceRefresh: !!force });
+      }).then(route => { if (generation === epoch && !locked && accessReady) renderRoute(route); }).catch(() => {})
+        .finally(() => { if (routeInFlight === routeCheck) routeInFlight = null; });
+      routeInFlight = routeCheck;
     }
-    inFlight = probeBundled().then(bundled => {
+    const pending = probeBundled(generation).then(bundled => {
       if (generation !== epoch) return lastDisplay;
+      if (bundled.auth) {
+        pauseAccess();
+        window.dispatchEvent?.(new CustomEvent('tli-session-locked'));
+        return lastDisplay;
+      }
       facts = bundled;
       window.__tliBundledStatus = { model_exists: bundled.modelExists, healthy: bundled.healthy,
         statusKnown: bundled.statusKnown, meshPeer: bundled.meshPeer, checkedAt: bundled.checkedAt };
       return renderRoute();
-    }).finally(() => { inFlight = null; });
-    return inFlight;
+    }).finally(() => { if (inFlight === pending) inFlight = null; });
+    inFlight = pending;
+    return pending;
   }
 
   window.TLIAISource = { refresh: refreshAll, renderRoute, getSnapshot: () => ({ ...(lastDisplay || {text:'AI: Checking…', state:'warn', title:'Checking AI availability', kind:'unknown'}), checkedAt: displayCheckedAt }) };
@@ -239,19 +248,27 @@ function bindManageOnce() {
     window.setInterval(() => refreshAll(), POLL_MS);
     window.setInterval(() => { if (displayCheckedAt && Date.now() - displayCheckedAt >= STALE_MS) renderRoute(); }, 1000);
   }
-  window.addEventListener("tli-session-locked", () => {
-    locked = true;
+  function pauseAccess() {
+    accessReady = false;
     epoch += 1;
     facts = null;
     lastRoute = null;
+    inFlight = null; routeInFlight = null;
     for (const controller of probes) controller.abort();
     window.__tliBundledStatus = null;
     renderRoute();
+  }
+  window.addEventListener("tli-session-locked", () => {
+    locked = true; pauseAccess();
   });
   window.addEventListener("tli-session-unlocked", () => {
     locked = false;
-    // Finish cancellation before admitting a new poll.
-    Promise.resolve(inFlight).finally(() => refreshAll({ force: true }));
+    epoch += 1;
+  });
+  window.addEventListener("tli-private-observation-ready", () => {
+    if (locked || accessReady) return;
+    accessReady = true;
+    refreshAll({ force: true });
   });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true });
   else boot();

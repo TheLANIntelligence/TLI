@@ -116,7 +116,8 @@ def test_old_formats_and_unknown_dates_have_stable_revisions(client, raw):
 
 
 @pytest.mark.parametrize('path', PATHS)
-def test_note_question_uses_full_selected_reference_and_receipt(path, client, provider):
+def test_note_question_uses_full_selected_reference_and_receipt(path, local_browser_client, provider):
+    client = local_browser_client
     calls, _ = provider
     selected = fact()
     response = client.post(path, json=body(selected, message='turn off the lamp', device_id='requesting-phone'))

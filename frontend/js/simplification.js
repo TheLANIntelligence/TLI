@@ -4,6 +4,7 @@
   const $ = id => document.getElementById(id);
   const make = (tag, text, cls) => { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; };
   const descriptions = {
+    'panel-homelab': 'Browse saved devices, inspect Proxmox, and review Pi-hole client filtering and DNS activity.',
     'panel-mesh': 'See your TLI computers, check connections, or exchange a message.',
     'panel-homeauto': 'Control lights and switches, and connect supported devices.',
     'panel-automations': 'Save a sequence of device actions and run it when you choose.',

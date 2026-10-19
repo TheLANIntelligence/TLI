@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import stat
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,7 @@ import subprocess
 import sys
 
 import tli_state as S
+from browser_authority import browser_control_access
 from process_utils import hidden_process_kwargs
 
 try:
@@ -30,6 +33,37 @@ from routers.system_routes import require_session
 
 router = APIRouter(tags=["files"])
 FILE_MUTATION_LOCK = threading.RLock()
+
+
+def _browser_access(request: Request, response: Response):
+    try:
+        return browser_control_access(request, response)
+    except HTTPException as error:
+        error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
+        raise
+
+
+@contextmanager
+def _file_operation(check):
+    """Preserve the initiating session even on private validation/error paths."""
+    try:
+        check()
+        try:
+            yield
+        finally:
+            check()
+    except HTTPException as error:
+        error.headers = {**(error.headers or {}), "Cache-Control": "no-store"}
+        raise
+
+
+def _checked(check, operation):
+    with _file_operation(check):
+        return operation()
+
+
+def _internal_access():
+    """Internal service compatibility; HTTP callers must capture browser access."""
 
 
 # ============================================
@@ -264,10 +298,8 @@ def _protected_roots_for_os():
     else:
         roots += [Path(p) for p in ["/bin","/sbin","/usr","/etc","/lib","/lib64","/proc","/sys","/dev","/run","/boot","/var/lib"]]
     # Always protect the TLI install and data directories themselves
-    try:
-        roots.append(Path(S.BASE_DIR).resolve())
-    except Exception:
-        pass
+    for value in (S.BASE_DIR, S.DATA_DIR, S.VAULT_DIR):
+        roots.append(Path(value).resolve())
     return roots
 
 def _safe_delete_roots():
@@ -306,6 +338,13 @@ def _is_protected_path(p):
     except Exception:
         pass
 
+    # Trash can remove a directory tree. A permitted home folder must not take
+    # a relocated installation, saved data or Vault with it.
+    for value in (S.BASE_DIR, S.DATA_DIR, S.VAULT_DIR):
+        root = Path(value).resolve()
+        if pr == root or pr in root.parents:
+            return "Blocked: this location contains TLI installation or saved data"
+
     # Explicit Windows drive-root system file block (e.g. C:\hiberfil.sys)
     if platform.system() == "Windows":
         try:
@@ -327,6 +366,29 @@ def _is_protected_path(p):
     return None
 
 
+def _trash_snapshot(path: Path, check):
+    """Inspect the selected path without following links to a different target."""
+    result = []
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        info = _checked(check, current.lstat)
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise HTTPException(409, "Linked paths cannot be moved to Trash here. Review the selected link in your file manager.")
+        if current != path and not stat.S_ISDIR(info.st_mode):
+            raise HTTPException(409, "A parent location changed. Review the path before trying again.")
+        if current == path and not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
+            raise HTTPException(409, "Only ordinary files and folders can be moved to Trash here.")
+        if not info.st_ino:
+            raise HTTPException(409, "File identity is unavailable. Review the selected path in your file manager.")
+        result.append((info.st_dev, info.st_ino, info.st_mode,
+                       info.st_size if current == path else None,
+                       info.st_mtime_ns if current == path else None,
+                       info.st_ctime_ns if current == path else None))
+    check()
+    return tuple(result)
+
+
 # ============================================
 #  Endpoints
 # ============================================
@@ -341,28 +403,38 @@ def scan_directory(request: Request, response: Response, path: str = Query(...),
 
 
 @router.post("/open_path")
-def open_path(payload: dict, _session=Depends(require_session)):
+def open_path(payload: dict, check=Depends(_browser_access)):
+    return _checked(check, lambda: _open_path(payload, check))
+
+
+def _open_path(payload, check):
     raw = payload.get("path")
     if not raw or not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="Missing or invalid 'path'")
-    p = Path(raw).expanduser()
-    if not p.exists():
+    p = _checked(check, lambda: Path(raw).expanduser().absolute())
+    if not _checked(check, p.exists):
         raise HTTPException(status_code=404, detail=f"Path not found: {p}")
     try:
-        system = platform.system()
+        system = _checked(check, platform.system)
         if system == "Windows":
-            os.startfile(str(p))
+            _checked(check, lambda: os.startfile(str(p)))
         elif system == "Darwin":
-            subprocess.Popen(["open", str(p)])
+            _checked(check, lambda: subprocess.Popen(["open", str(p)], shell=False, **hidden_process_kwargs()))
         else:
-            subprocess.Popen(["xdg-open", str(p)])
+            _checked(check, lambda: subprocess.Popen(["xdg-open", str(p)], shell=False, **hidden_process_kwargs()))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "ok"}
 
 
 @router.post("/open_reveal")
-def open_reveal(payload: dict, _session=Depends(require_session)):
+def open_reveal(payload: dict, check=Depends(_browser_access)):
+    return _checked(check, lambda: _open_reveal(payload, check))
+
+
+def _open_reveal(payload, check):
     raw = payload.get("path")
     if not raw or not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="Missing or invalid 'path'")
@@ -371,16 +443,16 @@ def open_reveal(payload: dict, _session=Depends(require_session)):
     if "\x00" in raw or raw.replace("/", "\\").startswith(("\\\\?\\", "\\\\.\\")):
         raise HTTPException(status_code=400, detail="An absolute filesystem path is required")
     try:
-        p = Path(raw).expanduser()
+        p = _checked(check, lambda: Path(raw).expanduser())
         if not p.is_absolute():
             raise HTTPException(status_code=400, detail="An absolute filesystem path is required")
-        if not p.exists():
+        if not _checked(check, p.exists):
             raise HTTPException(status_code=404, detail=f"Path not found: {p}")
-        is_dir = p.is_dir()
+        is_dir = _checked(check, p.is_dir)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=400, detail="Invalid or inaccessible filesystem path") from exc
     try:
-        system = platform.system()
+        system = _checked(check, platform.system)
         if system == "Windows":
             # Launch the file manager explicitly: files (including executables,
             # shortcuts and .url files) are selected, never run by association.
@@ -390,19 +462,23 @@ def open_reveal(payload: dict, _session=Depends(require_session)):
         else:
             parent = p if is_dir else p.parent
             args = ["xdg-open", str(parent)]
-        subprocess.Popen(args, shell=False, **hidden_process_kwargs())
+        _checked(check, lambda: subprocess.Popen(args, shell=False, **hidden_process_kwargs()))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not open the host file manager: {e}") from e
     return {"status": "ok"}
 
 
 @router.post("/fs/delete")
-def delete_path(payload: dict, _session=Depends(require_session)):
-    with FILE_MUTATION_LOCK:
-        return _delete_path_locked(payload)
+def delete_path(payload: dict, check=Depends(_browser_access)):
+    with _file_operation(check):
+        with FILE_MUTATION_LOCK:
+            check()
+            return _delete_path_locked(payload, check=check)
 
 
-def _delete_path_locked(payload):
+def _delete_path_locked(payload, *, check=_internal_access):
     """
     Safe delete — always moves to Recycle Bin / Trash via send2trash.
     Directories are NEVER permanently deleted through this endpoint.
@@ -412,14 +488,15 @@ def _delete_path_locked(payload):
     raw = payload.get("path")
     if not raw or not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="Missing or invalid 'path'")
-    p = Path(raw).expanduser()
-    if not p.exists():
+    p = _checked(check, lambda: Path(os.path.abspath(Path(raw).expanduser())))
+    if not _checked(check, p.exists):
         raise HTTPException(status_code=404, detail=f"Path not found: {p}")
+    original = _checked(check, lambda: _trash_snapshot(p, check))
     # Gate 1: system-protected locations
-    if S.is_protected_system_path(p):
+    if _checked(check, lambda: S.is_protected_system_path(p)):
         raise HTTPException(status_code=403, detail=f"System-protected path: {p}")
     # Gate 2: _is_protected_path (whitelist — must be inside home or DATA_DIR)
-    reason = _is_protected_path(p)
+    reason = _checked(check, lambda: _is_protected_path(p))
     if reason:
         raise HTTPException(status_code=403, detail=reason)
     # Always use send2trash — no shutil.rmtree, no permanent directory deletion
@@ -429,69 +506,94 @@ def _delete_path_locked(payload):
             detail="send2trash not available — safe delete requires it. Install with: pip install send2trash"
         )
     try:
-        send2trash(str(p.resolve()))
+        if _checked(check, lambda: _trash_snapshot(p, check)) != original:
+            raise HTTPException(409, "The selected path changed. Nothing was sent to Trash; review it before trying again.")
+        _checked(check, lambda: send2trash(str(p)))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "trashed", "path": str(p)}
 
 
 @router.post("/file/scan")
-def file_scan(req: FileScanRequest):
+def file_scan(req: FileScanRequest, check=Depends(_browser_access)):
+    return _checked(check, lambda: _file_scan(req, check))
+
+
+def _file_scan(req, check):
     base_path = expand_base_path(req.path)
+    check()
     p = Path(base_path)
-    if not p.exists():
+    exists = p.exists()
+    check()
+    if not exists:
         raise HTTPException(status_code=404, detail=f"Path does not exist: {base_path}")
-    if not p.is_dir():
+    is_directory = p.is_dir()
+    check()
+    if not is_directory:
         raise HTTPException(status_code=400, detail="Path is not a directory")
     buckets: Dict[str, List[str]] = {}
     total_files = 0
     for entry in p.iterdir():
+        check()
         if not entry.is_file():
             continue
         total_files += 1
         cat = categorize_extension(entry.suffix)
         buckets.setdefault(cat, []).append(entry.name)
+    check()
     return {"path": str(p), "total_files": total_files, "buckets": buckets}
 
 
 @router.get("/file/operations/capabilities")
-def file_operation_capabilities(response: Response, _session=Depends(require_session)):
+def file_operation_capabilities(response: Response, check=Depends(_browser_access)):
     response.headers["Cache-Control"] = "no-store"
-    return {"ok": True, "protocol": "reviewed-file-operations-v1"}
+    return _checked(check, lambda: {"ok": True, "protocol": "reviewed-file-operations-v1"})
 
 
 @router.post("/file/organize")
-def file_organize(req: FileOrganizeRequest, user=Depends(require_session)):
+def file_organize(req: FileOrganizeRequest, check=Depends(_browser_access), user=Depends(require_session)):
     import file_operations
-    return file_operations.request("organize", user, {"path": req.path, "actions": req.actions},
-                                   confirm=req.confirm, preview_id=req.preview_id)
+    return _checked(check, lambda: file_operations.request("organize", user, {"path": req.path, "actions": req.actions},
+                                   confirm=req.confirm, preview_id=req.preview_id, check=check))
 
 
 @router.post("/file/rename")
-def file_rename(req: FileRenameRequest, user=Depends(require_session)):
+def file_rename(req: FileRenameRequest, check=Depends(_browser_access), user=Depends(require_session)):
     import file_operations
-    return file_operations.request("rename", user, {"path": req.path, "prefix": req.prefix},
-                                   confirm=req.confirm, preview_id=req.preview_id)
+    return _checked(check, lambda: file_operations.request("rename", user, {"path": req.path, "prefix": req.prefix},
+                                   confirm=req.confirm, preview_id=req.preview_id, check=check))
 
 
 @router.post("/file/undo")
-def file_undo(req: Optional[FileUndoRequest] = None, user=Depends(require_session)):
+def file_undo(req: Optional[FileUndoRequest] = None, check=Depends(_browser_access), user=Depends(require_session)):
     import file_operations
     req = req or FileUndoRequest()
-    return file_operations.request("undo", user, {"operation_id": req.operation_id},
-                                   confirm=req.confirm, preview_id=req.preview_id)
+    return _checked(check, lambda: file_operations.request("undo", user, {"operation_id": req.operation_id},
+                                   confirm=req.confirm, preview_id=req.preview_id, check=check))
 
 
 @router.post("/files/scan")
-def files_scan(req: FilesScanRequest):
+def files_scan(req: FilesScanRequest, check=Depends(_browser_access)):
+    return _checked(check, lambda: _files_scan(req, check))
+
+
+def _files_scan(req, check):
     base_path = expand_base_path(req.root)
+    check()
     p = Path(base_path)
-    if not p.exists():
+    exists = p.exists()
+    check()
+    if not exists:
         raise HTTPException(status_code=404, detail=f"Path does not exist: {base_path}")
-    if not p.is_dir():
+    is_directory = p.is_dir()
+    check()
+    if not is_directory:
         raise HTTPException(status_code=400, detail="Path is not a directory")
     ext_map: Dict[str, Dict[str, Any]] = {}
     for entry in p.iterdir():
+        check()
         if not entry.is_file():
             continue
         ext = entry.suffix.lower() or "(no ext)"
@@ -501,26 +603,36 @@ def files_scan(req: FilesScanRequest):
             info["example"] = entry.name
     summary = [{"extension": ext, "count": info["count"], "example": info["example"]}
                for ext, info in sorted(ext_map.items(), key=lambda kv: (-kv[1]["count"], kv[0]))]
+    check()
     return {"path": str(p), "extension_summary": summary}
 
 
 @router.post("/files/apply_rules")
-def files_apply_rules(req: FilesApplyRulesRequest):
+def files_apply_rules(req: FilesApplyRulesRequest, check=Depends(_browser_access)):
+    return _checked(check, lambda: _files_apply_rules(req, check))
+
+
+def _files_apply_rules(req, check):
     base_path = expand_base_path(req.root)
+    check()
     p = Path(base_path)
-    if not p.exists() or not p.is_dir():
+    is_directory = p.exists() and p.is_dir()
+    check()
+    if not is_directory:
         raise HTTPException(status_code=400, detail="Path must be an existing directory")
 
     # Collect all filenames grouped by extension
     files_by_ext: Dict[str, List[str]] = {}
     all_files: List[str] = []
     for entry in p.iterdir():
+        check()
         if not entry.is_file():
             continue
         ext = entry.suffix.lower() or "(no ext)"
         files_by_ext.setdefault(ext, []).append(entry.name)
         all_files.append(entry.name)
 
+    check()
     if not all_files:
         return {"path": str(p), "plan": {}, "summary": "Folder is empty.", "ai": False}
 
@@ -532,6 +644,7 @@ def files_apply_rules(req: FilesApplyRulesRequest):
 
     # Try LM Studio
     try:
+        check()
         if not S.lm_provider or not S.lm_provider.health_check():
             raise RuntimeError("LM Studio unavailable")
         model_id = S.MODEL_CONFIG.get(S.DEFAULT_MODEL_KEY, {}).get("id", "")
@@ -545,6 +658,7 @@ def files_apply_rules(req: FilesApplyRulesRequest):
             'and each value is an array of exact filenames to move there. '
             'Example: {"Documents": ["report.pdf"], "Images": ["photo.jpg"]}'
         )
+        check()
         result = S.lm_provider.complete(
             messages=[{"role": "user", "content": prompt}],
             model_id=model_id,
@@ -569,8 +683,12 @@ def files_apply_rules(req: FilesApplyRulesRequest):
                         plan[folder.strip()] = valid
             except Exception:
                 pass
+        check()
         return {"path": str(p), "plan": plan, "summary": raw, "ai": True}
+    except HTTPException:
+        raise
     except Exception as e:
+        check()
         S.log_debug("files", "WARN", "AI apply_rules failed, returning extension plan", error=str(e))
 
     # Fallback: use the built-in extension categorizer
@@ -578,30 +696,45 @@ def files_apply_rules(req: FilesApplyRulesRequest):
     for ext, names in files_by_ext.items():
         cat = categorize_extension(ext)
         fallback_plan.setdefault(cat, []).extend(names)
+    check()
     return {
         "path": str(p),
         "plan": fallback_plan,
-        "summary": f"Organized {len(all_files)} files into {len(fallback_plan)} categories by extension. (AI unavailable — used built-in rules.)",
+        "summary": f"Suggested {len(all_files)} files in {len(fallback_plan)} categories by extension. No files were moved. (AI unavailable — used built-in rules.)",
         "ai": False,
     }
 
 
 @router.post("/files/insight")
-def files_insight(req: FilesScanRequest):
+def files_insight(req: FilesScanRequest, check=Depends(_browser_access)):
+    return _checked(check, lambda: _files_insight(req, check))
+
+
+def _files_insight(req, check):
     base_path = expand_base_path(req.root)
+    check()
     p = Path(base_path)
-    if not p.exists():
+    exists = p.exists()
+    check()
+    if not exists:
         raise HTTPException(status_code=404, detail=f"Path does not exist: {base_path}")
-    if not p.is_dir():
+    is_directory = p.is_dir()
+    check()
+    if not is_directory:
         raise HTTPException(status_code=400, detail="Path is not a directory")
 
-    entries = list(p.iterdir())
-    files   = [e for e in entries if e.is_file()]
-    dirs    = [e for e in entries if e.is_dir()]
+    files, dirs = [], []
+    for entry in p.iterdir():
+        check()
+        if entry.is_file():
+            files.append(entry)
+        elif entry.is_dir():
+            dirs.append(entry)
 
     ext_counts: Dict[str, int] = {}
     total_bytes = 0
     for f in files:
+        check()
         ext = f.suffix.lower() or "(no ext)"
         ext_counts[ext] = ext_counts.get(ext, 0) + 1
         try:
@@ -619,6 +752,7 @@ def files_insight(req: FilesScanRequest):
 
     # Try LM Studio
     try:
+        check()
         if not S.lm_provider or not S.lm_provider.health_check():
             raise RuntimeError("LM Studio unavailable")
         model_id = S.MODEL_CONFIG.get(S.DEFAULT_MODEL_KEY, {}).get("id", "")
@@ -627,6 +761,7 @@ def files_insight(req: FilesScanRequest):
             "Give a short, plain-English summary of what this folder appears to contain "
             "and any obvious housekeeping suggestions. Be concise (3-5 sentences)."
         )
+        check()
         result = S.lm_provider.complete(
             messages=[{"role": "user", "content": prompt}],
             model_id=model_id,
@@ -634,11 +769,16 @@ def files_insight(req: FilesScanRequest):
             max_tokens=256,
         )
         summary = (result.get("text") or "").strip()
+        check()
         if summary:
             return {"path": str(p), "context": context, "summary": summary, "ai": True}
+    except HTTPException:
+        raise
     except Exception as e:
+        check()
         S.log_debug("files", "WARN", "AI insight failed, returning stats", error=str(e))
 
+    check()
     return {
         "path": str(p),
         "context": context,

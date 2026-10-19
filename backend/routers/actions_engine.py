@@ -13,14 +13,34 @@ import copy
 import hashlib
 import threading
 import os
+from contextlib import contextmanager
 
 from routers.system_routes import require_session
+from browser_authority import browser_control_access
 from device_resolution import resolve
 from action_results import driver_succeeded, execution_summary
 
 router = APIRouter()
 _STORE_LOCK = threading.RLock()
 _INFLIGHT = set()
+
+
+def _internal_access():
+    """Default only for existing in-process repository helpers, never HTTP admission."""
+
+
+@contextmanager
+def _browser_operation(check):
+    """Recheck the captured browser after reads/errors and before disclosure."""
+    check()
+    try:
+        yield
+    finally:
+        check()
+
+
+def _private_json(value):
+    return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
 # -------- runtime context (injected by main.py) --------
 _CTX: Dict[str, Any] = {
@@ -98,27 +118,39 @@ def _load_json(path: Path, default):
     except (ValueError, TypeError, RecursionError) as exc:
         raise HTTPException(503, "Saved actions or their device registry could not be read. Existing files were retained.") from exc
 
-def _save_json(path: Path, obj):
+def _save_json(path: Path, obj, *, access_check=_internal_access):
     with _STORE_LOCK:
+        access_check()
         _load_json(path, {"actions": [], "triggers": []} if isinstance(obj, dict) and "actions" in obj else type(obj)())
+        access_check()
         raw = json.dumps(obj, indent=2, allow_nan=False)
         if len(raw.encode("utf-8")) > 1024 * 1024:
             raise HTTPException(413, "Saved actions exceed the 1 MiB limit. Existing files were retained.")
+        access_check()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         try:
+            access_check()
             tmp.write_text(raw, encoding="utf-8")
+            access_check()
             tmp.replace(path)
         except OSError as exc:
+            access_check()
             raise HTTPException(503, "Action save was not confirmed. The previous file was retained.") from exc
 
-def _append_receipt(receipt: Dict[str, Any]):
+def _append_receipt(receipt: Dict[str, Any], *, access_check=_internal_access):
     _, receipts_path = _paths()
-    receipts_path.parent.mkdir(parents=True, exist_ok=True)
-    with _STORE_LOCK, receipts_path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(receipt, allow_nan=False) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    with _STORE_LOCK:
+        access_check()
+        raw = json.dumps(receipt, allow_nan=False) + "\n"
+        access_check()
+        receipts_path.parent.mkdir(parents=True, exist_ok=True)
+        access_check()
+        with receipts_path.open("a", encoding="utf-8") as f:
+            access_check()
+            f.write(raw)
+            f.flush()
+            os.fsync(f.fileno())
 
 def _norm(s: str) -> str:
     s = (s or "").strip().lower()
@@ -130,10 +162,8 @@ def _read_shelly_registry() -> List[Dict[str, Any]]:
     p: Path = _CTX.get("shelly_registry_path")
     if not p:
         return []
-    data = _load_json(p, default=[])
-    if isinstance(data, list):
-        return [x for x in data if isinstance(x, dict)]
-    return []
+    from shelly_store import read
+    return read(p)
 
 def _resolve_device(query: str) -> Dict[str, Any]:
     from intelligence.devices import with_context
@@ -202,23 +232,30 @@ def _action(action_id):
 
 # ---------------- routes ----------------
 @router.get("/actions/list")
-def actions_list(_session: str = Depends(require_session)):
-    _ensure_initialized()
-    actions_path, _ = _paths()
-    data = _load_json(actions_path, default={"actions": [], "triggers": []})
-    return data
+def actions_list(check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        actions_path, _ = _paths()
+        data = _load_json(actions_path, default={"actions": [], "triggers": []})
+        return data
 
 @router.get("/actions/receipts")
-def actions_receipts(limit: int = 50, _session: str = Depends(require_session)):
-    _ensure_initialized()
-    _, receipts_path = _paths()
-    if not receipts_path.exists():
-        return {"items": []}
-    from collections import deque
-    items = deque(maxlen=max(1, min(200, int(limit))))
+def actions_receipts(limit: int = 50, check=Depends(browser_control_access),
+                     _session: str = Depends(require_session)):
+    check()
     try:
+        _ensure_initialized()
+        _, receipts_path = _paths()
+        check()
+        exists = receipts_path.exists()
+        check()
+        if not exists:
+            return {"items": []}
+        from collections import deque
+        items = deque(maxlen=max(1, min(200, int(limit))))
         if receipts_path.stat().st_size > 16 * 1024 * 1024:
             raise ValueError("Receipt history exceeds the read limit")
+        check()
         with receipts_path.open("r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -228,93 +265,104 @@ def actions_receipts(limit: int = 50, _session: str = Depends(require_session)):
                 if not isinstance(row, dict):
                     raise ValueError("Invalid receipt")
                 items.append(row)
+        check()
+    except HTTPException:
+        check()
+        raise
     except Exception as exc:
+        check()
         raise HTTPException(503, "Action receipts could not be read. Existing receipts were retained.") from exc
     return {"items": list(items)}
 
 
 @router.get("/actions/{action_id}/definition")
-def routine_definition(action_id: str, _session: str = Depends(require_session)):
-    _ensure_initialized()
-    with _STORE_LOCK:
-        action = _action(action_id)
-        # Stored driver metadata is JSON, not an ORM object. Do not let FastAPI's
-        # default SQLAlchemy filtering drop legacy keys beginning with "_sa".
-        return JSONResponse({"ok": True, "protocol": "tli-action-review-v1", "action": action,
-                             "revision": _fingerprint(action)})
+def routine_definition(action_id: str, check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        with _STORE_LOCK:
+            check()
+            action = _action(action_id)
+            # Stored driver metadata is JSON, not an ORM object. Do not let FastAPI's
+            # default SQLAlchemy filtering drop legacy keys beginning with "_sa".
+            return _private_json({"ok": True, "protocol": "tli-action-review-v1", "action": action,
+                                 "revision": _fingerprint(action)})
 
 
 @router.patch("/actions/{action_id}")
-def update_routine(action_id: str, req: UpdateRoutineRequest, _session: str = Depends(require_session)):
+def update_routine(action_id: str, req: UpdateRoutineRequest, check=Depends(browser_control_access), _session: str = Depends(require_session)):
     """Edit or archive a definition without operating devices or rewriting legacy data."""
-    _ensure_initialized()
-    changes = req.model_dump(exclude={"request_id", "expected_revision"}, exclude_unset=True)
-    if not changes or any(value is None for value in changes.values()):
-        raise HTTPException(422, "Choose a name, steps or archive state to update.")
-    if "name" in changes:
-        changes["name"] = changes["name"].strip()
-        if not changes["name"]:
-            raise HTTPException(422, "Give this routine a name.")
-    try:
-        signature = _fingerprint(req.model_dump())
-    except (TypeError, ValueError):
-        raise HTTPException(422, "Routine changes must contain valid JSON values.")
-    request_key = _fingerprint([_session, action_id, req.request_id])
-    with _STORE_LOCK:
-        if (str(_CTX["data_dir"]), action_id) in _INFLIGHT:
-            raise HTTPException(409, "This routine is running. Wait for its result before editing or archiving it.")
-        action = _action(action_id)
-        path, _ = _paths()
-        store = _load_json(path, {"actions": [], "triggers": []})
-        history = store.get("_routine_mutations", [])
-        if not isinstance(history, list) or len(history) > 1000 or any(not isinstance(row, dict) for row in history):
-            raise HTTPException(503, "Routine update history is unavailable. Existing data was retained.")
-        previous = next((row for row in history if row.get("key") == request_key), None)
-        if previous:
-            if previous.get("signature") != signature:
-                raise HTTPException(409, "That update identifier belongs to different changes. Nothing was replaced.")
-            if previous.get("revision") != _fingerprint(action):
-                raise HTTPException(409, "Those changes were already saved, but the routine changed again. Reload its current version.")
-            return JSONResponse({"ok": True, "protocol": "tli-action-review-v1", "action": action,
-                                 "revision": previous["revision"], "duplicate": True, "trigger_active": False})
-        if _fingerprint(action) != req.expected_revision:
-            raise HTTPException(409, "This routine changed elsewhere. Your draft was not saved; reload the current routine before editing again.")
-        if "steps" in changes:
-            # The visual editor cannot interpret unsupported legacy steps. Keep them intact.
-            unmatched = copy.deepcopy(changes["steps"])
-            for step in action["steps"]:
-                if step.get("type") not in ("shelly.switch", "homepower.execute"):
-                    if step not in unmatched:
-                        raise HTTPException(422, "Unsupported legacy steps must remain unchanged. Their saved definition was retained.")
-                    unmatched.remove(step)
-            for step in changes["steps"]:
-                if not isinstance(step.get("type"), str) or not step["type"]:
-                    raise HTTPException(422, "Every step needs its saved type.")
-        updated = copy.deepcopy(action)
-        updated.update(copy.deepcopy(changes))
-        updated["updated_at"] = _nowz()
-        revision = _fingerprint(updated)
-        store["actions"] = [updated if row.get("id") == action_id else row for row in store["actions"]]
-        store["_routine_mutations"] = [*history[-999:], {"key": request_key, "signature": signature, "revision": revision}]
-        _save_json(path, store)
-        receipt_saved = True
-        kind = "action_archived" if changes.get("archived") is True else "action_restored" if changes.get("archived") is False else "action_updated"
+    with _browser_operation(check):
+        _ensure_initialized()
+        changes = req.model_dump(exclude={"request_id", "expected_revision"}, exclude_unset=True)
+        if not changes or any(value is None for value in changes.values()):
+            raise HTTPException(422, "Choose a name, steps or archive state to update.")
+        if "name" in changes:
+            changes["name"] = changes["name"].strip()
+            if not changes["name"]:
+                raise HTTPException(422, "Give this routine a name.")
         try:
-            _append_receipt({"ts": updated["updated_at"], "kind": kind, "action_id": action_id,
-                             "summary": f"{'Archived' if kind == 'action_archived' else 'Restored' if kind == 'action_restored' else 'Updated'} routine: {updated['name']}"})
-        except OSError:
-            receipt_saved = False
-        return JSONResponse({"ok": True, "protocol": "tli-action-review-v1", "action": updated, "revision": revision,
-                             "receipt_saved": receipt_saved, "trigger_active": False})
+            signature = _fingerprint(req.model_dump())
+        except (TypeError, ValueError):
+            raise HTTPException(422, "Routine changes must contain valid JSON values.")
+        request_key = _fingerprint([_session, action_id, req.request_id])
+        with _STORE_LOCK:
+            check()
+            if (str(_CTX["data_dir"]), action_id) in _INFLIGHT:
+                raise HTTPException(409, "This routine is running. Wait for its result before editing or archiving it.")
+            action = _action(action_id)
+            path, _ = _paths()
+            store = _load_json(path, {"actions": [], "triggers": []})
+            history = store.get("_routine_mutations", [])
+            if not isinstance(history, list) or len(history) > 1000 or any(not isinstance(row, dict) for row in history):
+                raise HTTPException(503, "Routine update history is unavailable. Existing data was retained.")
+            previous = next((row for row in history if row.get("key") == request_key), None)
+            if previous:
+                if previous.get("signature") != signature:
+                    raise HTTPException(409, "That update identifier belongs to different changes. Nothing was replaced.")
+                if previous.get("revision") != _fingerprint(action):
+                    raise HTTPException(409, "Those changes were already saved, but the routine changed again. Reload its current version.")
+                return _private_json({"ok": True, "protocol": "tli-action-review-v1", "action": action,
+                                     "revision": previous["revision"], "duplicate": True, "trigger_active": False})
+            if _fingerprint(action) != req.expected_revision:
+                raise HTTPException(409, "This routine changed elsewhere. Your draft was not saved; reload the current routine before editing again.")
+            if "steps" in changes:
+                # The visual editor cannot interpret unsupported legacy steps. Keep them intact.
+                unmatched = copy.deepcopy(changes["steps"])
+                for step in action["steps"]:
+                    if step.get("type") not in ("shelly.switch", "homepower.execute"):
+                        if step not in unmatched:
+                            raise HTTPException(422, "Unsupported legacy steps must remain unchanged. Their saved definition was retained.")
+                        unmatched.remove(step)
+                for step in changes["steps"]:
+                    if not isinstance(step.get("type"), str) or not step["type"]:
+                        raise HTTPException(422, "Every step needs its saved type.")
+            updated = copy.deepcopy(action)
+            updated.update(copy.deepcopy(changes))
+            updated["updated_at"] = _nowz()
+            revision = _fingerprint(updated)
+            store["actions"] = [updated if row.get("id") == action_id else row for row in store["actions"]]
+            store["_routine_mutations"] = [*history[-999:], {"key": request_key, "signature": signature, "revision": revision}]
+            _save_json(path, store, access_check=check)
+            receipt_saved = True
+            kind = "action_archived" if changes.get("archived") is True else "action_restored" if changes.get("archived") is False else "action_updated"
+            try:
+                _append_receipt({"ts": updated["updated_at"], "kind": kind, "action_id": action_id,
+                                 "summary": f"{'Archived' if kind == 'action_archived' else 'Restored' if kind == 'action_restored' else 'Updated'} routine: {updated['name']}"})
+            except OSError:
+                receipt_saved = False
+            return _private_json({"ok": True, "protocol": "tli-action-review-v1", "action": updated, "revision": revision,
+                                 "receipt_saved": receipt_saved, "trigger_active": False})
 
 @router.post("/actions/approve")
-def actions_approve(req: ApproveRequest, _session: str = Depends(require_session)):
-    _ensure_initialized()
-    with _STORE_LOCK:
-        return JSONResponse(_approve(req, _session))
+def actions_approve(req: ApproveRequest, check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        with _STORE_LOCK:
+            check()
+            return _private_json(_approve(req, _session, access_check=check))
 
 
-def _approve(req, owner):
+def _approve(req, owner, *, access_check):
     actions_path, _ = _paths()
     store = _load_json(actions_path, default={"actions": [], "triggers": []})
     request_key = _fingerprint([owner, req.request_id]) if req.request_id else None
@@ -353,7 +401,7 @@ def _approve(req, owner):
         trg.setdefault("cooldown_sec", 30)
         store.setdefault("triggers", []).append(trg)
 
-    _save_json(actions_path, store)
+    _save_json(actions_path, store, access_check=access_check)
 
     receipt_saved = True
     try:
@@ -369,13 +417,14 @@ def _approve(req, owner):
     return {"ok": True, "action": action, "receipt_saved": receipt_saved, "trigger_active": False,
             "summary": "Action saved. Saved trigger definitions are not executed by this engine."}
 
-def _prepare_steps(steps):
+def _prepare_steps(steps, *, access_check=_internal_access):
     shelly = _CTX.get("shelly_driver")
     hp_runtime = _CTX.get("home_power_runtime")
     prepared = []
     errors = {}
     # Resolve every target before any side effect, including explicit-ID steps.
     for index, step in enumerate(steps):
+        access_check()
         try:
             kind = step.get("type")
             if kind == "shelly.switch":
@@ -399,8 +448,10 @@ def _prepare_steps(steps):
                 raise ValueError(f"Unsupported step type: {kind}")
             prepared.append(device)
         except Exception as exc:
+            access_check()
             errors[index] = exc.detail if isinstance(exc, HTTPException) else str(exc)
             prepared.append(None)
+        access_check()
     return prepared, errors
 
 
@@ -416,57 +467,60 @@ def _target_review(steps, prepared):
 
 
 @router.get("/actions/{action_id}/review")
-def review_action(action_id: str, _session: str = Depends(require_session)):
-    _ensure_initialized()
-    with _STORE_LOCK:
-        action = _action(action_id)
-        prepared, errors = _prepare_steps(action["steps"])
-        targets = _target_review(action["steps"], prepared)
-        return {"ok": True, "protocol": "tli-action-review-v1", "actions_performed": False, "checked_at": _nowz(),
-                "action_id": action_id, "name": action.get("name"), "revision": _fingerprint(action),
-                "target_revision": _fingerprint(targets), "steps": targets, "errors": errors,
-                "available": bool(targets) and not errors and action.get("enabled") is not False and action.get("archived") is not True,
-                "archived": action.get("archived") is True,
-                "scope": "Manual action on the registered targets shown. Review every relay and effect. No step ran during this review.",
-                "trigger_active": False}
+def review_action(action_id: str, check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        with _STORE_LOCK:
+            check()
+            action = _action(action_id)
+            prepared, errors = _prepare_steps(action["steps"], access_check=check)
+            targets = _target_review(action["steps"], prepared)
+            return {"ok": True, "protocol": "tli-action-review-v1", "actions_performed": False, "checked_at": _nowz(),
+                    "action_id": action_id, "name": action.get("name"), "revision": _fingerprint(action),
+                    "target_revision": _fingerprint(targets), "steps": targets, "errors": errors,
+                    "available": bool(targets) and not errors and action.get("enabled") is not False and action.get("archived") is not True,
+                    "archived": action.get("archived") is True,
+                    "scope": "Manual action on the registered targets shown. Review every relay and effect. No step ran during this review.",
+                    "trigger_active": False}
 
 
 @router.post("/actions/preview")
-def preview_action(req: ApproveRequest, _session: str = Depends(require_session)):
-    _ensure_initialized()
-    steps = [step.model_dump() for step in req.steps]
-    prepared, errors = _prepare_steps(steps)
-    targets = _target_review(steps, prepared)
-    return {"ok": True, "protocol": "tli-action-review-v1", "actions_performed": False, "checked_at": _nowz(),
-            "name": req.name, "draft_revision": _fingerprint(req.model_dump(exclude={"request_id"})),
-            "target_revision": _fingerprint(targets), "steps": targets, "errors": errors,
-            "available": bool(targets) and not errors, "trigger_active": False,
-            "scope": "Unsaved manual routine. Review the exact device, address, relay and effect for every step. Previewing or saving does not run it."}
+def preview_action(req: ApproveRequest, check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        steps = [step.model_dump() for step in req.steps]
+        prepared, errors = _prepare_steps(steps, access_check=check)
+        targets = _target_review(steps, prepared)
+        return {"ok": True, "protocol": "tli-action-review-v1", "actions_performed": False, "checked_at": _nowz(),
+                "name": req.name, "draft_revision": _fingerprint(req.model_dump(exclude={"request_id"})),
+                "target_revision": _fingerprint(targets), "steps": targets, "errors": errors,
+                "available": bool(targets) and not errors, "trigger_active": False,
+                "scope": "Unsaved manual routine. Review the exact device, address, relay and effect for every step. Previewing or saving does not run it."}
 
 
 @router.post("/actions/run/{action_id}")
-def actions_run(action_id: str, request: Request, req: Optional[RunRequest] = Body(default=None), _session: str = Depends(require_session)):
-    _ensure_initialized()
-    _action(action_id)  # preserve corrupt-store and missing-action failures
-    req = req or RunRequest()
-    if any((req.request_id, req.expected_revision, req.expected_targets)) and not all((req.request_id, req.expected_revision, req.expected_targets)):
-        raise HTTPException(422, "Reviewed actions need a request identifier, saved revision and exact target review.")
-    if not all((req.request_id, req.expected_revision, req.expected_targets)):
-        return {"ok": False, "review_required": True, "actions_performed": False, "results": [],
-                "summary": "Review the saved routine and its exact targets before running it. No step ran.",
-                "review_url": f"/actions/{action_id}/review"}
-    from companion_auth import operation_access
-    access_check = operation_access(request, _session)
-    key = (str(_CTX["data_dir"]), action_id)
-    with _STORE_LOCK:
-        if key in _INFLIGHT:
-            raise HTTPException(409, "This saved action is already running. No second execution started.")
-        _INFLIGHT.add(key)
-    try:
-        return _run_action(action_id, req, _session, access_check=access_check)
-    finally:
+def actions_run(action_id: str, request: Request, req: Optional[RunRequest] = Body(default=None), check=Depends(browser_control_access), _session: str = Depends(require_session)):
+    with _browser_operation(check):
+        _ensure_initialized()
+        _action(action_id)  # preserve corrupt-store and missing-action failures
+        req = req or RunRequest()
+        if any((req.request_id, req.expected_revision, req.expected_targets)) and not all((req.request_id, req.expected_revision, req.expected_targets)):
+            raise HTTPException(422, "Reviewed actions need a request identifier, saved revision and exact target review.")
+        if not all((req.request_id, req.expected_revision, req.expected_targets)):
+            return {"ok": False, "review_required": True, "actions_performed": False, "results": [],
+                    "summary": "Review the saved routine and its exact targets before running it. No step ran.",
+                    "review_url": f"/actions/{action_id}/review"}
+        key = (str(_CTX["data_dir"]), action_id)
         with _STORE_LOCK:
-            _INFLIGHT.discard(key)
+            check()
+            if key in _INFLIGHT:
+                raise HTTPException(409, "This saved action is already running. No second execution started.")
+            _INFLIGHT.add(key)
+        try:
+            return _run_action(action_id, req, _session, access_check=check)
+        finally:
+            with _STORE_LOCK:
+                _INFLIGHT.discard(key)
 
 
 def _run_action(action_id, req, owner, *, access_check):
@@ -479,7 +533,7 @@ def _run_action(action_id, req, owner, *, access_check):
     if req.expected_revision and _fingerprint(action) != req.expected_revision:
         raise HTTPException(409, "The saved action changed. Review it again; no step ran.")
     steps = action["steps"]
-    prepared, errors = _prepare_steps(steps)
+    prepared, errors = _prepare_steps(steps, access_check=access_check)
     targets = _target_review(steps, prepared)
     if req.expected_targets and (errors or _fingerprint(targets) != req.expected_targets):
         raise HTTPException(409, "A target or step changed. Review it again; no step ran.")
@@ -489,6 +543,7 @@ def _run_action(action_id, req, owner, *, access_check):
         # Durable start receipts block uncertain replay after a host interruption.
         # A completed duplicate returns the recorded result, never new I/O.
         all_receipts = _read_request_receipts()
+        access_check()
         matching = [r for r in all_receipts if r.get("_request_key") == request_key]
         if matching:
             if any(r.get("_request_signature") != signature for r in matching):
@@ -497,8 +552,10 @@ def _run_action(action_id, req, owner, *, access_check):
             if completed:
                 return {"ok": completed["ok"], "results": completed["results"], "summary": completed["summary"], "duplicate": True, "receipt_saved": True}
             raise HTTPException(409, "This action was already started but its final result is unavailable. Inspect the devices before deliberately preparing another run.")
+        access_check()
         _append_receipt({"ts": _nowz(), "kind": "action_started", "action_id": action_id, "_request_key": request_key,
-                         "_request_signature": signature, "summary": "Reviewed action started; final result is not yet recorded."})
+                         "_request_signature": signature, "summary": "Reviewed action started; final result is not yet recorded."}, access_check=access_check)
+        access_check()
 
     shelly = _CTX.get("shelly_driver")
     hp_runtime = _CTX.get("home_power_runtime")
@@ -518,7 +575,7 @@ def _run_action(action_id, req, owner, *, access_check):
                 try:
                     access_check()
                     current_action = _action(action_id)
-                    current_prepared, current_errors = _prepare_steps(current_action["steps"])
+                    current_prepared, current_errors = _prepare_steps(current_action["steps"], access_check=access_check)
                     if (current_errors or _fingerprint(current_action) != req.expected_revision or
                             _fingerprint(_target_review(current_action["steps"], current_prepared)) != req.expected_targets):
                         raise HTTPException(409, "The routine or its targets changed. Remaining steps were not run; review again.")
@@ -566,6 +623,9 @@ def _run_action(action_id, req, owner, *, access_check):
                          **({"_request_key": request_key, "_request_signature": signature} if request_key else {})})
     except OSError:
         receipt_saved = False
+    # Recording completed/partial effects is internal bookkeeping. Never disclose
+    # those results to the revoked request or replay them automatically.
+    access_check()
     return {"ok": ok, "results": results, "summary": summary, "receipt_saved": receipt_saved}
 
 
@@ -590,26 +650,29 @@ def _read_request_receipts():
 
 
 @router.get("/actions/capabilities")
-def actions_capabilities(_session: str = Depends(require_session)):
+def actions_capabilities(check=Depends(browser_control_access), _session: str = Depends(require_session)):
     # Shelly legacy devices
-    reg = _read_shelly_registry()
-    shelly_devices = [{"name": d.get("name") or d.get("label") or d.get("ip"), "ip": d.get("ip") or d.get("host"),
-                       "relay": d.get("relay", 0), "id": d.get("device_id") or d.get("id"),
-                       "source_id": d.get("device_id") or d.get("id")} for d in reg]
+    with _browser_operation(check):
+        reg = _read_shelly_registry()
+        check()
+        shelly_devices = [{"name": d.get("name") or d.get("label") or d.get("ip"), "ip": d.get("ip") or d.get("host"),
+                           "relay": d.get("relay", 0), "id": d.get("device_id") or d.get("id"),
+                           "source_id": d.get("device_id") or d.get("id")} for d in reg]
 
-    # Multi-vendor homepower devices
-    hp_runtime = _CTX.get("home_power_runtime")
-    hp_devices = hp_runtime.load_devices() if hp_runtime else []
+        # Multi-vendor homepower devices
+        hp_runtime = _CTX.get("home_power_runtime")
+        check()
+        hp_devices = hp_runtime.load_devices() if hp_runtime else []
 
-    return {
-        "drivers": ["shelly", "homepower"],
-        "step_types": ["shelly.switch", "homepower.execute"],
-        "devices": shelly_devices,
-        "hp_devices": hp_devices,
-        "notes": "Registered drivers and devices on this host. Availability and function require an explicit check.",
-        "review_protocol": "tli-action-review-v1",
-        "trigger_engine": {"available": False, "reason": "This saved-action engine stores trigger definitions but does not execute them. Use explicit manual review and Run; existing Home Power scenes use their separate controller."}
-    }
+        return {
+            "drivers": ["shelly", "homepower"],
+            "step_types": ["shelly.switch", "homepower.execute"],
+            "devices": shelly_devices,
+            "hp_devices": hp_devices,
+            "notes": "Registered drivers and devices on this host. Availability and function require an explicit check.",
+            "review_protocol": "tli-action-review-v1",
+            "trigger_engine": {"available": False, "reason": "This saved-action engine stores trigger definitions but does not execute them. Use explicit manual review and Run; existing Home Power scenes use their separate controller."}
+        }
 
 
 

@@ -5,7 +5,7 @@ const arg=name=>{const i=process.argv.indexOf(name);return i<0?null:process.argv
 const root=path.resolve(__dirname,'..'),source=path.resolve(arg('--source')||root),before=process.argv.includes('--before');
 const output=path.join(root,'build_work','companion-address',(before?'before-':'browser-')+new Date().toISOString().replace(/[:.]/g,'-'));
 fs.mkdirSync(output,{recursive:true});
-const assets=['style.css','themes.css','ui-foundation.css','native-companion.css','js/native-companion.js'];
+const assets=['style.css','themes.css','ui-foundation.css','native-companion.css','js/native-companion.js','assets/companion-install.svg'];
 const sources=Object.fromEntries(assets.map(file=>[file,fs.readFileSync(path.join(source,'frontend',file),'utf8')]));
 const hashes=()=>Object.fromEntries(assets.map(file=>[file,crypto.createHash('sha256').update(fs.readFileSync(path.join(source,'frontend',file))).digest('hex')]));
 const APIPA='https://169.254.10.20:8000',WSL='https://172.30.128.1:8000',LAN='https://192.168.50.12:8000',BROWSER='https://companion.test';
@@ -20,7 +20,7 @@ async function setup(browser,width,theme){
   const request=route.request(),url=new URL(request.url());
   if(url.origin!==BROWSER){errors.push('Blocked unexpected origin '+url.origin);return route.abort();}
   const file=assets.find(file=>'/'+file===url.pathname);
-  if(file)return route.fulfill({contentType:file.endsWith('.css')?'text/css':'application/javascript',body:sources[file]});
+  if(file)return route.fulfill({contentType:file.endsWith('.svg')?'image/svg+xml':file.endsWith('.css')?'text/css':'application/javascript',body:sources[file]});
   if(url.pathname==='/')return route.fulfill({contentType:'text/html; charset=utf-8',headers:{'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"},body:'<!doctype html><html lang="en" data-theme="'+theme+'"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">'+assets.filter(file=>file.endsWith('.css')).map(file=>'<link rel="stylesheet" href="/'+file+'">').join('')+'</head><body data-tli-ui="anniversary" style="padding:16px;margin:0;min-width:0"><main id="panel-companion"></main><script src="/js/native-companion.js"></script></body></html>'});
   calls.push({method:request.method(),path:url.pathname,body:request.method()==='POST'?request.postDataJSON():null});
   if(url.pathname.endsWith('/setup')){setupCalls++;return json(route,{tls_enabled:true,lan_enabled:true,pin_enabled:true,certificate_ready:true,pairing_ready:true,origins:[...origins],node:{id:'synthetic-studio',name:'Studio fixture'}});}
@@ -30,6 +30,7 @@ async function setup(browser,width,theme){
   errors.push('Blocked unapproved request '+request.method()+' '+url.pathname);return json(route,{detail:'Unexpected synthetic request'},409);
  });
  await page.goto(BROWSER+'/');await page.evaluate(()=>TLICompanion.open({step:'pair'}));await page.waitForFunction(()=>!document.getElementById('native-companion-refresh').disabled);
+ await page.locator('#native-companion-installed').click();await page.locator('#native-companion-address-details > summary').click();
  return{page,context,calls,errors,received:pairObserved.promise,get setupCalls(){return setupCalls},set origins(value){origins=value},set pairHold(value){pairHold=value},get posts(){return calls.filter(c=>c.method==='POST')}};
 }
 async function shot(page,name){await page.locator('#native-companion-step-pair').screenshot({path:path.join(output,name+'.png')});report.screenshots.push(name+'.png');}

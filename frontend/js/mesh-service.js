@@ -3,8 +3,9 @@
 // Presence • Authority • Routing • Context
 // =====================================================
 window.MeshService = (function () {
-  let epoch=0,locked=false;
-  const current=t=>!locked&&t===epoch;
+  let epoch=0,locked=document.getElementById?.('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false';
+  let accessReady=!locked,nodeAvailable=false,nodeRequest=null,directoryRequest=null;
+  const current=t=>!locked&&accessReady&&t===epoch;
   const _state = {
     lastNodeFetchMs: 0,
     lastDirFetchMs: 0,
@@ -29,7 +30,7 @@ window.MeshService = (function () {
 
   function _consoleUrl(device, panel) {
     const record=device?.raw||device;
-    if(locked||record?.status!=='allowed'||record?.trust_state!=='verified')return null;
+    if(locked||!accessReady||record?.status!=='allowed'||record?.trust_state!=='verified')return null;
     try {const url=new URL(record.origin);if(url.protocol!=='https:'||url.username||url.password||url.pathname!=='/'||url.search||url.hash)return null;
       return url.origin+'/?panel='+encodeURIComponent((panel||'').trim());
     }catch{return null;}
@@ -74,35 +75,64 @@ window.MeshService = (function () {
         message:messages ? peer?.messaging?.message || 'Messages available on both computers.' : connection.reason?.message || peer?.messaging?.message || 'Check this saved connection before sending.'}};
   }
 
+  // Read compatibility follows the bounded host store; new-edit limits belong
+  // to the save boundary, not to already saved names or identifiers.
+  const text = value => typeof value === 'string' && !!value.trim();
+  function validNode(data) {
+    return data && typeof data === 'object' && !Array.isArray(data) && text(data.node_id) && text(data.display_name) &&
+      ['standalone','host','member'].includes(data.role) && data.join_mode === data.role && data.is_host === (data.role === 'host') &&
+      ['host_address','created_at','last_seen'].every(key => data[key] == null || typeof data[key] === 'string');
+  }
+  function validDirectory(data) {
+    return data && typeof data === 'object' && !Array.isArray(data) && ['standalone','host','member'].includes(data.mode) && text(data.this_device_id) &&
+      (data.host_device_id == null || text(data.host_device_id)) && Array.isArray(data.devices) &&
+      data.devices.every(row => row && typeof row === 'object' && !Array.isArray(row) && text(row.device_id) && text(row.display_name)) &&
+      new Set(data.devices.map(row => row.device_id)).size === data.devices.length;
+  }
+  function requireCurrent(token) { if (!current(token)) throw Error('Computer session changed; response ignored.'); }
+  async function checkedRead(path,token,validate) {
+    const res = await fetch(path, {headers:{Accept:'application/json'},credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(10000)});
+    requireCurrent(token);
+    if (res.status === 401 || res.status === 403) {
+      window.dispatchEvent(new CustomEvent('tli-session-locked'));
+      throw Error('Unlock TLI and check access before reading computer information.');
+    }
+    if (!res.ok) throw Error('Computer information unavailable (HTTP '+res.status+').');
+    const data = await res.json(); requireCurrent(token);
+    if (!validate(data)) throw Error('Computer information is incomplete. Check saved state before continuing.');
+    return data;
+  }
   async function fetchNode({ force = false } = {}) {
-    if(locked)throw Error("Unlock TLI first.");const token=epoch;
-    if (!force && _isFresh(_state.lastNodeFetchMs) && currentNodeConfig) return currentNodeConfig;
-    const res = await fetch("/mesh/node", { headers: { "Accept": "application/json" }, cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    if(!current(token))throw Error("Computer session changed; response ignored.");
-    currentNodeConfig = data;
-    // Backward-compat for older code paths
-    window.currentNodeConfig = data;
-    _state.lastNodeFetchMs = _now();
-    return data;
+    if (!current(epoch)) throw Error('Unlock TLI and check access first.');
+    if (nodeRequest) return nodeRequest.promise;
+    if (!force && nodeAvailable && _isFresh(_state.lastNodeFetchMs) && currentNodeConfig) return currentNodeConfig;
+    const request={epoch,promise:null}; nodeRequest=request;
+    request.promise=(async()=>{
+      try {
+        const data=await checkedRead('/mesh/node',request.epoch,validNode);requireCurrent(request.epoch);
+        currentNodeConfig=data;window.currentNodeConfig=data;nodeAvailable=true;_state.lastNodeFetchMs=_now();return data;
+      } catch(error) { if(current(request.epoch)){nodeAvailable=false;_state.lastNodeFetchMs=0;} throw error; }
+      finally {if(nodeRequest===request)nodeRequest=null;}
+    })();
+    return request.promise;
   }
-
   async function fetchDirectory({ force = false } = {}) {
-    if(locked)throw Error("Unlock TLI first.");const token=epoch;
-    if (!force && _isFresh(_state.lastDirFetchMs) && meshDirectoryCache) return meshDirectoryCache;
-    const res = await fetch("/mesh/directory", { headers: { "Accept": "application/json" }, cache: "no-store" });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    if(!current(token))throw Error("Computer session changed; response ignored.");
-    meshDirectoryCache = data;
-    // Backward-compat for older code paths
-    window.meshDirectoryCache = data;
-    _state.lastDirFetchMs = _now();
-    return data;
+    if (!current(epoch)) throw Error('Unlock TLI and check access first.');
+    if (directoryRequest) return directoryRequest.promise;
+    const request={epoch,promise:null};directoryRequest=request;
+    request.promise=(async()=>{
+      try {
+        const node=await fetchNode();requireCurrent(request.epoch);
+        if(!force&&_isFresh(_state.lastDirFetchMs)&&meshDirectoryCache&&meshDirectoryCache.this_device_id===node.node_id)return meshDirectoryCache;
+        const data=await checkedRead('/mesh/directory',request.epoch,validDirectory);requireCurrent(request.epoch);
+        if(data.this_device_id!==node.node_id)throw Error('Computer identity changed. Check saved state before continuing.');
+        meshDirectoryCache=data;window.meshDirectoryCache=data;_state.lastDirFetchMs=_now();return data;
+      } catch(error) {if(current(request.epoch))_state.lastDirFetchMs=0;throw error;}
+      finally {if(directoryRequest===request)directoryRequest=null;}
+    })();return request.promise;
   }
 
-  function getThisNode() { return currentNodeConfig || null; }
+  function getThisNode() { return current(epoch)&&nodeAvailable ? currentNodeConfig || null : null; }
 
   function getRoleLabel() {
     const n = getThisNode();
@@ -133,7 +163,7 @@ window.MeshService = (function () {
   }
 
   function getRoster() {
-    if (locked) return [];
+    if (locked || !accessReady) return [];
     const dir = meshDirectoryCache;
     const devices = Array.isArray(dir?.devices) ? dir.devices
                  : Array.isArray(dir?.nodes) ? dir.nodes
@@ -197,15 +227,15 @@ window.MeshService = (function () {
   let peers=null, peersPending=null, peersStream=null, peersTimer=null, peersDebounce=null, peersRequest=null;
   const observers=new Set(),expiryObservers=new Set();
   let expiryTimer=null,lastPublished='null';
-  function getPeers(){return locked||!peers?null:{...peers,peers:peers.peers.map(peer=>projectPeer(peer))};}
+  function getPeers(){return locked||!accessReady||!peers?null:{...peers,peers:peers.peers.map(peer=>projectPeer(peer))};}
   function publishPeers(error=null,onlyChanged=false){const value=getPeers(),signature=JSON.stringify(value);if(onlyChanged&&signature===lastPublished)return;lastPublished=signature;
     for(const observer of observers){try{observer(value,error);}catch(error){console.warn('Computer view could not update.',error);}}}
-  function tickExpiry(){if(locked||document.hidden)return;publishPeers(null,true);for(const observer of expiryObservers){try{observer();}catch(error){console.warn('Computer status could not update.',error);}}}
+  function tickExpiry(){if(locked||!accessReady||document.hidden)return;publishPeers(null,true);for(const observer of expiryObservers){try{observer();}catch(error){console.warn('Computer status could not update.',error);}}}
   function stopExpiry(){clearInterval(expiryTimer);expiryTimer=null;}
-  function startExpiry(){if(!locked&&!document.hidden&&(observers.size||expiryObservers.size)&&!expiryTimer)expiryTimer=setInterval(tickExpiry,1000);}
+  function startExpiry(){if(!locked&&accessReady&&!document.hidden&&(observers.size||expiryObservers.size)&&!expiryTimer)expiryTimer=setInterval(tickExpiry,1000);}
   function subscribeExpiry(observer){expiryObservers.add(observer);startExpiry();return()=>{expiryObservers.delete(observer);if(!observers.size&&!expiryObservers.size)stopExpiry();};}
   async function refreshPeers(){
-    if(locked||document.hidden)return getPeers();
+    if(locked||!accessReady||document.hidden)return getPeers();
     if(peersPending)return peersPending;
     const ticket=epoch,controller=new AbortController();peersRequest=controller;const timeout=setTimeout(()=>controller.abort(),10000);
     const pending=(async()=>{
@@ -218,9 +248,9 @@ window.MeshService = (function () {
     })();peersPending=pending;return pending;
   }
   function stopPeers(){peersStream?.close();peersStream=null;clearInterval(peersTimer);peersTimer=null;clearTimeout(peersDebounce);peersDebounce=null;}
-  function schedulePeers(){if(!observers.size||locked||document.hidden)return;clearTimeout(peersDebounce);peersDebounce=setTimeout(()=>refreshPeers(),180);}
+  function schedulePeers(){if(!observers.size||locked||!accessReady||document.hidden)return;clearTimeout(peersDebounce);peersDebounce=setTimeout(()=>refreshPeers(),180);}
   function startPeers(){
-    if(!observers.size||locked||document.hidden)return;
+    if(!observers.size||locked||!accessReady||document.hidden)return;
     tickExpiry();startExpiry();refreshPeers();if(!peersTimer)peersTimer=setInterval(refreshPeers,5000);
     if(!peersStream&&typeof EventSource==='function'){
       const stream=new EventSource('/mesh/presence/stream');peersStream=stream;
@@ -233,14 +263,16 @@ window.MeshService = (function () {
   document.addEventListener('visibilitychange',()=>{if(document.hidden){stopPeers();stopExpiry();}else{tickExpiry();startExpiry();startPeers();}});
   window.addEventListener('pagehide',()=>{stopPeers();stopExpiry();});
 
-  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{locked=true;epoch++;_state.lastNodeFetchMs=0;_state.lastDirFetchMs=0;
+  for(const event of ['tli-session-locked','tli-account-changed','tli-user-changed'])window.addEventListener(event,()=>{locked=true;accessReady=false;nodeAvailable=false;nodeRequest=null;directoryRequest=null;epoch++;_state.lastNodeFetchMs=0;_state.lastDirFetchMs=0;
     stopPeers();stopExpiry();peersRequest?.abort();peersRequest=null;peers=null;peersPending=null;publishPeers();
     if(typeof currentNodeConfig!=='undefined')currentNodeConfig=null;if(typeof meshDirectoryCache!=='undefined')meshDirectoryCache=null;
     window.currentNodeConfig=null;window.meshDirectoryCache=null;});
-  window.addEventListener('tli-session-unlocked',()=>{locked=false;epoch++;startExpiry();startPeers();});
+  window.addEventListener('tli-session-unlocked',()=>{locked=false;epoch++;});
+  window.addEventListener('tli-private-observation-ready',()=>{if(locked||accessReady)return;accessReady=true;startExpiry();startPeers();});
 
   return {
     fetchNode,
+    validNode, validDirectory,
     fetchDirectory,
     getThisNode,
     getRoleLabel,

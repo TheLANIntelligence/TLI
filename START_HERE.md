@@ -1,4 +1,4 @@
-# Welcome to TLI 1.4.5-beta
+# Welcome to TLI 1.4.7-beta
 
 This is the new TLI desktop experience: Ask TLI, the refreshed workspace,
 appearance themes, Files, Vault, reviewed LAN connections and small-app Builder.
@@ -12,7 +12,7 @@ checks its signature before running it. Windows may ask you to approve that
 Microsoft installer. Setup never restarts your computer automatically.
 
 1. Extract the **entire** Windows ZIP into a new, writable folder, such as
-   `Documents\TLI-1.4.5-beta`. Do not run it inside the ZIP or copy it over an old TLI.
+   `Documents\TLI-1.4.7-beta`. Do not run it inside the ZIP or copy it over an old TLI.
 2. Open **TLI.exe** and choose **Set up TLI** when prompted. Progress stays in
    the TLI window. Internet is only needed to download missing Python or TLI
    components; a prepared installation can start offline. Your browser opens
@@ -42,7 +42,7 @@ Closing the browser leaves the Windows host running; use Local Setup to stop it.
 Requires **macOS 14 or newer on Apple Silicon**, or **macOS 13.3 or newer on
 Intel**, for the bundled inference runtime.
 
-1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.5-beta`.
+1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.7-beta`.
 2. Install Python 3.10 or newer from
    [python.org](https://www.python.org/downloads/macos/) if it is not already present.
    For a python.org installation, run **Install Certificates.command** from the
@@ -51,7 +51,9 @@ Intel**, for the bundled inference runtime.
    and says Apple could not verify it, follow the steps below. First setup
    prepares this installation's Python environment. Internet is only needed
    if missing components must be downloaded.
-4. Keep Terminal open while TLI is running. Press **Control+C** there to stop TLI.
+4. After startup completes, you may close Terminal. TLI runs in the background;
+   use **Quit TLI** inside the local app to stop it. Closing the browser does not
+   stop the host. Older releases that run in Terminal still use **Control+C**.
 
 The Mac package contains Apple Silicon and Intel inference runtimes and chooses
 the matching architecture. It is a Python-based ZIP installation, not a notarized
@@ -135,10 +137,11 @@ If an updated Windows installation is missing from Installed apps, open its
 published ZIPs do not gain this feature automatically; see the
 [removal guide](docs/TLI_UNINSTALL.md) before removing an older installation.
 
-On **macOS / Linux**, stop TLI in its Terminal with **Control+C**, back up files
+On **macOS / Linux**, use **Quit TLI** inside the local app (or **Control+C** for
+an older foreground launch), back up files
 you need, then move only the extracted TLI folder to Trash. Python, LM Studio,
 externally stored models, browser data and the separate phone Companion are
 not removed with the desktop folder.
 
 Release notes, checksums and support:
-[TLI 1.4.5-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.5-beta).
+[TLI 1.4.7-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.7-beta).

@@ -162,6 +162,7 @@ SKIP_ROOT_FILES: set[str] = {
 
 # Only reviewed, public guides ship. Other documentation stays developer-only.
 PUBLIC_GUIDES = {"TLI_SHARED_WORKSPACE.md", "TLI_COMPUTER_CONNECTION_REQUESTS.md", "TLI_SEAMLESS_CONNECTIONS.md", "SSE_SCHEMA.md",
+                "TLI_TASK_AGENT.md", "TLI_SONOS.md", "TLI_HOST_VOICE.md", "TLI_BLUETOOTH.md",
                 "HOST_START.md", "TLI_HOST_START.md", "TLI_SMART_HUB_REFINEMENT.md",
                 "TLI_CONNECTED_WORKFLOWS.md", "TLI_SIMPLIFICATION_RELEASE.md",
                 "TLI_SIMPLIFICATION_ACCEPTANCE.md", "TLI_SIDEBAR_DIRECT_ACCESS.md",

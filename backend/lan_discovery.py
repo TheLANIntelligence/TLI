@@ -175,8 +175,15 @@ def _upsert_peer(peer_id,peer_name,ip,port,ai_advertisement=None,endpoint_origin
             observed['capabilities']=['inference_v1']
         if origin:
             observed['origin']=origin
-        if ai_advertisement is not None:
-            observed.update(ai_healthy=ai_advertisement.get('ai_healthy') is True,has_ai=ai_advertisement.get('has_ai') is True)
+        if isinstance(ai_advertisement, dict):
+            unobserved = ai_advertisement.get('model_state') == 'unobserved'
+            for key in ('ai_healthy', 'has_ai'):
+                value = ai_advertisement.get(key)
+                observed[key] = value if type(value) is bool and not unobserved else None
+            if unobserved:
+                observed['model_state'] = 'unobserved'
+            else:
+                observed.pop('model_state', None)
         existing['discovery']=observed
         if not existing.get('peer_trust'):
             display=peer_name if existing.get('status','pending')=='pending' else existing.get('display_name') or peer_name

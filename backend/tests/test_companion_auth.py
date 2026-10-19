@@ -5,6 +5,7 @@ import base64
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -261,7 +262,9 @@ def test_cross_site_pairing_and_invalid_platform_rejected(phone):
 
 def test_shared_private_resources_and_stream_identity(phone, monkeypatch):
     _, device = pair(phone)
-    monkeypatch.setattr(S, "load_conversations", lambda: {"owned": {"id": "owned", "user_id": "alice", "title": "Desktop chat", "messages": [{"role": "user", "content": "hello"}]}, "foreign": {"id": "foreign", "user_id": "bob", "title": "Private", "messages": []}})
+    history = Path(S.DATA_DIR) / "conversations.json"
+    monkeypatch.setattr(S, "CONVERSATIONS_FILE", str(history))
+    history.write_text(json.dumps({"owned": {"id": "owned", "user_id": "alice", "title": "Desktop chat", "messages": [{"role": "user", "content": "hello"}]}, "foreign": {"id": "foreign", "user_id": "bob", "title": "Private", "messages": []}}), encoding="utf-8")
     assert phone.get("/api/ai/conversations/owned", headers=bearer(device)).status_code == 200
     assert phone.get("/api/ai/conversations/foreign", headers=bearer(device)).status_code == 404
     assert phone.get("/api/ai/conversations", headers=bearer(device)).json() == phone.get("/api/ai/conversations", headers=cookie()).json()

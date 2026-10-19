@@ -1,16 +1,40 @@
 // ---------- Mesh / Nodes panel ----------
-let meshUiEpoch = 0, meshUiLocked = false;
+let meshUiEpoch = 0, meshUiLocked = document.getElementById('tli-lock-screen')?.getAttribute?.('aria-hidden') === 'false';
+let meshUiReady = !meshUiLocked, meshNodeAvailable = false, meshNodeRefresh = null;
 const meshEscape = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const meshUiCurrent = token => !meshUiLocked && token === meshUiEpoch && !document.hidden;
-window.addEventListener('tli-session-locked', () => {
-  meshUiLocked = true; meshUiEpoch++;
+const meshUiCurrent = token => !meshUiLocked && meshUiReady && token === meshUiEpoch && !document.hidden;
+function setMeshNodeControls(available) {
+  meshNodeAvailable = available;
+  for (const id of ['mesh-become-host-btn','mesh-join-host-address','mesh-join-btn','mesh-node-diagnostics-btn']) {
+    const node=document.getElementById(id);if(node)node.disabled=!available;
+  }
+}
+function clearMeshNodeView() {
+  for(const id of ['mesh-node-id','mesh-node-name','mesh-node-role','mesh-node-join-mode','mesh-node-host-address','mesh-node-created','mesh-node-last-seen']) {
+    const node=document.getElementById(id);if(node)node.textContent='—';
+  }
+  const summary=document.getElementById('mesh-node-summary');if(summary)summary.textContent='Computer information needs a fresh access check.';
+  setMeshNodeControls(false);
+}
+for (const event of ['tli-session-locked','tli-account-changed','tli-user-changed']) window.addEventListener(event, () => {
+  meshUiLocked = true; meshUiReady = false; meshUiEpoch++; meshNodeRefresh = null;
   if (meshJoinPollTimer) clearTimeout(meshJoinPollTimer);
   meshJoinPollTimer = null; meshDirectoryCache = null;
   if (typeof currentNodeConfig !== 'undefined') currentNodeConfig = null;
+  window.currentNodeConfig=null;window.meshDirectoryCache=null;
   const list = document.getElementById('mesh-directory-list'); if (list) list.replaceChildren();
-  updateMeshJoinStatus('Unlock TLI to view this connection.');
+  const trust = document.getElementById('tli-peer-trust-list'); if (trust) trust.replaceChildren();
+  clearMeshNodeView();
+  updateMeshJoinStatus('Unlock TLI and check access to view this connection.');
 });
 window.addEventListener('tli-session-unlocked', () => { meshUiLocked = false; meshUiEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => {
+  if(meshUiLocked||meshUiReady)return;meshUiReady=true;
+  // MeshService registers after this module; let every readiness listener run.
+  Promise.resolve().then(()=>refreshMeshNodeAndMaybeDirectory());
+});
+setMeshNodeControls(false);
+if(meshUiLocked)clearMeshNodeView();
 window.addEventListener('pagehide', () => { meshUiEpoch++; if (meshJoinPollTimer) clearTimeout(meshJoinPollTimer); meshJoinPollTimer = null; });
 
 
@@ -237,7 +261,7 @@ function renderMeshDirectory(directory) {
 
       const selfTag = isSelf
         ? '<span class="mesh-pill">This node</span>'
-        : "";
+        : inferenceOnly ? '<span class="mesh-pill">Compute only</span>' : "";
 
       // Multi-node launcher + Agent buttons
       const launchButtons = [];
@@ -328,100 +352,43 @@ function renderMeshDirectory(directory) {
 
 
 async function refreshMeshDirectory() {
-  if (meshUiLocked || document.hidden) return false;
-  const epoch = meshUiEpoch;
-  const statusEl = $("mesh-directory-status");
-  if (statusEl) {
-    statusEl.textContent = "Loading directory…";
-  }
-
+  if (!meshUiCurrent(meshUiEpoch)) return false;
+  const epoch=meshUiEpoch,statusEl=$('mesh-directory-status');
+  if(statusEl)statusEl.textContent='Loading directory…';
   try {
-    const res = await fetch("/mesh/directory");
-    if (res.status === 401 || !meshUiCurrent(epoch)) return false;
-    if (!res.ok) {
-      throw new Error("HTTP " + res.status);
-    }
-
-    if (res.status === 401) return false;
-    const data = await res.json();
-    if (!meshUiCurrent(epoch)) return false;
-
-    // ✅ Cache for multi-node tools
-    // NOTE: No "let" — we use the global declaration already at the top of the file
-    meshDirectoryCache = data;
-
-    // Expect shape: { host: {...}, devices: [...] }
-    renderMeshDirectory(data);
-
-    debugLog("mesh", "info", "Loaded mesh directory");
-    return true;
-  } catch (err) {
-    if (!meshUiCurrent(epoch) || /401/.test(String(err.message))) return false;
-    console.error("Mesh directory fetch failed:", err);
-
-    if (statusEl) {
-      statusEl.textContent =
-        "Computer directory unavailable. Previous entries, if any, are retained; their observation times still apply.";
-    }
-
+    if(!window.MeshService)throw Error('Computer reader is unavailable.');
+    const data=await window.MeshService.fetchDirectory({force:true});
+    if(!meshUiCurrent(epoch))return false;
+    meshDirectoryCache=data;window.meshDirectoryCache=data;renderMeshDirectory(data);
+    debugLog('mesh','info','Loaded mesh directory');return true;
+  } catch(error) {
+    if(!meshUiCurrent(epoch))return false;
+    if(statusEl)statusEl.textContent='Computer directory unavailable. Previous entries, if any, are retained; their observation times still apply.';
     return false;
   }
 }
 
-
 async function refreshMeshNodeAndMaybeDirectory() {
-  if (meshUiLocked || document.hidden) return false;
-  const epoch = meshUiEpoch;
-  try {
-    // Prefer MeshService so every module shares the same caches
-    let data;
-    if (window.MeshService) data = await window.MeshService.fetchNode({ force: true });
-    else {
-      const response = await fetch('/mesh/node');
-      if (!response.ok) throw new Error('HTTP ' + response.status);
-      data = await response.json();
-    }
-    if (!meshUiCurrent(epoch)) return false;
-    currentNodeConfig = data;
-    window.currentNodeConfig = data;
-    renderMeshNode(data);
-
-    // Try to refresh directory even on non-host (best-effort) so header + Chat can reflect presence
-    let dir = null;
+  if (!meshUiCurrent(meshUiEpoch)) return false;
+  if(meshNodeRefresh)return meshNodeRefresh.promise;
+  const request={epoch:meshUiEpoch,promise:null};meshNodeRefresh=request;
+  request.promise=(async()=>{
     try {
-      if (window.MeshService) dir = await window.MeshService.fetchDirectory({ force: true });
-      else {
-        const dres = await fetch("/mesh/directory");
-        if (dres.ok) dir = await dres.json();
-      }
-    } catch {}
-
-    if (!meshUiCurrent(epoch)) return false;
-    if (dir) {
-      meshDirectoryCache = dir;
-      window.meshDirectoryCache = dir;
-    }
-
-    if (dir) renderMeshDirectory(dir);
-    else if (await refreshMeshDirectory() === false) return false;
-
-    // Sync context tags everywhere
-    try { syncMeshContextTags(); } catch {}
-    return true;
-  } catch (err) {
-    if (!meshUiCurrent(epoch) || /401/.test(String(err.message))) return false;
-    console.error("Mesh node fetch failed:", err);
-    // Preserve the last reported identity; failure does not mean unconfigured.
-    setInlineStatus(
-      "mesh-directory-status",
-      "Computer info unavailable: " + err.message + ". Previous information, if any, is retained.",
-      "error"
-    );
-    showToast("Mesh node unreachable.", "error");
-    // This refresh is also called by timers and navigation without await.
-    // Return failure explicitly instead of leaking an unhandled rejection.
-    return false;
-  }
+      if(!window.MeshService)throw Error('Computer reader is unavailable.');
+      const data=await window.MeshService.fetchNode({force:true});
+      if(!meshUiCurrent(request.epoch))return false;
+      currentNodeConfig=data;window.currentNodeConfig=data;setMeshNodeControls(true);renderMeshNode(data);
+      if(await refreshMeshDirectory()===false)return false;
+      if(!meshUiCurrent(request.epoch))return false;
+      try{syncMeshContextTags();}catch{}
+      return true;
+    } catch(error) {
+      if(!meshUiCurrent(request.epoch))return false;
+      setMeshNodeControls(false);
+      setInlineStatus('mesh-directory-status','Computer info unavailable. Previous information, if any, is retained; check saved state before continuing.','error');
+      return false;
+    } finally {if(meshNodeRefresh===request)meshNodeRefresh=null;}
+  })();return request.promise;
 }
 
 async function performMeshPing(deviceId) {
@@ -859,6 +826,9 @@ function setupMeshPanel() {
 // Refresh node + directory (host + directory panel)
 if (refreshBtn) {
   refreshBtn.addEventListener("click", () => {
+    if(meshUiLocked)return;
+    if(!meshUiReady)return window.EventInterpreter?.retry?.();
+    const epoch=meshUiEpoch;
     withButtonBusy(refreshBtn, "🔄 Refreshing…", async () => {
       setInlineStatus(
         "mesh-directory-status",
@@ -866,7 +836,7 @@ if (refreshBtn) {
         "muted"
       );
       try {
-        if (await refreshMeshNodeAndMaybeDirectory() === false) return;
+        if (await refreshMeshNodeAndMaybeDirectory() === false || !meshUiCurrent(epoch)) return;
         setInlineStatus(
           "mesh-directory-status",
           "Mesh directory up to date.",
@@ -889,6 +859,7 @@ if (refreshBtn) {
   // Join host flow (member-side)
   if (joinBtn && hostInput) {
     joinBtn.addEventListener("click", () => {
+      if(!meshUiCurrent(meshUiEpoch)||!meshNodeAvailable)return;
       const addr = hostInput.value || "";
       requestMeshJoin(addr);
     });
@@ -897,6 +868,7 @@ if (refreshBtn) {
   // Become host
   if (becomeHostBtn) {
     becomeHostBtn.addEventListener("click", async () => {
+      if(!meshUiCurrent(meshUiEpoch)||!meshNodeAvailable)return;
       const ok = confirm("Enable Mesh Coordinator on this node?\n\nThis node will accept join requests from peers and relay agent heartbeats. Only one node on your LAN should be the coordinator.");
       if (!ok) return;
       try {
@@ -1095,6 +1067,42 @@ if (multiRunBtn && multiSelect) {
 
 
 // One-time wiring for USB buttons → Files / Scripts panels
+let deviceObservationEpoch = 0, deviceObservationReady = true, deviceObservationLocked = false;
+const deviceObservationReads = {usb: 0, raw: 0, lan: 0};
+const deviceObservationCurrent = token => deviceObservationReady && !deviceObservationLocked &&
+  token.epoch === deviceObservationEpoch && token.read === deviceObservationReads[token.kind];
+function clearDeviceObservations() {
+  deviceObservationEpoch++; deviceObservationReady = false;
+  for (const id of ['devices-usb-list', 'devices-usb-other', 'devices-usb-raw-pre', 'devices-usb-summary',
+    'lan-devices-interfaces', 'lan-devices-arp', 'lan-devices-summary']) {
+    const node = $(id); if (node) node.textContent = '';
+  }
+  const raw = $('devices-usb-raw'); if (raw) { raw.open = false; raw.style.display = 'none'; }
+  for (const id of ['devices-usb-status', 'lan-devices-status', 'devices-usb-list']) {
+    const node = $(id); if (node) node.textContent = 'Unlock TLI or check access from the Dashboard, then refresh devices.';
+  }
+}
+window.addEventListener('tli-session-locked', () => { deviceObservationLocked = true; clearDeviceObservations(); });
+window.addEventListener('tli-session-unlocked', () => { deviceObservationLocked = false; deviceObservationEpoch++; });
+window.addEventListener('tli-private-observation-ready', () => { if (!deviceObservationLocked) deviceObservationReady = true; });
+window.addEventListener('pagehide', clearDeviceObservations);
+function beginDeviceObservation(kind) {
+  if (!deviceObservationReady || deviceObservationLocked) return null;
+  return {kind, epoch: deviceObservationEpoch, read: ++deviceObservationReads[kind]};
+}
+async function deviceObservationResponse(response, token) {
+  if (!deviceObservationCurrent(token)) throw Error('Device access changed.');
+  const data = await response.json().catch(() => null);
+  if (!deviceObservationCurrent(token)) throw Error('Device access changed.');
+  if (response.status === 401 || response.status === 403) {
+    window.dispatchEvent(new CustomEvent('tli-session-locked'));
+    if (typeof showToast === 'function') showToast(typeof data?.detail === 'string' ? data.detail : 'Unlock TLI to view devices.', 'warn');
+    throw Error('Device access changed.');
+  }
+  if (!response.ok) throw Error(typeof data?.detail === 'string' ? data.detail : 'HTTP ' + response.status);
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw Error('Device response unreadable.');
+  return data;
+}
 let usbActionsWired = false;
 const usbEscape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1106,6 +1114,8 @@ function ensureUsbActionHandlers() {
   listEl.addEventListener("click", async (event) => {
     const btn = event.target.closest("[data-usb-path][data-usb-action]");
     if (!btn) return;
+    const token = {kind: 'usb', epoch: Number(btn.getAttribute('data-usb-epoch')), read: Number(btn.getAttribute('data-usb-read'))};
+    if (!deviceObservationCurrent(token) || btn.disabled) return;
 
     const path   = btn.getAttribute("data-usb-path") || "";
     const action = btn.getAttribute("data-usb-action") || "";
@@ -1126,16 +1136,18 @@ function ensureUsbActionHandlers() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: aiPath }),
         });
-        const d = await r.json();
-        if (d.ok) {
+        const d = await deviceObservationResponse(r, token);
+        if (!deviceObservationCurrent(token)) return;
+        if (d.ok === true) {
           if (btn) { btn.textContent = "Set ✓"; btn.classList.add("active"); }
           // Open model manager so user can see + confirm the save destination
           if (typeof window.tliOpenModelManagerModal === "function") {
             setTimeout(() => {
+              if (!deviceObservationCurrent(token)) return;
               window.tliOpenModelManagerModal();
               // Refresh the save-to picker inside the now-open modal
               if (typeof window._tliRefreshSaveToPicker === "function") {
-                setTimeout(window._tliRefreshSaveToPicker, 150);
+                setTimeout(() => { if (deviceObservationCurrent(token)) window._tliRefreshSaveToPicker(); }, 150);
               }
             }, 300);
           }
@@ -1144,7 +1156,8 @@ function ensureUsbActionHandlers() {
           if (btn) { btn.disabled = false; btn.textContent = origText; }
         }
       } catch (e) {
-        if (typeof showToast === "function") showToast("Error setting storage location.", "error");
+        if (!deviceObservationCurrent(token)) return;
+        if (typeof showToast === "function") showToast("Storage change unconfirmed: " + e.message + ". Check the current destination before trying again.", "error");
         if (btn) { btn.disabled = false; btn.textContent = origText; }
       }
     } else if (action === "scripts-backup") {
@@ -1174,14 +1187,16 @@ async function refreshUsbDevices() {
   const listEl  = $("devices-usb-list");
   const otherEl = $("devices-usb-other");
   if (!listEl) return;
+  const token = beginDeviceObservation('usb'); if (!token) return;
 
   listEl.innerHTML = '<p class="small-meta">Scanning…</p>';
 
   try {
-    const res = await fetch("/devices/usb");
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
-    const devices = data.devices || [];
+    const res = await fetch("/devices/usb", {cache: 'no-store', signal: AbortSignal.timeout(20000)});
+    const data = await deviceObservationResponse(res, token);
+    if (!deviceObservationCurrent(token)) return;
+    if (!Array.isArray(data.devices)) throw Error('USB inventory unreadable.');
+    const devices = data.devices;
 
     // Every device returned is already a USB storage drive with a mount path.
     // Filter defensively in case older backend sends mixed results.
@@ -1217,11 +1232,11 @@ async function refreshUsbDevices() {
             <div class="usb-drive-path">${usbEscape(label)}</div>
           </div>
           <div class="usb-drive-actions">
-            <button class="pill-btn ghost btn-xs" data-usb-path="${usbEscape(mountPath)}" data-usb-action="files-target">Organize files</button>
-            <button class="pill-btn ghost btn-xs" data-usb-path="${usbEscape(mountPath)}" data-usb-action="space-target">Review space</button>
+            <button class="pill-btn ghost btn-xs" data-usb-epoch="${token.epoch}" data-usb-read="${token.read}" data-usb-path="${usbEscape(mountPath)}" data-usb-action="files-target">Organize files</button>
+            <button class="pill-btn ghost btn-xs" data-usb-epoch="${token.epoch}" data-usb-read="${token.read}" data-usb-path="${usbEscape(mountPath)}" data-usb-action="space-target">Review space</button>
             <details class="usb-advanced"><summary>More drive tools</summary>
-            <button class="pill-btn ghost btn-xs" data-usb-path="${usbEscape(mountPath)}" data-usb-action="scripts-backup">Backup script</button>
-            <button class="pill-btn ghost btn-xs" data-usb-path="${usbEscape(mountPath)}" data-usb-action="ai-storage">Use for AI models</button></details>
+            <button class="pill-btn ghost btn-xs" data-usb-epoch="${token.epoch}" data-usb-read="${token.read}" data-usb-path="${usbEscape(mountPath)}" data-usb-action="scripts-backup">Backup script</button>
+            <button class="pill-btn ghost btn-xs" data-usb-epoch="${token.epoch}" data-usb-read="${token.read}" data-usb-path="${usbEscape(mountPath)}" data-usb-action="ai-storage">Use for AI models</button></details>
           </div>
         </div>`;
     }).join("");
@@ -1239,8 +1254,10 @@ async function refreshUsbDevices() {
     ensureUsbActionHandlers();
     debugLog("info", `GET /devices/usb OK: ${drives.length} drives, ${otherCount} other`);
   } catch (err) {
+    if (!deviceObservationCurrent(token)) return;
     console.error("USB scan failed:", err);
-    listEl.innerHTML = `<div class="usb-error">Error scanning USB devices: ${err.message}</div>`;
+    listEl.textContent = "Error scanning USB devices: " + err.message;
+    if (otherEl) { otherEl.textContent = ''; otherEl.style.display = 'none'; }
     debugLog("error", "GET /devices/usb failed: " + err.message);
   }
 }
@@ -1255,6 +1272,7 @@ async function loadUsbRawOutput() {
     console.warn("devices-usb-raw-pre element not found.");
     return;
   }
+  const token = beginDeviceObservation('raw'); if (!token) return;
 
   if (statusEl)  statusEl.textContent  = "Loading raw output…";
   if (summaryEl) summaryEl.textContent =
@@ -1263,13 +1281,10 @@ async function loadUsbRawOutput() {
   rawPre.textContent = "Loading raw OS USB output…";
 
   try {
-    const res = await fetch("/devices/usb/raw");
-    if (!res.ok) {
-      const txt = await res.text().catch(() => "");
-      throw new Error(txt || ("HTTP " + res.status));
-    }
-
-    const data = await res.json();
+    const res = await fetch("/devices/usb/raw", {cache: 'no-store', signal: AbortSignal.timeout(95000)});
+    const data = await deviceObservationResponse(res, token);
+    if (!deviceObservationCurrent(token)) return;
+    if (data.ok === false) throw Error('The host could not read raw USB output.');
     const text = data.raw || JSON.stringify(data, null, 2);
 
     rawPre.textContent = text;
@@ -1282,6 +1297,7 @@ async function loadUsbRawOutput() {
 
     debugLog("info", "GET /devices/usb/raw OK");
   } catch (err) {
+    if (!deviceObservationCurrent(token)) return;
     console.error("USB raw output failed:", err);
     rawPre.textContent =
       "Error loading raw USB output: " + err.message;
@@ -1300,6 +1316,7 @@ async function refreshLanDevices() {
     console.warn("LAN devices panel elements missing; skipping scan.");
     return;
   }
+  const token = beginDeviceObservation('lan'); if (!token) return;
 
   // Loading state
   statusEl.textContent  = "Scanning…";
@@ -1308,11 +1325,10 @@ async function refreshLanDevices() {
   arpBox.innerHTML      = "";
 
   try {
-    const res = await fetch("/devices/scan");
-    if (!res.ok) {
-      throw new Error("HTTP " + res.status);
-    }
-    const data = await res.json();
+    const res = await fetch("/devices/scan", {cache: 'no-store', signal: AbortSignal.timeout(20000)});
+    const data = await deviceObservationResponse(res, token);
+    if (!deviceObservationCurrent(token)) return;
+    if (!Array.isArray(data.arp_table)) throw Error('LAN observations unreadable.');
 
     const interfaces = data.interfaces || {};
     const arpTable   = data.arp_table || [];
@@ -1331,10 +1347,10 @@ async function refreshLanDevices() {
         const card = document.createElement("div");
         card.className = "lan-device-card";
         card.innerHTML = `
-          <div class="lan-device-title">${name}${ip ? ` — ${ip}` : ""}</div>
+          <div class="lan-device-title">${usbEscape(name)}${ip ? ` — ${usbEscape(ip)}` : ""}</div>
           <div class="lan-device-meta">
-            ${desc ? `<span>${desc}</span>` : ""}
-            ${gw ? `<span>Gateway: ${gw}</span>` : ""}
+            ${desc ? `<span>${usbEscape(desc)}</span>` : ""}
+            ${gw ? `<span>Gateway: ${usbEscape(gw)}</span>` : ""}
           </div>
         `;
         frag.appendChild(card);
@@ -1386,17 +1402,17 @@ arpTable.forEach((entry) => {
     }
 
     const label = parts.join(" · ");
-    meshLine = `<span>TLI node: ${label}</span>`;
+    meshLine = `<span>TLI node: ${usbEscape(label)}</span>`;
   }
 
   const card = document.createElement("div");
   card.className = cardClass;
   card.innerHTML = `
-    <div class="lan-device-title">${ip}${iface ? ` · ${iface}` : ""}</div>
+    <div class="lan-device-title">${usbEscape(ip)}${iface ? ` · ${usbEscape(iface)}` : ""}</div>
     <div class="lan-device-meta">
-      <span>MAC: ${mac}</span>
-      ${vendor ? `<span>${vendor}</span>` : ""}
-      ${src ? `<span>${src}</span>` : ""}
+      <span>MAC: ${usbEscape(mac)}</span>
+      ${vendor ? `<span>${usbEscape(vendor)}</span>` : ""}
+      ${src ? `<span>${usbEscape(src)}</span>` : ""}
       ${meshLine}
     </div>
   `;
@@ -1424,11 +1440,11 @@ arpTable.forEach((entry) => {
 
     debugLog("info", "GET /devices/scan OK.");
   } catch (err) {
+    if (!deviceObservationCurrent(token)) return;
     console.error("LAN devices scan failed:", err);
     statusEl.textContent  = "Scan failed";
     summaryEl.textContent = "Could not scan LAN devices.";
-    ifaceBox.innerHTML =
-      `<p class="usb-error">Error scanning LAN devices: ${err.message}</p>`;
+    ifaceBox.textContent = "Error scanning LAN devices: " + err.message;
     arpBox.innerHTML = "";
     debugLog("error", "GET /devices/scan failed: " + err.message);
   }

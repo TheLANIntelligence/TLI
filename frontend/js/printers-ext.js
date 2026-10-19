@@ -1,9 +1,29 @@
+(() => {
+  let printerEpoch = 0, printerLocked = false, printerRecoveryStarted = false;
+  const clearPrinterViews = [];
+  const printerCurrent = epoch => !printerLocked && epoch === printerEpoch;
+  function clearPrinters() { printerEpoch++; printerRecoveryStarted = false; clearPrinterViews.forEach(clear => clear()); }
+  function printerAccessFailure(response, data, epoch) {
+    if (response.status !== 401 && response.status !== 403) return false;
+    if (printerCurrent(epoch)) clearPrinters();
+    // Preserve only the public recovery explanation after the global 401
+    // interceptor has cleared this request's private session.
+    if (!printerRecoveryStarted && epoch + 1 === printerEpoch) {
+      const message = typeof data?.detail === 'string' ? data.detail : 'Unlock TLI and retry the printer request.';
+      for (const id of ['devices-printers-summary', 'wia-summary']) {
+        const node = document.getElementById(id); if (node) node.textContent = message;
+      }
+    }
+    return true;
+  }
+  window.addEventListener('tli-session-locked', () => { printerLocked = true; clearPrinters(); });
+  window.addEventListener('tli-session-unlocked', () => { printerLocked = false; });
 /* === TLI PRINTERS MODULE v2 (locked) === */
 /* === TLI PRINTERS MODULE v2 (locked) ===
    Restores: Refresh list + WIA devices + OS open + Test Print
    Backend endpoints expected:
      GET /api/printers
-     GET|POST /api/printers/open_add
+     POST /api/printers/open_add
      GET /api/scan/wia/devices
      POST /api/printers/test_print
      POST /api/printers/fix  (optional)
@@ -105,12 +125,16 @@
 
   // ---- WIA: devices dropdown ----
   window.refreshWiaDevices = async function(){
+    if (printerLocked) return;
+    printerRecoveryStarted = true;
+    const epoch = printerEpoch;
     pill("wia-status", "Loading…", "pill-muted");
     setText("wia-summary", "Loading WIA devices…");
     const sel = document.getElementById("wia-device");
     if (!sel) return;
     try{
       const { r, j } = await fetchJson("/api/scan/wia/devices");
+      if (printerAccessFailure(r, j, epoch) || !printerCurrent(epoch)) return;
       sel.innerHTML = "";
       if (!r.ok || !j || j.ok !== true){
         sel.innerHTML = `<option value="">No WIA devices</option>`;
@@ -134,11 +158,16 @@
       pill("wia-status", "WIA ready", "pill-ok");
       setText("wia-summary", `Found ${devs.length} device(s).`);
     }catch(e){
+      if (!printerCurrent(epoch)) return;
       sel.innerHTML = `<option value="">No WIA devices</option>`;
       pill("wia-status", "WIA error", "pill-warn");
       setText("wia-summary", String(e));
     }
   };
+  clearPrinterViews.push(() => {
+    const sel = document.getElementById('wia-device'); if (sel) { sel.innerHTML = ''; sel.value = ''; }
+    pill('wia-status', 'Unavailable', 'pill-warn'); setText('wia-summary', 'Unlock TLI, then refresh scanners.');
+  });
 
   // Ensure PDF option exists in format select
   try{
@@ -175,6 +204,13 @@
   const TAG = "TLI_PRINTERS_HPSMART_BUNDLE_V1";
 
   const STATE = { printers: [], query: "", filter: "all", sort: "default", expanded: new Set(), showVirtual: false, suppliesByName: {} };
+  clearPrinterViews.push(() => {
+    STATE.printers = []; STATE.suppliesByName = {}; STATE.expanded.clear(); STATE.query = '';
+    const search = $('tli-printers-search'); if (search) search.value = '';
+    updateRollup([]);
+    const count = $('tli-printers-count'); if (count) count.textContent = '';
+    const box = $('devices-printers-list'); if (box) { box.innerHTML = ''; box.onclick = null; }
+  });
   const STATUS_ORDER = { ready: 0, unknown: 1, offline: 2, error: 3 };
 
   function $(id) { return document.getElementById(id); }
@@ -414,6 +450,7 @@ function toastMsg(msg, kind) {
   }
 
   function render() {
+    if (printerLocked) return;
     ensureToolbar();
     setSegActive(STATE.filter);
 
@@ -553,11 +590,12 @@ function toastMsg(msg, kind) {
   }
 
 
-  async function fetchSupplies() {
+  async function fetchSupplies(epoch) {
     // Returns map: printer_name -> result object from /api/printers/supplies
     try {
       const r = await fetch("/api/printers/supplies", { cache: "no-store" });
       const j = await r.json().catch(() => null);
+      if (printerAccessFailure(r, j, epoch) || !printerCurrent(epoch)) return {};
       if (!r.ok || !j || j.ok !== true || !Array.isArray(j.results)) return {};
       const out = {};
       for (const it of j.results) {
@@ -577,13 +615,20 @@ function toastMsg(msg, kind) {
     if (original.__tli_hp_smart__) return;
 
     window.refreshPrinters = async function () {
+      if (printerLocked) return;
+      const epoch = printerEpoch;
       try { ensureToolbar(); renderLoading(); } catch {}
       let res;
       try { res = await original(); } catch (e) { console.warn(TAG, "original refresh error:", e); }
+      if (!printerCurrent(epoch)) return;
+      if (!res?.ok) { STATE.printers = []; STATE.suppliesByName = {}; updateRollup([]); renderEmpty('Printer list unavailable', 'Refresh printers when ready.'); return res; }
       try {
-        STATE.printers = await fetchPrinters();
-        STATE.suppliesByName = await fetchSupplies();
+        const supplies = await fetchSupplies(epoch);
+        if (!printerCurrent(epoch)) return;
+        STATE.printers = res.printers;
+        STATE.suppliesByName = supplies;
         render();} catch (e) {
+        if (!printerCurrent(epoch)) return;
         console.warn(TAG, "fetch/render error:", e);
         STATE.printers = [];
         updateRollup([]);
@@ -604,7 +649,7 @@ function toastMsg(msg, kind) {
    TLI_PRINTERS_FINAL_WIRING_V3
    Fixes (production-safe):
    - Removes false "Error HTTP 200" by accepting array payloads from /api/printers
-   - Keep endpoint compatibility, with GET only after a rejected POST method.
+   - Submit printer actions with POST only; never replay an uncertain action.
    - Require explicit execution confirmation; HTTP success alone is not enough.
    - Serialize duplicate requests and never retry a failed action automatically.
    ===================================================== */
@@ -625,12 +670,6 @@ function toastMsg(msg, kind) {
     if (summary) summary.textContent = msg || "";
   }
 
-  async function postThenGet(url) {
-    let r = await fetch(url, { method: "POST" });
-    if (r.status === 405 && !locked) r = await fetch(url, { method: "GET" });
-    return r;
-  }
-
   async function jsonOrNull(r) {
     const ct = (r.headers.get("content-type") || "").toLowerCase();
     if (!ct.includes("application/json")) return null;
@@ -646,6 +685,9 @@ function toastMsg(msg, kind) {
 
   // Authoritative refresh: fetch /api/printers and render cards with existing renderPrinters()
   window.refreshPrinters = async function () {
+    if (printerLocked) return;
+    printerRecoveryStarted = true;
+    const epoch = printerEpoch;
     try {
       try {
         if (typeof pill === "function") pill("devices-printers-status", "Scanning…", "pill-muted");
@@ -655,7 +697,8 @@ function toastMsg(msg, kind) {
       const r = await fetch("/api/printers", { cache: "no-store" });
       const j = await jsonOrNull(r) ?? await r.json().catch(() => null); // try json; tolerate failures
 
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (printerAccessFailure(r, j, epoch) || !printerCurrent(epoch)) return;
+      if (!r.ok) throw new Error(j?.detail || j?.message || `HTTP ${r.status}`);
 
       const norm = normalizePrintersPayload(j);
       if (!norm.ok) {
@@ -667,10 +710,9 @@ function toastMsg(msg, kind) {
       const msg = `Found ${printers.length} printer(s).`;
       setStatus(true, msg);
 
-      if (typeof renderPrinters === "function") {
-        renderPrinters(printers, { total: printers.length });
-      }
+      return {ok: true, printers};
     } catch (e) {
+      if (!printerCurrent(epoch)) return;
       setStatus(false, String(e));
       console.warn(TAG, "refreshPrinters failed:", e);
     }
@@ -679,35 +721,36 @@ function toastMsg(msg, kind) {
   // One owner for printer mutations. Existing data-action bindings call these
   // named handlers; button text in other panels is never an execution trigger.
   const pending = new Map();
-  let privateEpoch = 0, locked = false;
-  window.addEventListener("tli-session-locked", () => { privateEpoch++; locked = true; setStatus(null, "Unlock TLI to use printer controls."); });
-  window.addEventListener("tli-session-unlocked", () => { locked = false; });
+  clearPrinterViews.push(() => { setStatus(false, 'Unlock TLI, then refresh printers before using printer controls.'); });
   const actions = {
     openAddPrinter: {url: "/api/printers/open_add", progress: "Opening printer settings on the TLI host…", success: "Printer settings opened on the TLI host.", failure: "Could not open printer settings.", extra: '[data-manage], #tli-rollup-manage'},
     testPrint: {url: "/api/printers/test_print", progress: "Submitting a test page to the host’s default printer…", success: "Test page submitted to the host’s default printer. Check the printer for physical output.", failure: "Could not submit the test page.", extra: '[data-test], #tli-rollup-test'},
     openScan: {url: "/api/printers/open_scan", progress: "Opening the scanner app on the TLI host…", success: "Scanner app opened on the TLI host. No document was scanned by this action.", failure: "Could not open the scanner app.", extra: ''}
   };
   function runPrinterAction(name) {
-    if (locked) return Promise.resolve({ok: false, message: "Unlock TLI before using printer controls."});
+    if (printerLocked) return Promise.resolve({ok: false, message: "Unlock TLI before using printer controls."});
     if (pending.has(name)) return pending.get(name);
-    const action = actions[name], epoch = privateEpoch;
+    printerRecoveryStarted = true;
+    const action = actions[name], epoch = printerEpoch;
     const selectors = [`#panel-devices [data-action="${name}"]`];
     if (action.extra) selectors.push(...action.extra.split(',').map(selector => '#panel-devices ' + selector.trim()));
     const controls = [...document.querySelectorAll(selectors.join(', '))].map(control => ({control, disabled: control.disabled}));
     controls.forEach(({control}) => { control.disabled = true; });
     setStatus(null, action.progress);
     const work = Promise.resolve().then(async () => {
-      if (locked || epoch !== privateEpoch) return {ok: false, message: "Printer request stopped before submission because TLI locked."};
+      if (!printerCurrent(epoch)) return {ok: false, message: "Printer request stopped before submission because TLI locked."};
       try {
-        const response = await postThenGet(action.url);
+        const response = await fetch(action.url, {method: 'POST'});
         const data = await jsonOrNull(response);
+        if (printerAccessFailure(response, data, epoch)) return {ok:false, message: typeof data?.detail === 'string' ? data.detail : 'Unlock TLI before retrying.'};
+        if (!printerCurrent(epoch)) return {ok:false, hidden:true};
         if (!response.ok || data?.ok !== true) throw new Error(data?.message || data?.detail || data?.error || (response.ok ? "The host did not confirm the action." : `HTTP ${response.status}`));
         const result = {...data, ok: true, message: action.success};
-        if (epoch === privateEpoch && !locked) { setStatus(true, action.success); toastMsg(action.success); }
+        if (printerCurrent(epoch)) { setStatus(true, action.success); toastMsg(action.success); }
         return result;
       } catch (error) {
         const message = action.failure + " " + error.message + " Retry explicitly when ready.";
-        if (epoch === privateEpoch && !locked) { setStatus(false, message); toastMsg(message, "warning"); }
+        if (printerCurrent(epoch)) { setStatus(false, message); toastMsg(message, "warning"); }
         return {ok: false, message};
       }
     }).finally(() => {
@@ -724,4 +767,5 @@ function toastMsg(msg, kind) {
 
   // Auto-refresh once when loaded — delayed to avoid competing with startup activity
   try { window.setTimeout(() => { try { window.refreshPrinters(); } catch {} }, 8000); } catch {}
+})();
 })();
