@@ -14,6 +14,7 @@ from fastapi import HTTPException
 import tli_state as S
 from action_results import driver_succeeded
 from companion_auth import resolve_user
+from browser_authority import direct_request_address
 from device_resolution import normalize, resolve
 from intelligence import devices
 from license_gate import gate
@@ -157,6 +158,7 @@ def answer(request, text: str) -> str | None:
     if not action and not listing and not any(re.fullmatch(pattern, query) for pattern in _SHELLY_STATUS_PATTERNS):
         return None
     try:
+        direct_request_address(request)
         user = resolve_user(request)
         _license()
         rows = _registry()

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from typing import Any, TypeVar
-from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request, Response
 from starlette.responses import JSONResponse
@@ -61,17 +60,9 @@ def _native_credential(request: Request) -> str:
     if any(key in ("cookie", "origin", "forwarded") or key.startswith(("sec-fetch-", "x-forwarded-", "x-tli-peer-"))
            for key in request.headers):
         raise HTTPException(403, "Use the direct native Companion connection.")
-    try:
-        hosts = request.headers.getlist("host")
-        if (len(hosts) != 1 or not hosts[0] or hosts[0].endswith(":")
-                or any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in "/\\?#@," for char in hosts[0])):
-            raise ValueError()
-        address = urlsplit(str(request.base_url))
-        if (address.scheme != "https" or not address.hostname or address.username or address.password
-                or address.port is not None and not 1 <= address.port <= 65535):
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(403, "Use the paired Companion HTTPS address.") from None
+    address = browser_authority.direct_request_address(request)
+    if address.scheme != "https":
+        raise HTTPException(403, "Use the paired Companion HTTPS address.")
     return parts[1]
 
 

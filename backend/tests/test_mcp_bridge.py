@@ -75,7 +75,7 @@ def test_only_exact_endpoint_delegates_mcp_bearer(api,path):
     assert api.get(path,headers={'Authorization':'Bearer '+g['credential']}).status_code==401
     assert api.get(path).status_code==200
 
-@pytest.mark.parametrize('header,value',[('Host','evil.example:9876'),('Host','192.168.4.1:9876'),('Origin','https://evil.example'),('Origin','null'),('X-Forwarded-For','127.0.0.1'),('Forwarded','for=127.0.0.1')])
+@pytest.mark.parametrize('header,value',[('Host','evil.example:9876'),('Host','192.168.4.1:9876'),('Host','127.0.0.1:99999'),('Host','127.0.0.1:invalid'),('Origin','https://evil.example'),('Origin','null'),('X-Forwarded-For','127.0.0.1'),('Forwarded','for=127.0.0.1')])
 def test_dns_rebinding_origin_and_proxy_headers_rejected(api,header,value):
     g=enabled(api);assert wire(api,g,headers={header:value}).status_code==403
 

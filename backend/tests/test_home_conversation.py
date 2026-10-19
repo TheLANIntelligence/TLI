@@ -36,7 +36,7 @@ def house(monkeypatch):
     monkeypatch.setattr(device_commands, "_running", set())
     monkeypatch.setattr(device_commands, "_requests", {})
     request = Request({"type": "http", "method": "POST", "path": "/ai/chat", "scheme": "https",
-                       "server": ("testserver", 443), "headers": [(b"cookie", b"tli_session=browser-session")]})
+                       "server": ("testserver", 443), "headers": [(b"host", b"testserver"), (b"cookie", b"tli_session=browser-session")]})
     return SimpleNamespace(rows=rows, calls=calls, driver=driver, request=request,
                            ask=lambda text: home.answer(request, text))
 
@@ -224,4 +224,24 @@ def test_registered_capability_driver_supports_non_shelly_device(house, monkeypa
 def test_command_uses_same_owner_and_lock_as_device_panel(house, monkeypatch):
     device_commands._running.add(("shelly", "192.0.2.10", 1))
     assert "Another command" in house.ask("turn on lamp")
+    assert house.calls == []
+
+
+
+@pytest.mark.parametrize("hosts", [[], [""], ["testserver", "testserver"],
+    ["testserver:99999"], ["testserver:bad"], ["testserver:"],
+    ["testserver/private"], ["user@testserver"], ["testserver,other"]])
+@pytest.mark.parametrize("text", ["turn on lamp", "check lamp", "list my smart devices"])
+def test_bridge_home_rejects_raw_host_before_auth_registry_or_device_work(house, monkeypatch, hosts, text):
+    from starlette.datastructures import URL
+    request = Request({**house.request.scope, "headers": [
+        (b"host", host.encode("ascii")) for host in hosts] +
+        [(b"cookie", b"tli_session=browser-session")]})
+    # Model framework normalization explicitly so this regression also runs on
+    # older Starlette versions used by existing installations.
+    request._url = URL("https://testserver/ai/chat")
+    request._base_url = URL("https://testserver/")
+    monkeypatch.setattr(home, "resolve_user", lambda request: pytest.fail("Malformed Host reached credentials"))
+    monkeypatch.setattr(home, "_registry", lambda: pytest.fail("Malformed Host read the registry"))
+    assert "valid Host header" in home.answer(request, text)
     assert house.calls == []

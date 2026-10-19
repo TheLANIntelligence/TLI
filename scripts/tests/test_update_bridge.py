@@ -87,6 +87,57 @@ def test_frontend_bridge_changes_only_version_bytes_and_matching_asset_reference
             bridge.patch_app_reference(invalid, app)
 
 
+def test_bridge_home_admission_keeps_old_services_and_checks_host_first():
+    old = '''from companion_auth import resolve_user
+def answer(request):
+    try:
+        user = resolve_user(request)
+        return old_service(user)
+    except Exception:
+        return "denied"
+'''
+    result = bridge.patch_home_host(old)
+    assert result.replace("from browser_authority import direct_request_address\n", "").replace(
+        "        direct_request_address(request)\n", "") == old
+    ast.parse(result)
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_home_host(result)
+    fixture = 'request = {"headers": [(b"cookie", b"tli_session=browser-session")]}\n'
+    tests = bridge.patch_home_test(fixture)
+    ast.parse(tests)
+    assert '(b"host", b"testserver")' in tests
+    assert "request._base_url" in tests and "Malformed Host read the registry" in tests
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_home_test(tests)
+
+
+def test_bridge_companion_patch_retains_guidance_and_uses_only_existing_helper():
+    old = '''from routers.system_routes import require_session
+def pairing_landing(request):
+    if request.url.scheme != "https" or not _supported_host(request.url.hostname or ""):
+        return "keep original guidance"
+def redeem(req: RedeemRequest, request: Request, response: Response):
+    if request.url.scheme != "https" or not S.TLS_ENABLED:
+        return "keep TLS gate"
+    if not _supported_host(request.url.hostname or ""):
+        return "keep host gate"
+    certificate = _certificate(request.url.hostname)
+def upgrade(request):
+    if request.url.scheme != "https" or not S.TLS_ENABLED or not _supported_host(request.url.hostname or ""):
+        return "keep upgrade gate"
+    certificate = _certificate(request.url.hostname)
+'''
+    patched = bridge.patch_companion_host(old)
+    ast.parse(patched)
+    assert patched.count("address = direct_request_address(request)") == 3
+    assert patched.count("_certificate(address.hostname)") == 2
+    assert "keep original guidance" in patched and "request.url.hostname" not in patched
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_companion_host(patched)
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_companion_host(old.replace("require_session", "changed_import"))
+
+
 def archive(path, platform, *, extra=None, corrupt=False, app_version=bridge.BRIDGE_VERSION):
     paths = {"backend/main.py", "backend/tli_state.py", "backend/requirements.txt",
              "backend/update_install.py", "frontend/index.html", "frontend/app.js", *bridge.OVERLAY}

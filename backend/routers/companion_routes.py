@@ -21,6 +21,7 @@ import tls_cert
 import startup_config
 from intelligence import devices, models
 from routers.system_routes import require_session
+from browser_authority import direct_request_address
 
 router = APIRouter(prefix="/api/companion/v1", tags=["companion"])
 _NETWORKS = [ipaddress.ip_network(s) for s in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")]
@@ -45,7 +46,8 @@ def pairing_landing(request: Request):
     # This fixed public page cannot read invitations or redeem a credential.
     # Browsers never send URL fragments to this route. The local script removes
     # the fragment from history before presenting the explicit native opener.
-    if request.url.scheme != "https" or not _supported_host(request.url.hostname or ""):
+    address = direct_request_address(request)
+    if address.scheme != "https" or not _supported_host(address.hostname):
         raise HTTPException(403, "Open the private HTTPS pairing link shown on your TLI desktop.")
     request.state.tli_companion_pair_landing = True
     policy = ("default-src 'none'; script-src 'self'; style-src 'self'; "
@@ -291,14 +293,15 @@ def create_pairing(req: PairingRequest, request: Request, response: Response, ow
 
 @router.post("/pairings/redeem")
 def redeem(req: RedeemRequest, request: Request, response: Response):
+    address = direct_request_address(request)
     # A malformed Authorization must not get a special anonymous pairing bypass.
     if request.headers.get("authorization") is not None:
         auth.resolve_user(request)
-    if request.url.scheme != "https" or not S.TLS_ENABLED:
+    if address.scheme != "https" or not S.TLS_ENABLED:
         raise HTTPException(403, "Redeem pairing codes over HTTPS only.")
-    if not _supported_host(request.url.hostname or ""):
+    if not _supported_host(address.hostname):
         raise HTTPException(403, "Use the reviewed LAN address in the pairing code.")
-    certificate = _certificate(request.url.hostname)
+    certificate = _certificate(address.hostname)
     origin = _pairing_origin(request)
     result = auth.redeem_pairing(req.token, origin, certificate["fingerprint"], req.name, req.platform)
     response.headers["Cache-Control"] = "no-store"
@@ -313,12 +316,13 @@ class UpgradeRequest(BaseModel):
 
 @router.post("/pairings/upgrade")
 def upgrade_pairing(req: UpgradeRequest, request: Request, response: Response, owner: str = Depends(require_session)):
-    if request.url.scheme != "https" or not S.TLS_ENABLED or not _supported_host(request.url.hostname or ""):
+    address = direct_request_address(request)
+    if address.scheme != "https" or not S.TLS_ENABLED or not _supported_host(address.hostname):
         raise HTTPException(403, "Use the reviewed secure LAN address.")
     authorization = request.headers.get("authorization", "").split()
     if len(authorization) != 2 or authorization[0].lower() != "bearer":
         raise HTTPException(403, "Upgrade from the phone's existing paired credential.")
-    certificate = _certificate(request.url.hostname)
+    certificate = _certificate(address.hostname)
     auth.upgrade_pairing(req.token, authorization[1], req.device_id, owner, _pairing_origin(request), certificate["fingerprint"])
     response.headers["Cache-Control"] = "no-store"
     return {"device_id": req.device_id, "owner_id": owner, "node": _node(), "credential_retained": True}

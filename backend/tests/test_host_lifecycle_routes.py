@@ -62,6 +62,7 @@ def test_readiness_requires_local_origin_but_survives_locked_session(local):
 @pytest.mark.parametrize("headers", [
     {"Origin": "http://evil.example"}, {"Origin": "null"},
     {"Host": "evil.example:8000"}, {"Host": "localhost:9999"},
+    {"Host": "localhost:99999"}, {"Host": "localhost:invalid"},
     {"Forwarded": "for=127.0.0.1"}, {"X-Forwarded-For": "127.0.0.1"},
     {"Authorization": "Bearer tlic_test"}, {"Sec-Fetch-Site": "cross-site"},
 ])

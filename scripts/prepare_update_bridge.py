@@ -1,7 +1,8 @@
 """Assemble the one-time 1.4.5 -> 1.4.6 updater bridge from reviewed source.
 
 Only an explicit overlay is copied. The published main app changes only its
-version; requirements and unrelated UI remain at the 1.4.5 baseline. Assembly never reads runtime state or
+version; narrow authority fixes retain old service interfaces, and requirements
+and unrelated UI remain at the 1.4.5 baseline. Assembly never reads runtime state or
 prepared binaries. The exact published updater validates source inventory and
 final ZIP contents without executing any packaged code.
 """
@@ -32,6 +33,7 @@ OVERLAY = (
     "backend/auto_update.py", "backend/update_install.py", "backend/update_handoff.py",
     "backend/host_lifecycle.py", "backend/host_launcher.py",
     "backend/browser_authority.py", "backend/private_client_authority.py", "backend/companion_auth.py",
+    "backend/mcp_bridge.py", "backend/peer_pairing.py",
     "backend/routers/update_routes.py", "backend/routers/host_control_routes.py",
     "frontend/js/tli-update.js", "frontend/update-workspace.css",
     "TLI_Start.sh", "docs/TLI_UPDATES.md",
@@ -47,6 +49,9 @@ VERIFICATION_FILES = (
     "backend/tests/test_update_install.py", "backend/tests/test_update_handoff.py",
     "backend/tests/test_host_lifecycle.py", "backend/tests/test_host_lifecycle_routes.py",
     "backend/tests/test_host_launcher.py", "frontend/tests/update-workflow.test.cjs",
+    "backend/tests/test_browser_authority.py", "backend/tests/test_private_client_authority.py",
+    "backend/tests/test_mcp_bridge.py", "backend/tests/test_pairing_direct_host.py",
+    "docs/RELEASE_1.4.6_BETA.md",
 )
 VOID = frozenset("area base br col embed hr img input link meta param source track wbr".split())
 
@@ -191,6 +196,72 @@ def patch_state(text):
                         "def revoke_all_sessions() -> None:\n    global _session_revocation_epoch\n    _session_revocation_epoch = object()\n")
 
 
+def patch_home_host(text):
+    """Validate raw Host while retaining the published device service interfaces."""
+    original_import = "from companion_auth import resolve_user\n"
+    original_admission = "    try:\n        user = resolve_user(request)\n"
+    if text.count(original_import) != 1 or text.count(original_admission) != 1:
+        raise BridgeError("Published home authority anchors changed")
+    return text.replace(original_import, original_import + "from browser_authority import direct_request_address\n").replace(
+        original_admission, "    try:\n        direct_request_address(request)\n        user = resolve_user(request)\n")
+
+
+def patch_home_test(text):
+    """Keep the old service fixtures and exercise malformed Host before any work."""
+    original = '"headers": [(b"cookie", b"tli_session=browser-session")]'
+    if text.count(original) != 1 or "test_bridge_home_rejects_raw_host" in text:
+        raise BridgeError("Published home request fixture changed")
+    text = text.replace(original, '"headers": [(b"host", b"testserver"), (b"cookie", b"tli_session=browser-session")]')
+    return text + '''
+
+
+@pytest.mark.parametrize("hosts", [[], [""], ["testserver", "testserver"],
+    ["testserver:99999"], ["testserver:bad"], ["testserver:"],
+    ["testserver/private"], ["user@testserver"], ["testserver,other"]])
+@pytest.mark.parametrize("text", ["turn on lamp", "check lamp", "list my smart devices"])
+def test_bridge_home_rejects_raw_host_before_auth_registry_or_device_work(house, monkeypatch, hosts, text):
+    from starlette.datastructures import URL
+    request = Request({**house.request.scope, "headers": [
+        (b"host", host.encode("ascii")) for host in hosts] +
+        [(b"cookie", b"tli_session=browser-session")]})
+    # Model framework normalization explicitly so this regression also runs on
+    # older Starlette versions used by existing installations.
+    request._url = URL("https://testserver/ai/chat")
+    request._base_url = URL("https://testserver/")
+    monkeypatch.setattr(home, "resolve_user", lambda request: pytest.fail("Malformed Host reached credentials"))
+    monkeypatch.setattr(home, "_registry", lambda: pytest.fail("Malformed Host read the registry"))
+    assert "valid Host header" in home.answer(request, text)
+    assert house.calls == []
+'''
+
+
+def patch_companion_host(text):
+    """Backport only raw Host admission; preserve the published phone behavior."""
+    edits = (
+        ("from routers.system_routes import require_session\n",
+         "from routers.system_routes import require_session\nfrom browser_authority import direct_request_address\n", 1),
+        ('    if request.url.scheme != "https" or not _supported_host(request.url.hostname or ""):',
+         '    address = direct_request_address(request)\n    if address.scheme != "https" or not _supported_host(address.hostname):', 1),
+        ('def redeem(req: RedeemRequest, request: Request, response: Response):\n',
+         'def redeem(req: RedeemRequest, request: Request, response: Response):\n    address = direct_request_address(request)\n', 1),
+        ('    if request.url.scheme != "https" or not S.TLS_ENABLED:',
+         '    if address.scheme != "https" or not S.TLS_ENABLED:', 1),
+        ('    if not _supported_host(request.url.hostname or ""):',
+         '    if not _supported_host(address.hostname):', 1),
+        ('    certificate = _certificate(request.url.hostname)',
+         '    certificate = _certificate(address.hostname)', 2),
+        ('    if request.url.scheme != "https" or not S.TLS_ENABLED or not _supported_host(request.url.hostname or ""):',
+         '    address = direct_request_address(request)\n    if address.scheme != "https" or not S.TLS_ENABLED or not _supported_host(address.hostname):', 1),
+    )
+    if "direct_request_address" in text:
+        raise BridgeError("Published Companion Host admission was already patched")
+    for original, replacement, count in edits:
+        if text.count(original) != count:
+            raise BridgeError("Published Companion Host admission anchors changed")
+        text = text.replace(original, replacement)
+    return text
+
+
 def compatibility_inventory(target, source):
     """Inspect reviewed source paths; prune runtime/private trees before walking."""
     policy = published_policy(source)
@@ -248,11 +319,19 @@ def prepare(source, target):
     outputs = {**inputs, "frontend/index.html": new_index.encode("utf-8"),
                "frontend/app.js": new_app,
                "backend/tli_state.py": patch_state(old_state).encode("utf-8")}
+    for name, patch in (("backend/home_conversation.py", patch_home_host),
+                        ("backend/routers/companion_routes.py", patch_companion_host),
+                        ("backend/tests/test_home_conversation.py", patch_home_test)):
+        outputs[name] = patch(_git(source, "show", BASE_COMMIT + ":" + name).decode("utf-8")).encode("utf-8")
     workflow_name = ".github/workflows/desktop-packages.yml"
     workflow = outputs[workflow_name].decode("utf-8").replace("\r\n", "\n")
     workflow = workflow.replace("1.4.7-beta", BRIDGE_VERSION)
     if "1.4.7-beta" in workflow or "TLI_1.4.6-beta_" not in workflow:
         raise BridgeError("Expected finalized full-release package workflow")
+    host_tests = "backend/tests/test_node_pairing.py -q"
+    if workflow.count(host_tests) != 1:
+        raise BridgeError("Expected the raw Host and Node isolation verification step")
+    workflow = workflow.replace(host_tests, "backend/tests/test_node_pairing.py backend/tests/test_home_conversation.py -q")
     marker = "      - name: Verify extracted installation and native runtime\n"
     if workflow.count(marker) != 1:
         raise BridgeError("Cannot identify bridge compatibility validation position")
