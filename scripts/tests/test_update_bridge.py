@@ -71,9 +71,25 @@ def revoke_all_sessions() -> None:
         bridge.patch_state(result)
 
 
-def archive(path, platform, *, extra=None, corrupt=False):
+def test_frontend_bridge_changes_only_version_bytes_and_matching_asset_reference():
+    old = b'// keep CRLF and product behavior\r\nconst TLI_VERSION        = "1.4.5-beta";\r\nrunExistingApp();\r\n'
+    app = bridge.patch_frontend_version(old)
+    assert app == old.replace(b'"1.4.5-beta"', b'"1.4.6-beta"')
+    index = '<p>keep UI</p><script src="/app.js?v=old"></script><script src="/other.js?v=keep"></script>'
+    patched = bridge.patch_app_reference(index, app)
+    assert patched == index.replace('/app.js?v=old', '/app.js?v=' + bridge.digest(app)[:12])
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_frontend_version(app)
+    with pytest.raises(bridge.BridgeError):
+        bridge.patch_frontend_version(old + old)
+    for invalid in ('<p>missing app</p>', index + index):
+        with pytest.raises(bridge.BridgeError):
+            bridge.patch_app_reference(invalid, app)
+
+
+def archive(path, platform, *, extra=None, corrupt=False, app_version=bridge.BRIDGE_VERSION):
     paths = {"backend/main.py", "backend/tli_state.py", "backend/requirements.txt",
-             "backend/update_install.py", "frontend/index.html", *bridge.OVERLAY}
+             "backend/update_install.py", "frontend/index.html", "frontend/app.js", *bridge.OVERLAY}
     paths.update({"TLI_Update.bat", "TLI_Update.ps1"} if platform == "windows"
                  else {"TLI_Update.command", "TLI_Update.sh"})
     if extra:
@@ -82,6 +98,10 @@ def archive(path, platform, *, extra=None, corrupt=False):
     with zipfile.ZipFile(path, "w") as output:
         for name in sorted(paths):
             data = b"synthetic source only\n"
+            if name == "backend/tli_state.py":
+                data = f'TLI_VERSION = "{bridge.BRIDGE_VERSION}"\n'.encode()
+            elif name == "frontend/app.js":
+                data = f'const TLI_VERSION = "{app_version}";\n'.encode()
             info = zipfile.ZipInfo(name)
             info.create_system = 3
             info.external_attr = (stat.S_IFREG | 0o644) << 16
@@ -110,3 +130,10 @@ def test_tampered_historical_policy_is_not_executed(tmp_path):
     path.write_text("raise AssertionError('must not execute')")
     with pytest.raises(bridge.BridgeError, match="validator fixture changed"):
         bridge.published_policy(tmp_path)
+
+
+def test_valid_inventory_cannot_hide_an_old_frontend_version(tmp_path):
+    path = tmp_path / "bridge.zip"
+    archive(path, "windows", app_version="1.4.5-beta")
+    with pytest.raises(bridge.BridgeError, match="source version.*frontend/app.js"):
+        bridge.verify_archive(ROOT, path, "windows")
