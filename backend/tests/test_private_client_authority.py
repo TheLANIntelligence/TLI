@@ -76,7 +76,7 @@ def test_supported_client_keeps_its_original_owner(access, mode, pin):
     ("native-fetch", 403), ("native-forwarded", 403), ("native-x-forwarded", 403),
     ("native-peer", 403), ("empty-authorization", 401), ("bad-bearer", 401),
     ("host-start", 401), ("revoked-native", 401), ("duplicate-authorization", 401),
-    ("duplicate-host", 403), ("bad-host-port", 403), ("bad-host-path", 403),
+    ("duplicate-host", 403), ("bad-host-port", 403), ("bad-host-high-port", 403), ("bad-host-path", 403),
 ])
 def test_denial_precedes_private_work(access, case, status):
     mode, origin, peer = "native", ORIGIN, "192.0.2.10"
@@ -120,6 +120,8 @@ def test_denial_precedes_private_work(access, case, status):
         S.PIN_CONFIG_FILE.write_text('{"enabled":false}')  # An invalid explicit credential never downgrades.
     elif case == "bad-host-port":
         headers["Host"] = "tli.example.test:0"
+    elif case == "bad-host-high-port":
+        headers["Host"] = "tli.example.test:99999"
     elif case == "bad-host-path":
         headers["Host"] = "tli.example.test/private"
     client = access.connect(mode, headers=headers, origin=origin, peer=peer)

@@ -33,7 +33,7 @@ def web(monkeypatch, tmp_path):
     for client in clients: client.close()
 
 
-@pytest.mark.parametrize("mode", ["http", "public-host", "hostname", "public-source", "link-local", "loopback", "cross-origin", "cross-site", "missing-origin", "forwarded", "bearer", "peer", "duplicate-host"])
+@pytest.mark.parametrize("mode", ["http", "public-host", "hostname", "public-source", "link-local", "loopback", "cross-origin", "cross-site", "missing-origin", "forwarded", "bearer", "peer", "duplicate-host", "malformed-host"])
 def test_guest_transport_denies_before_service_or_body(web, monkeypatch, mode):
     client, _ = web.browser(scheme="http" if mode == "http" else "https",
         host="8.8.8.8" if mode == "public-host" else "tli.example" if mode == "hostname" else "192.168.1.2:8000",
@@ -45,6 +45,7 @@ def test_guest_transport_denies_before_service_or_body(web, monkeypatch, mode):
     if mode == "bearer": client.headers["Authorization"] = "Bearer PRIVATE-PHONE-TOKEN"
     if mode == "peer": client.headers["X-TLI-Peer-Signature"] = "PRIVATE-PEER"
     if mode == "duplicate-host": client.headers.update([("Host", "192.168.1.2:8000"), ("Host", "192.168.1.2:8000")])
+    if mode == "malformed-host": client.headers["Host"] = "192.168.1.2:99999"
     action = Mock(); monkeypatch.setattr(routes.service, "filtering", action)
     response = client.post("/api/pihole-access/filtering", content=b"PRIVATE-INVALID", headers={"Content-Type": "application/json"})
     assert response.status_code == 403 and "PRIVATE" not in response.text

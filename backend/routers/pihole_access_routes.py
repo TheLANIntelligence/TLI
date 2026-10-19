@@ -4,12 +4,11 @@ import ipaddress
 import json
 from pathlib import Path
 import time
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
-from browser_authority import browser_control_access
+from browser_authority import browser_control_access, direct_request_address
 from homelab_overview import captured_check
 from routers.pihole_routes import _PrivateRoute
 import pihole_self_service as service
@@ -39,7 +38,7 @@ def guest_transport(request):
         if request.headers.getlist("authorization") or any(key.startswith("x-tli-peer-") or key == "forwarded" or key.startswith("x-forwarded-") for key in request.headers):
             raise HTTPException(403, "Use the device controls directly on this TLI host over private HTTPS.")
         try:
-            parsed = urlsplit(str(request.base_url))
+            parsed = direct_request_address(request)
             if (len(request.headers.getlist("host")) != 1 or parsed.scheme != "https" or parsed.username or parsed.password
                     or parsed.port is not None and not 1 <= parsed.port <= 65535 or not request.client):
                 raise ValueError()

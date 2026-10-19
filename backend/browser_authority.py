@@ -23,6 +23,28 @@ def _is_loopback(value: str | None) -> bool:
         return False
 
 
+def direct_request_address(request: Request):
+    """Validate the original Host before framework URL normalization/fallback."""
+    try:
+        hosts = request.headers.getlist("host")
+        if len(hosts) != 1:
+            raise ValueError()
+        host = hosts[0]
+        scheme = request.scope.get("scheme", "http")
+        if (not host or len(host) > 1024 or host.endswith(":")
+                or scheme not in ("http", "https")
+                or any(char.isspace() or ord(char) < 32 or ord(char) == 127 or char in "/\\?#@," for char in host)):
+            raise ValueError()
+        address = urlsplit(scheme + "://" + host)
+        if (not address.hostname or address.username or address.password
+                or address.port is not None and not 1 <= address.port <= 65535):
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(403, "Use the TLI address with one valid Host header.",
+                            headers={"Cache-Control": "no-store"}) from None
+    return address
+
+
 def browser_request_local(request: Request, response: Response) -> bool:
     """Check direct browser transport/origin, including before PIN login."""
     response.headers["Cache-Control"] = "no-store"
@@ -33,14 +55,7 @@ def browser_request_local(request: Request, response: Response) -> bool:
     if any(key == "forwarded" or key.startswith("x-forwarded-") for key in request.headers):
         raise HTTPException(403, "Use a direct TLI connection; proxy access to these controls is unsupported.")
 
-    try:
-        address = urlsplit(str(request.base_url))
-        if (len(request.headers.getlist("host")) != 1 or not address.hostname
-                or address.username or address.password or address.scheme not in ("http", "https")
-                or address.port is not None and not 1 <= address.port <= 65535):
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(403, "Use the TLI browser at its configured address.") from None
+    address = direct_request_address(request)
 
     origins = request.headers.getlist("origin")
     expected = str(request.base_url).rstrip("/")

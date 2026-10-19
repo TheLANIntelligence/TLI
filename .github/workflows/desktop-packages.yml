@@ -41,6 +41,8 @@ jobs:
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
       - name: Test update discovery, installation, authority and recovery
         run: python -m pytest backend/tests/test_update_tls.py backend/tests/test_update_preparation.py backend/tests/test_automatic_update_checks.py backend/tests/test_update_settings.py backend/tests/test_update_install.py backend/tests/test_update_handoff.py backend/tests/test_host_lifecycle.py backend/tests/test_host_lifecycle_routes.py -q
+      - name: Test direct host addresses and Node isolation
+        run: python -m pytest backend/tests/test_browser_authority.py backend/tests/test_private_client_authority.py backend/tests/test_mcp_bridge.py backend/tests/test_pairing_direct_host.py backend/tests/test_node_cli.py backend/tests/test_node_pairing.py -q -o faulthandler_timeout=120
       - name: Test the public Mac installer
         run: python -m unittest scripts.tests.test_macos_installation scripts.tests.test_macos_installer_download
       - name: Prepare hash-verified inference runtime

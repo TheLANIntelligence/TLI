@@ -3,8 +3,9 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
+from starlette.datastructures import URL
 
 import browser_authority as authority
 import tli_state as S
@@ -49,6 +50,35 @@ def test_direct_browser_access_retains_local_and_secure_pin_use(controls, base, 
         assert response.headers["cache-control"] == "no-store"
         assert client.get("/control").status_code == 200  # GET fetch may omit Origin.
     assert controls.effect.call_count == 2
+
+
+@pytest.mark.parametrize("hosts", [
+    [], ["localhost", "localhost"], [""], ["localhost:0"], ["localhost:99999"],
+    ["localhost:-1"], ["localhost:invalid"], ["localhost:"], ["[::1]:99999"],
+    ["[invalid]:8000"], ["localhost/private"], ["user@localhost"], ["localhost?private"],
+    ["localhost#private"], ["localhost\\private"], ["localhost,other"], [" localhost"],
+    ["localhost\t"], ["localhost\x00"], ["localhost\x7f"], ["a" * 1025],
+])
+def test_original_host_is_rejected_even_if_framework_url_falls_back(hosts):
+    request = Request({"type": "http", "scheme": "http", "path": "/control", "root_path": "",
+        "query_string": b"", "server": ("localhost", 8000), "client": ("127.0.0.1", 1234),
+        "headers": [(b"host", value.encode("latin-1")) for value in hosts]})
+    # Starlette 1.9 normalizes an invalid Host to scope.server. Authority must
+    # remain tied to the raw header even when a valid derived URL is cached.
+    request._base_url = URL("http://localhost:8000/")
+    with pytest.raises(HTTPException) as error:
+        authority.direct_request_address(request)
+    assert error.value.status_code == 403
+    assert error.value.headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("host", ["localhost:0", "localhost:99999", "localhost:invalid", "localhost:", "localhost/private"])
+def test_bad_raw_host_cannot_become_open_loopback_through_url_fallback(controls, host):
+    controls.pin["enabled"] = False
+    with TestClient(controls.app, base_url="http://localhost:8000", client=("127.0.0.1", 1234)) as client:
+        response = client.post("/control", headers={"Host": host, "Origin": "http://localhost:8000"})
+    assert response.status_code == 403
+    controls.effect.assert_not_called()
 
 
 @pytest.mark.parametrize("case", [

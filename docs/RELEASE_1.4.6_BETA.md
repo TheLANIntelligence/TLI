@@ -3,6 +3,8 @@
 This compatibility release gives existing 1.4.5-beta installations the new
 in-app updater. It retains the previous product features and package format so
 the installed 1.4.5 validator can download and verify it.
+It also validates the original host-address header before framework URL
+normalization when admitting local controls and supported paired clients.
 
 Open **Settings → Software Updates → Check for updates → Download update**.
 Once the package is ready, open its folder, finish active work and stop the

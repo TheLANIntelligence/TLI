@@ -17,6 +17,8 @@ and publishes the latest desktop improvements.
   apply a trial.
 - The release includes the latest saved-data, session lifecycle, chat, Builder,
   device-tool and interface fixes from the current desktop source.
+- Direct host-address checks reject malformed headers before web-framework URL
+  normalization, including with fresh dependency installations.
 
 ## Existing installations
 

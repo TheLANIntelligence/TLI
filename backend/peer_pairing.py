@@ -74,6 +74,9 @@ def browser_owner(request: Request):
     """A peer/Companion credential or anonymous LAN client cannot approve trust."""
     if _NODE_PAIRING is not None:
         _fail(403, "pairing_console_required", "Approve this Node connection in its local terminal.")
+    # Keep browser authentication imports outside the compute-only Node path.
+    from browser_authority import direct_request_address
+    address = direct_request_address(request)
     if request.headers.get("authorization") is not None or any(k.startswith("x-tli-peer-") for k in request.headers):
         _fail(403, "pairing_browser_required", "Connect computers from the unlocked TLI browser on this computer.")
     expected = str(request.base_url).rstrip("/")
@@ -84,7 +87,7 @@ def browser_owner(request: Request):
         return S.get_session_user_id(token)
     try:
         loopback = ipaddress.ip_address(request.client.host).is_loopback
-        local_host = request.url.hostname == "localhost" or ipaddress.ip_address(request.url.hostname).is_loopback
+        local_host = address.hostname == "localhost" or ipaddress.ip_address(address.hostname).is_loopback
     except (ValueError, AttributeError):
         loopback, local_host = False, False
     pin_enabled = S.load_pin_config()["enabled"]

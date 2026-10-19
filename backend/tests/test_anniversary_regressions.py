@@ -89,23 +89,36 @@ def test_memory_encryption_and_existing_json_formats_roundtrip(tmp_path, monkeyp
 
 
 def test_previous_actions_reader_can_read_current_files(tmp_path, monkeypatch):
-    """Exercise the committed reader against current writer output (no migration)."""
-    import subprocess
+    """Exercise the pinned previous file reader, independently of current HEAD."""
+    import hashlib
     import types
     from routers import actions_engine as actions
-    repo = Path(__file__).resolve().parents[2]
-    source = subprocess.check_output(["git", "-C", str(repo), "show", "HEAD:backend/routers/actions_engine.py"], text=True, encoding="utf-8")
+    fixture = Path(__file__).with_name("fixtures") / "actions_reader_a5f2104.py"
+    source = fixture.read_text(encoding="utf-8")
+    assert hashlib.sha256(source.encode("utf-8")).hexdigest() == "41ee5ae91da35966367922a0d24584aa0ef47d1e8b69391e0d6eaaf9ae78acdf"
     legacy = types.ModuleType("anniversary_legacy_actions")
-    exec(compile(source, "legacy_actions.py", "exec"), legacy.__dict__)
+    exec(compile(source, str(fixture), "exec"), legacy.__dict__)
     legacy.init_actions_engine(data_dir=tmp_path, shelly_registry_path=tmp_path / "shelly.json",
                                shelly_driver=None, log_debug=None)
     monkeypatch.setattr(actions, "_CTX", {**actions._CTX, "data_dir": tmp_path})
-    path = actions._paths()[0]
-    original = {"actions": [{"id": "saved", "name": "Existing action", "steps": []}], "triggers": []}
+    path, receipts_path = actions._paths()
+    original = {"actions": [{"id": "saved", "name": "Existing action", "steps": [],
+                             "enabled": False, "custom": {"note": "Keep compatible metadata"}}],
+                "triggers": [{"id": "saved-trigger", "action_id": "saved", "enabled": False}],
+                "custom": {"source": "existing installation"}}
     actions._save_json(path, original)
     before = path.read_bytes()
-    actions._append_receipt({"ts": S.now_iso(), "kind": "action_run", "ok": False,
-                             "summary": "Failed action", "results": [{"ok": False}]})
-    assert legacy.actions_list()["actions"] == original["actions"]
-    assert legacy.actions_receipts()["items"][0]["ok"] is False
+    receipts = [
+        {"ts": S.now_iso(), "kind": "action_run", "ok": False,
+         "summary": "Failed action", "results": [{"ok": False}], "custom": {"retained": True}},
+        {"ts": S.now_iso(), "kind": "action_run", "ok": True,
+         "summary": "Later saved receipt", "results": [{"ok": True}]},
+    ]
+    for receipt in receipts:
+        actions._append_receipt(receipt)
+    receipt_bytes = receipts_path.read_bytes()
+    assert legacy.actions_list() == original
+    assert legacy.actions_receipts()["items"] == receipts
+    assert legacy.actions_receipts(limit=1)["items"] == receipts[-1:]
     assert path.read_bytes() == before
+    assert receipts_path.read_bytes() == receipt_bytes

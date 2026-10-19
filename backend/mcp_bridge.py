@@ -13,7 +13,6 @@ import secrets
 import threading
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 from fastapi import HTTPException, Request
 import tli_state as S
 
@@ -39,11 +38,11 @@ def iso(value): return datetime.fromtimestamp(value, timezone.utc).isoformat().r
 
 def loopback(request: Request):
     """Both socket peer and authority must be local; proxy headers are unsupported."""
+    from browser_authority import direct_request_address
     try:
         if any(k.lower() == 'forwarded' or k.lower().startswith('x-forwarded-') for k in request.headers): raise ValueError()
         if not request.client or not ipaddress.ip_address(request.client.host).is_loopback: raise ValueError()
-        if len(request.headers.getlist('host')) != 1: raise ValueError()
-        parsed = urlsplit(str(request.base_url)); host = parsed.hostname
+        parsed = direct_request_address(request); host = parsed.hostname
         if host != 'localhost' and not ipaddress.ip_address(host).is_loopback: raise ValueError()
         if parsed.username or parsed.password or parsed.scheme not in ('http','https') or parsed.port is not None and not 1 <= parsed.port <= 65535: raise ValueError()
         origin = request.headers.get('origin')

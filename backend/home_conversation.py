@@ -8,14 +8,13 @@ from __future__ import annotations
 import math
 import re
 from datetime import datetime, timezone
-from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import HTTPException, Response
 
 import tli_state as S
 from action_results import driver_succeeded
-from browser_authority import browser_control_access
+from browser_authority import browser_control_access, direct_request_address
 from companion_auth import operation_access, resolve_user
 from device_resolution import normalize, resolve
 from intelligence import devices
@@ -58,14 +57,8 @@ def _access(request):
     if any(k in ("cookie", "origin", "forwarded") or k.startswith(("sec-fetch-", "x-forwarded-", "x-tli-peer-"))
            for k in request.headers):
         raise HTTPException(403, "Use a direct paired Companion connection or the unlocked TLI browser.")
-    try:
-        address = urlsplit(str(request.base_url))
-        if (len(request.headers.getlist("host")) != 1 or not address.hostname
-                or address.username or address.password or address.scheme != "https"
-                or address.port is not None and not 1 <= address.port <= 65535):
-            raise ValueError()
-    except ValueError:
-        raise HTTPException(403, "Use the paired Companion HTTPS address.") from None
+    if direct_request_address(request).scheme != "https":
+        raise HTTPException(403, "Use the paired Companion HTTPS address.")
     user = resolve_user(request)
     return user, operation_access(request, user)
 

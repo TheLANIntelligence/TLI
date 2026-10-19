@@ -318,7 +318,8 @@ def test_revocation_blocks_followup_effects_and_private_results(printing, monkey
     assert list(env.temporary.iterdir()) == []
 
 
-def test_scan_download_stops_between_chunks_and_cannot_use_pathsend(tmp_path):
+@pytest.mark.parametrize("spec_version", ["2.0", "2.4"])
+def test_scan_download_stops_between_chunks_and_cannot_use_pathsend(tmp_path, spec_version):
     path = tmp_path / "large.png"
     path.write_bytes(b"x" * (3 * printshop._AuthorizedScanResponse.chunk_size))
     live = [True]
@@ -333,12 +334,22 @@ def test_scan_download_stops_between_chunks_and_cannot_use_pathsend(tmp_path):
         if message["type"] == "http.response.body" and message.get("body"):
             live[0] = False
 
+    request_received = False
+
     async def receive():
-        return {"type": "http.request", "body": b""}
+        nonlocal request_received
+        if not request_received:
+            request_received = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        # A real ASGI receive waits for a disconnect after the request ends.
+        # Returning requests forever starves FileResponse's concurrent sender.
+        await asyncio.Event().wait()
+        raise AssertionError("The synthetic connection never disconnects")
 
     response = printshop._AuthorizedScanResponse(path, check=check, media_type="image/png")
     with pytest.raises(HTTPException) as error:
         asyncio.run(response({"type": "http", "method": "GET", "headers": [],
+                              "asgi": {"version": "3.0", "spec_version": spec_version},
                               "extensions": {"http.response.pathsend": {}}}, receive, send))
     assert error.value.status_code == 401
     chunks = [message["body"] for message in messages if message["type"] == "http.response.body"]
