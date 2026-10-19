@@ -5,6 +5,7 @@
   const states = ['idle', 'checking', 'up_to_date', 'available', 'downloading', 'verifying', 'preparing', 'ready', 'error'];
   const working = ['checking', 'downloading', 'verifying', 'preparing'];
   const manualURL = 'https://github.com/TheLANIntelligence/TLI/releases';
+  const installReconnectWindow = 30 * 60 * 1000, installPollLimit = 400;
   let status = null, busy = false, timer = null, refreshing = false, lastKnownVersion = '';
   const dismissedVersions = new Set();
   const releaseVersion = version => typeof version === 'string' ? version.trim().replace(/^v/i, '') : '';
@@ -235,6 +236,11 @@
   const installFresh = ticket => usable() && ticket.session === session && ticket.generation === install.generation;
   const installActive = ticket => installFresh(ticket) && dialog()?.open && !document.hidden;
   function stopInstallPoll() { clearTimeout(install.timer); install.timer = null; }
+  const installPollExpired = () => install.until > 0 && (Date.now() >= install.until || install.polls >= installPollLimit);
+  function showInstallPollExpiry() {
+    installText('Automatic connection checks have paused. TLI may still be installing or preparing dependencies; the new version is not confirmed yet. Use Check connection when ready. Do not start another TLI copy or run another update while this installation may be active. No installation request was repeated.');
+    hide('tli-update-install-manual', false);
+  }
   function installControls() {
     const restricted = !usable() || !localDesktop() || !!install.pending || document.hidden;
     if ($('tli-update-install-confirm')) {
@@ -269,6 +275,7 @@
     };
     installText(labels[command.status] || labels.uncertain);
     if (changedAddress) installText((labels[command.status] || labels.uncertain) + ' The reviewed address changed. Use Open TLI; credentials and checks are never sent to another address automatically.');
+    else if (!['failed', 'confirmed', 'mismatch'].includes(command.status) && installPollExpired()) showInstallPollExpiry();
     installControls(); render();
   }
   async function reviewInstall() {
@@ -314,18 +321,20 @@
       if ([400,401,403,404,409,410,422].includes(error.status)) { command.status = 'failed'; command.message = error.message + ' The request was rejected.'; }
     } finally {
       if (install.pending === ticket) install.pending = null;
-      if (installActive(ticket)) { showInstallCommand(); install.until = Date.now() + 120000; install.polls = 0; scheduleInstallPoll(); }
+      if (installActive(ticket)) { install.until = Date.now() + installReconnectWindow; install.polls = 0; showInstallCommand(); scheduleInstallPoll(); }
     }
   }
   function scheduleInstallPoll() {
     stopInstallPoll();
     if (!usable() || document.hidden || !dialog()?.open || !install.command || ['failed', 'confirmed', 'mismatch'].includes(install.command.status) || localURL(install.command.next_url)?.origin !== new URL(window.location.href).origin) return;
-    if (Date.now() >= install.until || install.polls >= 60) { installText('The new version is not confirmed yet. Check the connection when ready, or start TLI from its original launcher. The installation request was not repeated.'); hide('tli-update-install-manual', false); return; }
-    install.timer = setTimeout(() => checkInstallConnection(true), install.polls ? 2000 : 1000);
+    if (installPollExpired()) { showInstallPollExpiry(); return; }
+    const delay = install.polls === 0 ? 1000 : install.polls < 5 ? 2000 : 5000;
+    install.timer = setTimeout(() => checkInstallConnection(true), Math.min(delay, install.until - Date.now()));
   }
   async function checkInstallConnection(automatic = false) {
     if (!usable() || !localDesktop() || document.hidden || !dialog()?.open || install.pending) return;
     if (!install.command) return reviewInstall();
+    if (automatic && installPollExpired()) { stopInstallPoll(); showInstallPollExpiry(); return; }
     const command = install.command, ticket = {session, generation:install.generation};
     if (localURL(command.next_url)?.origin !== new URL(window.location.href).origin) { showInstallCommand(); return; }
     stopInstallPoll(); install.pending = ticket; installControls(); if (automatic) install.polls++;
@@ -388,6 +397,7 @@
       lockedInstall = Object.fromEntries(['request_id','action','instance_id','installation_id','version','next_url'].map(key => [key, install.command[key]]));
       lockedInstall.status = 'uncertain';
     }
+    if (!lockedInstall) { install.until = 0; install.polls = 0; }
     session++; revision++; locked = lock; observationReady = false; busy = false; refreshing = false;
     for (const controller of requests) controller.abort(); requests.clear();
     clearTimeout(timer); stopInstallPoll(); install.generation++; install.preview = null; install.command = null; install.pending = null;
