@@ -1,7 +1,7 @@
 """Assemble the one-time 1.4.5 -> 1.4.6 updater bridge from reviewed source.
 
-Only an explicit overlay is copied. The published main app, requirements and
-unrelated UI remain at the 1.4.5 baseline. Assembly never reads runtime state or
+Only an explicit overlay is copied. The published main app changes only its
+version; requirements and unrelated UI remain at the 1.4.5 baseline. Assembly never reads runtime state or
 prepared binaries. The exact published updater validates source inventory and
 final ZIP contents without executing any packaged code.
 """
@@ -17,6 +17,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import zipfile
 
 
 BASE_COMMIT = "b5e60445159127b2dd4098f8b8650fe59b5c484a"
@@ -40,6 +41,7 @@ VERIFICATION_FILES = (
     "scripts/tests/test_update_bridge.py",
     "scripts/tests/test_macos_installation.py",
     ".github/workflows/desktop-packages.yml",
+    "backend/tests/conftest.py",
     "backend/tests/test_update_tls.py", "backend/tests/test_update_preparation.py",
     "backend/tests/test_automatic_update_checks.py", "backend/tests/test_update_settings.py",
     "backend/tests/test_update_install.py", "backend/tests/test_update_handoff.py",
@@ -160,6 +162,21 @@ def patch_version(text):
     return text
 
 
+def patch_frontend_version(data):
+    """Keep every published app byte except its authoritative version value."""
+    original = b'const TLI_VERSION        = "1.4.5-beta";'
+    if data.count(original) != 1:
+        raise BridgeError("Expected the unchanged published frontend version assignment")
+    return data.replace(original, b'const TLI_VERSION        = "' + BRIDGE_VERSION.encode() + b'";')
+
+
+def patch_app_reference(index, app):
+    index, count = re.subn(r'(/app\.js\?v=)[^"\s]+', lambda m: m[1] + digest(app)[:12], index)
+    if count != 1:
+        raise BridgeError("Expected exactly one published main app script")
+    return index
+
+
 def patch_state(text):
     text = patch_version(text)
     original = "_active_sessions: Dict[str, Dict[str, Any]] = {}"
@@ -220,13 +237,16 @@ def prepare(source, target):
             raise BridgeError(f"Overlay is incompatible with published updater: {name}")
     old_index = _git(source, "show", BASE_COMMIT + ":frontend/index.html").decode("utf-8")
     old_state = _git(source, "show", BASE_COMMIT + ":backend/tli_state.py").decode("utf-8")
+    new_app = patch_frontend_version(_git(source, "show", BASE_COMMIT + ":frontend/app.js"))
     new_index = patch_index(old_index, latest_index.decode("utf-8"),
                             inputs["frontend/js/tli-update.js"], inputs["frontend/update-workspace.css"])
+    new_index = patch_app_reference(new_index, new_app)
     about = '<span id="about-version">v1.4.5-beta</span>'
     if new_index.count(about) != 1:
         raise BridgeError("Expected the published About-version fallback")
     new_index = new_index.replace(about, '<span id="about-version">v' + BRIDGE_VERSION + '</span>')
     outputs = {**inputs, "frontend/index.html": new_index.encode("utf-8"),
+               "frontend/app.js": new_app,
                "backend/tli_state.py": patch_state(old_state).encode("utf-8")}
     workflow_name = ".github/workflows/desktop-packages.yml"
     workflow = outputs[workflow_name].decode("utf-8").replace("\r\n", "\n")
@@ -248,6 +268,11 @@ def prepare(source, target):
     old_start = old_start.replace("On **macOS / Linux**, stop TLI in its Terminal with **Control+C**,",
                                 "On **macOS / Linux**, use **Quit TLI** inside the local app (or **Control+C** for an older foreground launch),")
     outputs["START_HERE.md"] = old_start.encode("utf-8")
+    settings_test = _git(source, "show", BASE_COMMIT + ":frontend/tests/settings-behavior.test.cjs").decode("utf-8")
+    if settings_test.count("window: {}, navigator:") != 1:
+        raise BridgeError("Expected old settings browser fixture")
+    outputs["frontend/tests/settings-behavior.test.cjs"] = settings_test.replace(
+        "window: {}, navigator:", "AbortController, window: {}, navigator:").encode("utf-8")
     old_readme = _git(source, "show", BASE_COMMIT + ":README.md").decode("utf-8")
     old_readme = old_readme.replace("1.4.5-beta", BRIDGE_VERSION)
     note = ("\n> **Updater compatibility release 1.4.6-beta.** This release preserves the 1.4.5 application "
@@ -288,6 +313,13 @@ def verify_archive(source, archive, platform):
     policy = published_policy(source)
     manifest = policy.validate_archive(Path(archive), BRIDGE_VERSION, platform)
     policy.require_full_release(manifest, platform)
+    with zipfile.ZipFile(archive) as bundle:
+        for name in ("backend/tli_state.py", "frontend/app.js"):
+            if name not in bundle.namelist():
+                raise BridgeError("Bridge is missing its versioned source: " + name)
+            version = re.search(r'\bTLI_VERSION\s*=\s*["\']([^"\']+)["\']', bundle.read(name).decode("utf-8-sig"))
+            if version is None or version[1] != BRIDGE_VERSION:
+                raise BridgeError("Bridge source version does not match: " + name)
     return {"version": manifest["version"], "platform": manifest["platform"],
             "files": len(manifest["files"]), "published_1_4_5_validation": "passed"}
 
