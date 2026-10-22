@@ -98,6 +98,17 @@ class IntelDependencyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SHA256"):
                 B.download(response.url, "0" * 64, self.root / "download")
 
+    def test_macho_own_install_name_is_not_an_external_dependency(self):
+        load = ("Load command 3\n cmd LC_ID_DYLIB\n name @rpath/_rust.abi3.so (offset 24)\n"
+                "Load command 9\n cmd LC_BUILD_VERSION\n platform 1\n minos 13.3\n")
+        deps = ("module.so:\n @rpath/_rust.abi3.so (compatibility version 0.0.0)\n"
+                " /usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n")
+        report = B.inspect_macho(load, deps, "x86_64")
+        self.assertEqual(report["install_name"], "@rpath/_rust.abi3.so")
+        self.assertEqual(report["dependencies"], ["/usr/lib/libSystem.B.dylib"])
+        with self.assertRaisesRegex(ValueError, "Non-system dylib"):
+            B.inspect_macho(load, deps + " @rpath/libcrypto.dylib (compatibility version 1.0.0)\n", "x86_64")
+
     def test_output_is_exclusive(self):
         output = B.exclusive_directory(self.root / "build")
         (output / "canary").write_bytes(b"keep")

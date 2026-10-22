@@ -166,8 +166,11 @@ def inspect_macho(load_commands: str, dependencies: str, architecture: str) -> d
     if architecture.strip() != "x86_64":
         raise ValueError("Wheel must contain only x86_64 native code")
     versions = []
+    own_ids = []
     for block in re.split(r"(?m)^Load command \d+\s*$", load_commands):
-        if re.search(r"(?m)^\s*cmd LC_BUILD_VERSION\s*$", block):
+        if re.search(r"(?m)^\s*cmd LC_ID_DYLIB\s*$", block):
+            own_ids.extend(re.findall(r"(?m)^\s*name (.+) \(offset \d+\)\s*$", block))
+        elif re.search(r"(?m)^\s*cmd LC_BUILD_VERSION\s*$", block):
             if not re.search(r"(?m)^\s*platform (?:1|MACOS)\s*$", block):
                 raise ValueError("Native module does not target macOS")
             versions.extend(re.findall(r"(?m)^\s*minos (\d+\.\d+(?:\.\d+)?)\s*$", block))
@@ -177,17 +180,24 @@ def inspect_macho(load_commands: str, dependencies: str, architecture: str) -> d
     if not versions or any(tuple(map(int, value.split("."))) > (13, 3, 0)
                            for value in versions):
         raise ValueError("Missing or too-new Mach-O deployment target")
+    if len(own_ids) > 1:
+        raise ValueError("Ambiguous Mach-O install name")
     linked = []
     for line in dependencies.splitlines()[1:]:
         dependency = line.strip().split(" (", 1)[0]
         if not dependency:
+            continue
+        # otool -L includes LC_ID_DYLIB itself. It is this module's identifier,
+        # not a library to load. Only the exact ID from otool -l is excluded.
+        if dependency in own_ids:
             continue
         if not dependency.startswith(("/usr/lib/", "/System/Library/")):
             raise ValueError("Non-system dylib dependency: " + dependency)
         linked.append(dependency)
     if not linked:
         raise ValueError("Missing Mach-O dependencies")
-    return {"architecture": "x86_64", "minimum_macos": versions, "dependencies": linked}
+    return {"architecture": "x86_64", "minimum_macos": versions, "dependencies": linked,
+            "install_name": own_ids[0] if own_ids else None}
 
 
 def audit_wheel(wheel: Path, output: Path) -> dict:

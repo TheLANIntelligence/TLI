@@ -34,6 +34,7 @@ jobs:
         run: |
           set -euo pipefail
           wheel="$(find build_work/intel-dependency/artifact -maxdepth 1 -name '*.whl')"
+          python -m pip install --dry-run --ignore-installed --only-binary=:all: --platform macosx_13_0_x86_64 --python-version 3.13 --implementation cp --abi cp313 --report build_work/intel-dependency/artifact/ventura-resolution.json "$wheel" -r backend/requirements.txt
           python -m pip install --only-binary=:all: "$wheel" -r backend/requirements.txt -r backend/requirements-test.txt
           python -m pip check
           python -m pip freeze > build_work/intel-dependency/artifact/native-requirements.txt
