@@ -681,7 +681,7 @@ if (false) (function _tliAmbientAlerts() {
   window._tliShowUpgradeModal = _showUpgradeModal;
 })();
 
-const TLI_VERSION        = "1.4.7-beta";
+const TLI_VERSION        = "1.4.8-beta";
 const DEFAULT_THEME      = "emeraldLight";
 const previousPromptsKey = "tli_previous_prompts";
 

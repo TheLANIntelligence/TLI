@@ -36,6 +36,29 @@ class IntelDependencyTests(unittest.TestCase):
             self.assertTrue(url.startswith("https://"))
             self.assertRegex(sha, r"^[0-9a-f]{64}$")
 
+    def test_app_requirements_keep_every_other_dependency_and_marker(self):
+        kept = '# cryptography comment\nhttpx>=0.28,<0.29\ncryptography-example==1\nuvicorn[standard]>=0.29 ; sys_platform == "darwin"\n'
+        removed = ('cryptography @ https://example.invalid/exact.whl#sha256=abc ; sys_platform == "darwin"\n'
+                   'cryptography>=50.0.2 ; \\\n    sys_platform != "darwin"\n')
+        source = self.root / "requirements.txt"
+        source.write_text(kept + removed, encoding="utf-8", newline="")
+        original = source.read_bytes()
+        output = self.root / "app.txt"
+        B.application_requirements(source, output)
+        self.assertEqual(output.read_text(), kept)
+        self.assertEqual(source.read_bytes(), original)
+        with self.assertRaises(FileExistsError):
+            B.application_requirements(source, output)
+
+    def test_app_requirements_refuse_missing_crypto_or_incomplete_block(self):
+        source = self.root / "requirements.txt"
+        for text in ["httpx>=0.28\n", "cryptography @ \\\n"]:
+            with self.subTest(text=text):
+                source.write_text(text)
+                with self.assertRaises(ValueError):
+                    B.application_requirements(source, self.root / "app.txt")
+                self.assertFalse((self.root / "app.txt").exists())
+
     def test_valid_archive_is_extracted_without_parent_escape(self):
         archive = self.archive([("source/file.py", tarfile.REGTYPE)])
         result = B.extract_source(archive, self.root / "out", "source")

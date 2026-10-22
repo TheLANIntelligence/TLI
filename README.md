@@ -11,7 +11,7 @@ Your selected AI provider and each integration determine where a request goes;
 downloads, internet search and cloud integrations need connectivity. An explicitly
 selected, trusted LAN computer can also provide text inference.
 
-**Desktop release: 1.4.7-beta.** Download the prepared
+**Desktop release: 1.4.8-beta.** Download the prepared
 [Windows and macOS packages](https://thelanintelligence.com/download/), then follow
 [START_HERE.md](START_HERE.md). Each includes the current desktop experience and
 its platform's inference runtime; Python dependencies and model weights are
@@ -43,14 +43,16 @@ HP evidence and inherited scanner issues. Setup and hardware acceptance remain o
 
 ### Run a source checkout
 
-Use Python 3.10 or newer. A Git clone or GitHub **Source code** archive does not
+Use standard CPython 3.10 through 3.14 (3.13 recommended on Mac). Prerelease,
+free-threaded and Python 3.15 environments are not supported by the Mac launcher.
+A Git clone or GitHub **Source code** archive does not
 include a built `TLI.exe`, model weights or a ready-to-use Python environment.
 From the repository root, prepare the environment and run the host:
 
 **Windows (PowerShell):**
 
 ```powershell
-py -3 -m venv backend\.venv
+py -3.14 -m venv backend\.venv
 .\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
 .\backend\.venv\Scripts\python.exe backend\main.py
 ```
@@ -58,8 +60,8 @@ py -3 -m venv backend\.venv
 **macOS / Linux:**
 
 ```bash
-python3 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
+python3.13 -m venv backend/.venv
+backend/.venv/bin/python -m pip install --only-binary=cryptography -r backend/requirements.txt
 backend/.venv/bin/python backend/main.py
 ```
 

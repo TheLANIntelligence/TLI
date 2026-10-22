@@ -21,17 +21,39 @@ case "$mac_arch" in
 esac
 # An unrelated Python environment must not interfere with interpreter detection.
 unset PYTHONHOME PYTHONPATH
-PYTHON=""
-for candidate in python3 /opt/homebrew/bin/python3 /usr/local/bin/python3 \
-        /Library/Frameworks/Python.framework/Versions/Current/bin/python3; do
-    executable="$(command -v "$candidate" 2>/dev/null || true)"
-    if [ -n "$executable" ] && "$executable" -c 'import sys; raise SystemExit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
-        PYTHON="$executable"
-        break
-    fi
-done
+# Use final standard CPython builds with supported dependency wheels. An
+# enabled GIL at runtime does not make a free-threaded build a standard build.
+supported_python() {
+    "$1" -I -c 'import sys, sysconfig; raise SystemExit(not (sys.implementation.name == "cpython" and (3, 10) <= sys.version_info[:2] <= (3, 14) and sys.version_info.releaselevel == "final" and sysconfig.get_config_var("Py_GIL_DISABLED") not in (1, "1") and "t" not in getattr(sys, "abiflags", "")))' >/dev/null 2>&1
+}
+
+find_python() {
+    local version candidate executable
+    local candidates=("$@")
+    # Versioned paths also work when Finder omits Homebrew or python.org from
+    # PATH, or the generic python3/Current points at an unsupported preview.
+    for version in 3.13 3.14 3.12 3.11 3.10; do
+        candidates+=("python$version"
+            "/Library/Frameworks/Python.framework/Versions/$version/bin/python$version"
+            "/opt/homebrew/opt/python@$version/bin/python$version"
+            "/usr/local/opt/python@$version/bin/python$version"
+            "/opt/homebrew/bin/python$version" "/usr/local/bin/python$version")
+    done
+    candidates+=(python3 /opt/homebrew/bin/python3 /usr/local/bin/python3
+        /Library/Frameworks/Python.framework/Versions/Current/bin/python3 python)
+    for candidate in "${candidates[@]}"; do
+        executable="$(command -v "$candidate" 2>/dev/null || true)"
+        if [ -n "$executable" ] && supported_python "$executable"; then
+            printf '%s\n' "$executable"
+            return 0
+        fi
+    done
+    return 1
+}
+
+PYTHON="$(find_python || true)"
 if [ -z "$PYTHON" ]; then
-    printf 'Install Python 3.10 or newer from https://www.python.org/downloads/ and run this installer again.\n' >&2
+    printf 'Install standard Python 3.13 from https://www.python.org/downloads/ and run this installer again. TLI requires final CPython 3.10–3.14 without free-threading.\n' >&2
     exit 1
 fi
 "$PYTHON" - <<'TLI_INSTALLER_PY'

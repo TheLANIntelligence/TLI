@@ -555,19 +555,73 @@ def stop_owned_backend(root, *, wait_seconds=40, expected_child=None, settings=N
             time.sleep(0.2)
 
 
+def _direct_requirement_ready(requirement, distribution):
+    """Require the installed wheel's recorded origin and pinned archive hash."""
+    from urllib.parse import unquote, urlsplit, urlunsplit
+    from pip._vendor.packaging.utils import canonicalize_name, parse_wheel_filename
+    from pip._vendor.packaging.version import Version
+    address = urlsplit(requirement.url)
+    if (address.scheme != "https" or not address.hostname or address.username or address.password
+            or not re.fullmatch(r"sha256=[0-9a-f]{64}", address.fragment)):
+        return False
+    wheel_name, wheel_version, _, _ = parse_wheel_filename(unquote(address.path.rsplit("/", 1)[-1]))
+    if (canonicalize_name(requirement.name) != wheel_name
+            or canonicalize_name(distribution.metadata["Name"]) != wheel_name
+            or Version(distribution.version) != wheel_version):
+        return False
+    records = [entry for entry in distribution.files or ()
+               if len(entry.parts) == 2 and entry.parts[0].endswith(".dist-info")
+               and entry.name == "direct_url.json"]
+    if len(records) != 1:
+        return False
+    # Read through the public Distribution API, with a hard byte limit rather
+    # than an unbounded read_text of damaged installation metadata.
+    with Path(distribution.locate_file(records[0])).open("rb") as stream:
+        raw = stream.read(16 * 1024 + 1)
+    if len(raw) > 16 * 1024:
+        return False
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate dependency metadata field")
+            result[key] = value
+        return result
+    origin = json.loads(raw, object_pairs_hook=unique_fields)
+    if (not isinstance(origin, dict)
+            or origin.get("url") != urlunsplit(address._replace(fragment=""))
+            or "dir_info" in origin or "vcs_info" in origin):
+        return False
+    archive = origin.get("archive_info")
+    if not isinstance(archive, dict):
+        return False
+    expected = address.fragment.split("=", 1)[1]
+    if "hashes" in archive:
+        hashes = archive["hashes"]
+        if not isinstance(hashes, dict) or hashes.get("sha256") != expected:
+            return False
+        return "hash" not in archive or archive["hash"] == "sha256=" + expected
+    return archive.get("hash") == "sha256=" + expected
+
+
 def dependencies_ready(root):
     """Check installed metadata; do not hit a package index during everyday launch."""
     import importlib.metadata
     try:
         from pip._vendor.packaging.requirements import Requirement
         for line in (Path(root) / "backend/requirements.txt").read_text(encoding="utf-8").splitlines():
-            line = line.split("#", 1)[0].strip()
+            # A URL's #sha256 fragment is part of the requirement, including
+            # any following platform marker. Only whitespace starts a comment.
+            line = re.sub(r"(^|\s+)#.*$", "", line).strip()
             if not line:
                 continue
             requirement = Requirement(line)
             if requirement.marker is not None and not requirement.marker.evaluate():
                 continue
-            if importlib.metadata.version(requirement.name) not in requirement.specifier:
+            if requirement.url:
+                if not _direct_requirement_ready(requirement, importlib.metadata.distribution(requirement.name)):
+                    return False
+            elif importlib.metadata.version(requirement.name) not in requirement.specifier:
                 return False
         return True
     except Exception:

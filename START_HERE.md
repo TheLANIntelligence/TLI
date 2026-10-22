@@ -1,4 +1,4 @@
-# Welcome to TLI 1.4.7-beta
+# Welcome to TLI 1.4.8-beta
 
 This is the new TLI desktop experience: Ask TLI, the refreshed workspace,
 appearance themes, Files, Vault, reviewed LAN connections and small-app Builder.
@@ -12,7 +12,7 @@ checks its signature before running it. Windows may ask you to approve that
 Microsoft installer. Setup never restarts your computer automatically.
 
 1. Extract the **entire** Windows ZIP into a new, writable folder, such as
-   `Documents\TLI-1.4.7-beta`. Do not run it inside the ZIP or copy it over an old TLI.
+   `Documents\TLI-1.4.8-beta`. Do not run it inside the ZIP or copy it over an old TLI.
 2. Open **TLI.exe** and choose **Set up TLI** when prompted. Progress stays in
    the TLI window. Internet is only needed to download missing Python or TLI
    components; a prepared installation can start offline. Your browser opens
@@ -42,9 +42,12 @@ Closing the browser leaves the Windows host running; use Local Setup to stop it.
 Requires **macOS 14 or newer on Apple Silicon**, or **macOS 13.3 or newer on
 Intel**, for the bundled inference runtime.
 
-1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.7-beta`.
-2. Install Python 3.10 or newer from
-   [python.org](https://www.python.org/downloads/macos/) if it is not already present.
+1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.8-beta`.
+2. Install the standard **Python 3.13** macOS installer from
+   [python.org](https://www.python.org/downloads/macos/) if a supported interpreter
+   is not already present. TLI accepts standard CPython 3.10 through 3.14;
+   Python 3.15, prereleases and free-threaded builds are not accepted by this
+   launcher. A newer default `python3` does not hide a supported versioned install.
    For a python.org installation, run **Install Certificates.command** from the
    Python folder under Applications before first setup.
 3. Open **TLI_Start.command**. If macOS displays **“TLI_Start.command” Not Opened**
@@ -59,6 +62,13 @@ The Mac package contains Apple Silicon and Intel inference runtimes and chooses
 the matching architecture. It is a Python-based ZIP installation, not a notarized
 Mac application or a DMG installer.
 
+If a previous setup failed while **building cryptography** or looking for
+**OpenSSL / pkg-config**, installing another Python alone will not fix the
+existing environment. Follow **Repair a failed Mac Python setup** in
+[docs/TLI_UPDATES.md](docs/TLI_UPDATES.md). Keep the original TLI folder and saved
+data. The current Intel release downloads a verified prebuilt encryption
+component; local Rust or OpenSSL development tools are not required.
+
 ### If Apple blocks TLI_Start.command
 
 For the TLI ZIP you obtained directly from the official release and trust:
@@ -67,7 +77,7 @@ For the TLI ZIP you obtained directly from the official release and trust:
 2. Open **Apple menu → System Settings → Privacy & Security**.
 3. Scroll to **Security** and find the blocked `TLI_Start.command` entry.
 4. Click **Open Anyway**, then **Open** in the confirmation. Authenticate if asked.
-5. Continue setup in Terminal and keep that window open while using TLI.
+5. Continue setup in Terminal and keep that window open until startup completes.
 
 This approves that launcher; it does not turn off Gatekeeper for other software.
 If the entry is missing, try opening `TLI_Start.command` once more, then return
@@ -144,4 +154,4 @@ externally stored models, browser data and the separate phone Companion are
 not removed with the desktop folder.
 
 Release notes, checksums and support:
-[TLI 1.4.7-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.7-beta).
+[TLI 1.4.8-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.8-beta).

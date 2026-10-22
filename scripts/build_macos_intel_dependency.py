@@ -59,6 +59,28 @@ def write_json(path: Path, value: object) -> None:
         stream.write("\n")
 
 
+def application_requirements(source: Path, destination: Path) -> None:
+    """Keep app dependencies verbatim except the wheel supplied by this build."""
+    remaining = []
+    lines = iter(source.read_bytes().decode("utf-8").splitlines(keepends=True))
+    removed = 0
+    for first in lines:
+        block = [first]
+        while block[-1].rstrip().endswith("\\"):
+            try:
+                block.append(next(lines))
+            except StopIteration as error:
+                raise ValueError("Unterminated requirement continuation") from error
+        if re.match(r"^\s*cryptography(?=\s|[<>=!~@\[]|$)", first, re.IGNORECASE):
+            removed += 1
+        else:
+            remaining.extend(block)
+    if not removed:
+        raise ValueError("Application requirements do not declare cryptography")
+    with destination.open("x", encoding="utf-8", newline="") as output:
+        output.write("".join(remaining))
+
+
 def exclusive_directory(path: Path) -> Path:
     path = path.absolute()
     for ancestor in (path, *path.parents):
@@ -352,9 +374,14 @@ def main() -> None:
     make.add_argument("--output", type=Path, required=True)
     check = commands.add_parser("smoke")
     check.add_argument("--output", type=Path, required=True)
+    requirements = commands.add_parser("application-requirements")
+    requirements.add_argument("--source", type=Path, required=True)
+    requirements.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.action == "build":
         build(args.output)
+    elif args.action == "application-requirements":
+        application_requirements(args.source, args.output)
     else:
         write_json(args.output, smoke())
 

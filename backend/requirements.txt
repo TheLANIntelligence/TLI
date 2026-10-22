@@ -7,7 +7,9 @@ certifi>=2026.1.4
 httpx>=0.28.1,<0.29
 pydantic>=2.0.0
 python-multipart>=0.0.9
-cryptography>=42.0.0
+# Current Intel Mac wheel: static OpenSSL, verified native build, no local compiler.
+cryptography @ https://github.com/TheLANIntelligence/TLI/releases/download/macos-intel-dependencies-20261022/cryptography-50.0.2%2Btli.1-cp39-abi3-macosx_13_0_x86_64.whl#sha256=a6cc33a8578831377572d017b32625d1017fba2a533f1f26137108f9f044c74c ; sys_platform == "darwin" and platform_machine == "x86_64"
+cryptography>=50.0.2 ; sys_platform != "darwin" or platform_machine != "x86_64"
 psutil>=5.9.0
 send2trash>=1.8.3
 qrcode>=7.4.2

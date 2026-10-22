@@ -36,7 +36,7 @@ an update, and reconnecting or unlocking never repeats an installation.
 An installed 1.4.5-beta first receives the **1.4.6-beta updater migration** from
 the same Settings page. Its old interface can download and verify this package,
 but requires the manual completion below once. Reopen the original installation,
-check again, and install **1.4.7-beta** using **Install and restart**. The migration
+check again, and install **1.4.8-beta** using **Install and restart**. The migration
 keeps the previous product features until the full update is installed.
 
 Versions older than 1.4.5-beta can instead download the matching current ZIP
@@ -132,6 +132,55 @@ backend/.venv/bin/python backend/update_install.py --target . --rollback
 Keep the downloaded package until the update has been verified; its
 `backend/update_install.py` can also be used with an explicit `--target` if the
 installed updater cannot be opened.
+
+## Repair a failed Mac Python setup
+
+If setup reports `Building wheel for cryptography`, missing OpenSSL/pkg-config,
+or an unsupported Python environment, keep your original installation. Newer
+upstream cryptography packages no longer provide Intel Mac wheels. The current
+TLI release supplies a hash-verified Intel wheel built from current cryptography
+and OpenSSL sources, so setup does not require a compiler or use an older
+encryption library. Python 3.15 and free-threaded environments are not supported
+by this launcher; use the standard Python 3.13 macOS installer from
+[python.org](https://www.python.org/downloads/macos/), including its
+`Install Certificates.command` step.
+
+Installing another Python does not change an existing `backend/.venv`. If that
+environment uses an unsupported Python, first quit TLI completely, including any
+Terminal host and optional Host Start helper. In Finder, open your **original**
+TLI folder, open `backend`, and press **Command+Shift+.** to show hidden files.
+Rename only `.venv` to `.venv-previous-python`. Choose a different unused backup
+name if that name already exists. Keep this backup; do not delete or rename
+`data`, models, Vault files, or the whole installation.
+
+Open Terminal in that original TLI folder. Create a new environment explicitly
+with the standard python.org interpreter so an older launcher cannot select
+Python 3.15 again:
+
+```bash
+/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13 -m venv backend/.venv
+backend/.venv/bin/python -m pip install --only-binary=psutil 'psutil>=5.9.0'
+```
+
+This creates the Python environment and the updater's process-check component;
+it does not start TLI. If your installed TLI predates the
+Intel dependency repair, download the current Mac ZIP from the
+[official releases](https://github.com/TheLANIntelligence/TLI/releases), extract
+it separately, and open its `TLI_Update.command`. Select the original TLI folder
+and confirm the reviewed application update. Then open `TLI_Start.command` in
+the **original** folder. The new launcher prepares the corrected components and
+keeps your existing data and settings. Do not start TLI from the update folder.
+
+If the existing environment already uses supported standard Python, keep it:
+apply the current release with its separate `TLI_Update.command`, then reopen
+the original launcher. The new dependency requirement replaces an older Intel
+encryption component without replacing the environment. A download or hash
+failure stops setup; do not disable HTTPS checks or install a random wheel.
+
+If setup says **Installed components could not be verified** after installation,
+preserve and recreate only `backend/.venv` using the steps above even if its Python
+version is supported, then reopen the original launcher; a wheel with missing or
+different recorded source or hash is not accepted.
 
 ## Publishing an update-capable release
 

@@ -140,7 +140,8 @@ if [ "${PYTHONHOME+x}" = x ] || [ "${PYTHONPATH+x}" = x ]; then
     printf 'Unexpected inherited Python configuration\\n' >&2
     exit 47
 fi
-if [ "$1" = "-c" ]; then exit 0; fi
+if [ "$1" = "-I" ]; then shift; fi
+if [ "$1" = "-c" ]; then exit "${TEST_PYTHON_UNSUPPORTED:-0}"; fi
 if [ "$1" = "-" ]; then cat > "$TEST_PYTHON_SOURCE"; exit 0; fi
 exit 48
 ''', encoding="utf-8", newline="\n")
@@ -161,8 +162,8 @@ sw_vers() { echo "$TEST_MAC_VERSION"; }
 command() {
     if [ "$#" = 2 ] && [ "$1" = "-v" ]; then
         case "$2" in
-            python3|*/python3)
-                if [ "$2" = python3 ] && [ "$TEST_PYTHON_AVAILABLE" = 1 ]; then
+            python*|*/python*)
+                if [ "$2" = "${TEST_PYTHON_CANDIDATE:-python3}" ] && [ "$TEST_PYTHON_AVAILABLE" = 1 ]; then
                     printf '%s\\n' "$TEST_PYTHON"
                     return 0
                 fi
@@ -184,7 +185,7 @@ command() {
                          PYTHON_SOURCE + "\n")
         calls = (self.root / "python-calls.txt").read_text(encoding="utf-8").splitlines()
         self.assertEqual(len(calls), 2)
-        self.assertTrue(calls[0].startswith("-c "))
+        self.assertTrue(calls[0].startswith("-I -c "))
         self.assertEqual(calls[1], "-")
 
     def test_stale_python_environment_is_cleared_before_candidate_check(self):
@@ -198,9 +199,28 @@ command() {
         self.env["TEST_PYTHON_AVAILABLE"] = "0"
         result = self.run_installer()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Install Python 3.10 or newer", result.stderr)
+        self.assertIn("Install standard Python 3.13", result.stderr)
         self.assertFalse((self.root / "python-calls.txt").exists())
         self.assertFalse((self.root / "received.py").exists())
+
+    def test_unsupported_python_stops_before_downloading(self):
+        self.env["TEST_PYTHON_UNSUPPORTED"] = "1"
+        result = self.run_installer()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("final CPython 3.10–3.14 without free-threading", result.stderr)
+        self.assertFalse((self.root / "received.py").exists())
+
+    def test_versioned_framework_and_homebrew_are_discovered_without_path(self):
+        for candidate in (
+                "/Library/Frameworks/Python.framework/Versions/3.13/bin/python3.13",
+                "/usr/local/opt/python@3.13/bin/python3.13",
+                "/opt/homebrew/opt/python@3.13/bin/python3.13"):
+            with self.subTest(candidate=candidate):
+                self.env["TEST_PYTHON_CANDIDATE"] = candidate
+                result = self.run_installer()
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((self.root / "received.py").read_text(encoding="utf-8"),
+                                 PYTHON_SOURCE + "\n")
 
     def test_unsupported_platform_stops_before_python_or_network(self):
         for system, architecture, version, message in (
@@ -235,7 +255,11 @@ class SourceLauncherTests(unittest.TestCase):
         self.python.write_text('''#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "$TEST_LOG"
-if [ "$1" = "-c" ]; then exit 0; fi
+if [ "$1" = "-I" ]; then shift; fi
+if [ "$1" = "-c" ]; then
+    case "$0" in */.venv/bin/python) exit "${TEST_VENV_UNSUPPORTED:-0}" ;; esac
+    exit 0
+fi
 if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then
     mkdir -p "$3/bin"; cp "$0" "$3/bin/python"; chmod +x "$3/bin/python"; exit 0
 fi
@@ -246,7 +270,7 @@ fi
 case "$1" in
     */host_launcher.py)
         [ -f "$TEST_READY" ] || exit 1
-        if [ "${2:-}" = --check-dependencies ]; then exit 0; fi
+        if [ "${2:-}" = --check-dependencies ]; then exit "${TEST_VERIFY_FAIL:-0}"; fi
         [ "${TEST_PORT_FAIL:-0}" = 0 ] || exit 1
         if [ "${2:-}" = --no-browser ]; then echo 0; else echo 1; fi > "$TEST_STARTED"
         exit 0 ;;
@@ -267,9 +291,25 @@ exit 9
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
         # Git Bash prepends its own /usr/bin during startup. Put the synthetic
         # commands first inside the shell as well, so uname is fake on Windows.
-        return subprocess.run([BASH, "-c", 'export PATH="$TEST_BIN:$PATH"; exec bash "$@"', "test-launcher",
+        prelude = '''
+export PATH="$TEST_BIN:$PATH"
+command() {
+    if [ "$#" = 2 ] && [ "$1" = "-v" ]; then
+        case "$2" in
+            python*|*/python*)
+                if [ "$2" = python3 ]; then printf '%s\\n' "$TEST_BIN/python3"; return 0; fi
+                return 1 ;;
+        esac
+    fi
+    builtin command "$@"
+}
+export -f command
+exec bash "$@"
+'''
+        return subprocess.run([BASH, "-c", prelude, "test-launcher",
                                "TLI_Start.command" if wrapper else "TLI_Start.sh", *arguments],
-                              cwd=self.root, env=self.env, capture_output=True, text=True, timeout=30, **options)
+                              cwd=self.root, env=self.env, capture_output=True, text=True,
+                              encoding="utf-8", timeout=30, **options)
 
     def test_setup_only_then_offline_ready_launch(self):
         result = self.launch("--setup-only", wrapper=True)
@@ -277,6 +317,7 @@ exit 9
         self.assertFalse((self.root / "started").exists())
         calls = (self.root / "calls.txt").read_text()
         self.assertEqual(calls.count("-m pip "), 1)
+        self.assertIn("install --only-binary=cryptography -r ", calls)
         result = self.launch("--no-browser")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((self.root / "started").read_text().strip(), "0")
@@ -311,6 +352,48 @@ exit 9
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("incomplete or belongs to another platform", result.stderr)
         self.assertEqual(private.read_bytes(), b"do not remove")
+        self.assertFalse((self.root / "started").exists())
+
+    def test_post_install_verification_failure_points_to_recovery_without_starting(self):
+        saved = self.root / "data/notes.json"
+        saved.parent.mkdir()
+        saved.write_bytes(b"saved before dependency repair")
+        self.env["TEST_VERIFY_FAIL"] = "1"
+        result = self.launch()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Installed components could not be verified", result.stderr)
+        self.assertIn("docs/TLI_UPDATES.md", result.stderr)
+        self.assertIn("Saved data was kept", result.stderr)
+        self.assertEqual(saved.read_bytes(), b"saved before dependency repair")
+        self.assertFalse((self.root / "started").exists())
+        calls = (self.root / "calls.txt").read_text()
+        self.assertEqual(calls.count("-m pip "), 1)
+        self.assertEqual(calls.count("--check-dependencies"), 2)
+        self.assertIn("--only-binary=cryptography", calls)
+
+    def test_unsupported_existing_environment_stops_before_pip_and_preserves_files(self):
+        environment = self.root / "backend/.venv"
+        (environment / "bin").mkdir(parents=True)
+        shutil.copyfile(self.python, environment / "bin/python")
+        (environment / "bin/python").chmod(0o755)
+        (environment / "keep.txt").write_bytes(b"keep old environment")
+        saved = self.root / "data/notes.json"
+        saved.parent.mkdir()
+        saved.write_bytes(b"keep saved data")
+        original = (environment / "bin/python").read_bytes()
+        self.env["TEST_VENV_UNSUPPORTED"] = "1"
+        result = self.launch("--setup-only")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsupported Python build", result.stderr)
+        self.assertIn("docs/TLI_UPDATES.md", result.stderr)
+        self.assertIn("ORIGINAL folder", result.stderr)
+        self.assertEqual((environment / "bin/python").read_bytes(), original)
+        self.assertEqual((environment / "keep.txt").read_bytes(), b"keep old environment")
+        self.assertEqual(saved.read_bytes(), b"keep saved data")
+        calls = (self.root / "calls.txt").read_text()
+        self.assertNotIn("-m pip", calls)
+        self.assertNotIn("-m venv", calls)
+        self.assertNotIn("host_launcher.py", calls)
         self.assertFalse((self.root / "started").exists())
 
     def test_unsupported_macos_is_stopped_before_environment_setup(self):

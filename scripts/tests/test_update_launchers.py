@@ -106,3 +106,36 @@ def test_mac_missing_inventory_preserves_existing_folder(folders):
     assert result.returncode != 0
     assert "no update inventory" in result.stderr
     assert (target / "data/notes.json").read_bytes() == b"synthetic saved data"
+
+
+@pytest.mark.skipif(not BASH or not Path(BASH).is_file(), reason="Bash is unavailable")
+@pytest.mark.parametrize("incomplete", [False, True])
+def test_mac_unsupported_original_environment_stops_before_update(folders, tmp_path, incomplete):
+    source, target = folders
+    (source / "backend/update_install.py").write_text("# never dispatched")
+    environment = target / "backend/.venv"
+    (environment / "bin").mkdir(parents=True)
+    retained = environment / "keep.txt"
+    retained.write_bytes(b"preserve unsupported environment")
+    python = environment / "bin/python"
+    if not incomplete:
+        python.write_text(
+            '#!/usr/bin/env bash\n'
+            'printf "%s\\n" "$*" >> "$UPDATE_TEST_ARGUMENTS"\n'
+            'if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then exit 1; fi\n'
+            'echo "UNEXPECTED UPDATE DISPATCH"\nexit 91\n', encoding="utf-8", newline="\n")
+        python.chmod(0o755)
+    recorded = tmp_path / "arguments.txt"
+    result = subprocess.run([str(BASH), "TLI_Update.sh", target.as_posix()], cwd=source,
+                            env={**os.environ, "UPDATE_TEST_ARGUMENTS": recorded.as_posix()},
+                            capture_output=True, text=True, timeout=30, **WINDOWLESS)
+    assert result.returncode != 0
+    assert "backend/.venv is incomplete or uses an unsupported Python build" in result.stderr
+    assert "docs/TLI_UPDATES.md" in result.stderr
+    assert "Nothing was updated or removed" in result.stderr
+    assert "UNEXPECTED UPDATE DISPATCH" not in result.stdout
+    if recorded.exists():
+        assert recorded.read_text().startswith("-I -c ")
+        assert "update_install.py" not in recorded.read_text()
+    assert retained.read_bytes() == b"preserve unsupported environment"
+    assert (target / "data/notes.json").read_bytes() == b"synthetic saved data"

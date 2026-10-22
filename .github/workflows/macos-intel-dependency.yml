@@ -34,8 +34,9 @@ jobs:
         run: |
           set -euo pipefail
           wheel="$(find build_work/intel-dependency/artifact -maxdepth 1 -name '*.whl')"
-          python -m pip install --dry-run --ignore-installed --only-binary=:all: --platform macosx_13_0_x86_64 --python-version 3.13 --implementation cp --abi cp313 --report build_work/intel-dependency/artifact/ventura-resolution.json "$wheel" -r backend/requirements.txt
-          python -m pip install --only-binary=:all: "$wheel" -r backend/requirements.txt -r backend/requirements-test.txt
+          python scripts/build_macos_intel_dependency.py application-requirements --source backend/requirements.txt --output build_work/intel-dependency/application-requirements.txt
+          python -m pip install --dry-run --ignore-installed --only-binary=:all: --platform macosx_13_0_x86_64 --python-version 3.13 --implementation cp --abi cp313 --report build_work/intel-dependency/artifact/ventura-resolution.json "$wheel" -r build_work/intel-dependency/application-requirements.txt
+          python -m pip install --only-binary=:all: "$wheel" -r build_work/intel-dependency/application-requirements.txt -r backend/requirements-test.txt
           python -m pip check
           python -m pip freeze > build_work/intel-dependency/artifact/native-requirements.txt
       - name: Native crypto known answers and TLI Vault regressions
@@ -43,7 +44,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/build_macos_intel_dependency.py smoke --output build_work/intel-dependency/artifact/native-3.13.json
-          python -m pytest backend/tests/test_vault_routes.py backend/tests/test_vault_preservation.py backend/tests/test_vault_backups.py backend/tests/test_vault_backup_routes.py -q --junitxml=build_work/intel-dependency/artifact/vault-tests.xml
+          python -m pytest backend/tests/test_vault_routes.py backend/tests/test_vault_preservation.py backend/tests/test_vault_backups.py backend/tests/test_vault_backup_routes.py -q --junitxml="$GITHUB_WORKSPACE/build_work/intel-dependency/artifact/vault-tests.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-intel-cryptography
