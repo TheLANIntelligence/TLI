@@ -1,24 +1,24 @@
 // Verified desktop packages; existing clients use the version-aware update feed.
 export const PUBLIC_RELEASE = Object.freeze({
-  "version": "1.4.7-beta",
-  "releaseDate": "2026-10-19",
+  "version": "1.4.8-beta",
+  "releaseDate": "2026-10-22",
   "packageType": "full-install",
   "updater": "guided-v1",
-  "notes": "Updates now offer Download update and Install and restart inside TLI. Review the version and original host address, finish active work, then confirm. Saved data, settings, identities and models stay in place; changed Python dependencies may need internet access. This release hides HomeLab from everyday navigation, clarifies Task tools inside chat, and adds concrete Game Optimizer trials with your own before/after measurements. Existing 1.4.5 installations first receive the 1.4.6 updater migration with one final manual completion; subsequent updates can finish inside TLI. Android Companion is updated separately.",
-  "releaseNotesUrl": "https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.7-beta",
+  "notes": "Intel Mac setup now uses a verified prebuilt encryption component instead of compiling it locally. The Mac launcher selects supported standard Python 3.10 through 3.14, preferring 3.13, and explains how to preserve and repair an existing unsupported environment. Working 1.4.6 and 1.4.7 installations can use Settings > Software Updates > Download update > Install and restart. Existing 1.4.5 users still receive the 1.4.6 migration first. Saved data, settings and models stay in the original folder. The corrected Intel component requires one internet download. Android Companion is updated separately.",
+  "releaseNotesUrl": "https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.8-beta",
   "windows": {
-    "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_Windows.zip",
-    "filename": "TLI_1.4.7-beta_Windows.zip",
-    "sha256": "14805dc33a66b491fb2dc8a285aebadc98a69abc54a6d6361253a967f316884c",
+    "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.8-beta/TLI_1.4.8-beta_Windows.zip",
+    "filename": "TLI_1.4.8-beta_Windows.zip",
+    "sha256": "a48d547045b92928c31c62c8f5f590504d3f2204606ac8225b3353f81b776269",
     "updater": "guided-v1",
-    "size_bytes": 21910776
+    "size_bytes": 21913270
   },
   "macos": {
-    "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.7-beta/TLI_1.4.7-beta_macOS.zip",
-    "filename": "TLI_1.4.7-beta_macOS.zip",
-    "sha256": "2ee050b96e99327bd1d307151af4d708248c350992ec1999e093b94988b74526",
+    "url": "https://github.com/TheLANIntelligence/TLI/releases/download/v1.4.8-beta/TLI_1.4.8-beta_macOS.zip",
+    "filename": "TLI_1.4.8-beta_macOS.zip",
+    "sha256": "19198c03bb57f9d6731f03a7e1871ee49bddcb1da38c49ede240ae3173fbfc50",
     "updater": "guided-v1",
-    "size_bytes": 29261213,
+    "size_bytes": 29264853,
     "command": "curl -fsSL https://thelanintelligence.com/install_mac.sh | bash",
     "installerUrl": "https://thelanintelligence.com/install_mac.sh"
   }
