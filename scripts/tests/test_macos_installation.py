@@ -251,6 +251,10 @@ class SourceLauncherTests(unittest.TestCase):
             (self.root / "backend" / name).write_text("synthetic fixture", encoding="utf-8")
         self.bin = self.root / "fake-bin"
         self.bin.mkdir()
+        # Keep the general shared-launcher checks on the Linux policy even when
+        # the tests run on a Mac; the Mac policy is exercised explicitly below.
+        (self.bin / "uname").write_text('#!/usr/bin/env bash\necho Linux\n', encoding="utf-8", newline="\n")
+        (self.bin / "uname").chmod(0o755)
         self.python = self.bin / "python3"
         self.python.write_text('''#!/usr/bin/env bash
 set -eu
@@ -324,6 +328,26 @@ exec bash "$@"
         self.assertEqual((self.root / "calls.txt").read_text().count("-m pip "), 1)
         self.assertNotIn("/main.py", (self.root / "calls.txt").read_text())
         self.assertIn("Quit TLI", result.stdout)
+
+    def test_macos_setup_requires_all_wheels_and_never_retries_with_source_builds(self):
+        (self.bin / "uname").write_text('#!/usr/bin/env bash\nif [ "$1" = "-s" ]; then echo Darwin; else echo x86_64; fi\n', encoding="utf-8", newline="\n")
+        (self.bin / "sw_vers").write_text('#!/usr/bin/env bash\necho 13.7.7\n', encoding="utf-8", newline="\n")
+        (self.bin / "sw_vers").chmod(0o755)
+        self.env["TEST_PIP_FAIL"] = "1"
+        result = self.launch("--setup-only")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("prebuilt packages on macOS", result.stderr)
+        self.assertFalse((self.root / "started").exists())
+        calls = (self.root / "calls.txt").read_text()
+        self.assertEqual(calls.count("-m pip "), 1)
+        self.assertIn("install --only-binary=:all: -r ", calls)
+        self.assertNotIn("--only-binary=cryptography", calls)
+        self.env["TEST_PIP_FAIL"] = "0"
+        result = self.launch("--setup-only")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.root / "started").exists())
+        calls = (self.root / "calls.txt").read_text()
+        self.assertEqual(calls.count("install --only-binary=:all: -r "), 2)
 
     def test_default_launch_and_environment_no_browser_use_managed_host(self):
         self.assertEqual(self.launch("--setup-only").returncode, 0)

@@ -11,6 +11,7 @@ fail while compiling cryptography with missing OpenSSL or pkg-config.
   OpenSSL 4.0.3. The wheel has the distinct version `50.0.2+tli.1`; its encryption
   code is unchanged from upstream. This avoids local Rust/OpenSSL compilation
   and avoids selecting an older encryption library when Intel wheels are absent.
+  Mac setup also requires prebuilt packages for every other mandatory dependency.
 - Startup verifies the installed wheel's version and recorded download hash.
   A failed download or installation check stops setup before starting a host.
   Everyday startup does not contact a package index when components are ready.

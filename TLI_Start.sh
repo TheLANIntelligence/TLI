@@ -8,6 +8,7 @@ VENV_DIR="$BACKEND_DIR/.venv"
 VENV_PYTHON="$VENV_DIR/bin/python"
 SETUP_ONLY=0
 OPEN_BROWSER="${TLI_OPEN_BROWSER:-1}"
+BINARY_PACKAGES=cryptography
 
 fail() { printf '\nTLI: %s\n' "$*" >&2; exit 1; }
 for argument in "$@"; do
@@ -24,6 +25,7 @@ done
 
 printf '\nTheLANIntelligence — private AI and connected tools\n\n'
 if [ "$(uname -s)" = "Darwin" ]; then
+    BINARY_PACKAGES=:all:
     mac_version="$(sw_vers -productVersion)"
     mac_arch="$(uname -m)"
     [[ "$mac_version" =~ ^([0-9]+)\.([0-9]+) ]] || fail "Could not determine this Mac's version."
@@ -85,8 +87,8 @@ supported_python "$VENV_PYTHON" || \
 
 if ! "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies >/dev/null 2>&1; then
     printf 'Installing missing TLI components. Internet is only needed if these components must be downloaded.\n'
-    "$VENV_PYTHON" -m pip --disable-pip-version-check install --only-binary=cryptography -r "$BACKEND_DIR/requirements.txt" || \
-        fail "Compatible prebuilt components could not be downloaded. Check the error and connection. TLI requires a prebuilt cryptography wheel and will not compile it from source. See docs/TLI_UPDATES.md for supported Python recovery. No backend was started."
+    "$VENV_PYTHON" -m pip --disable-pip-version-check install --only-binary="$BINARY_PACKAGES" -r "$BACKEND_DIR/requirements.txt" || \
+        fail "Required components could not be downloaded. Check the error and connection. TLI requires prebuilt packages on macOS and a prebuilt cryptography wheel on Linux. See docs/TLI_UPDATES.md for supported Python recovery. No backend was started."
     "$VENV_PYTHON" "$BACKEND_DIR/host_launcher.py" --check-dependencies || \
         fail "Installed components could not be verified. See docs/TLI_UPDATES.md for manual environment recovery. Saved data was kept. No backend was started."
 fi
