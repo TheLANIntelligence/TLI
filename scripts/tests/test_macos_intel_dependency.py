@@ -14,7 +14,9 @@ class IntelDependencyTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        # macOS exposes its temporary directory through the system /var symlink.
+        # Use its owned canonical path without relaxing output-link rejection.
+        self.root = Path(self.tmp.name).resolve()
 
     def archive(self, entries):
         path = self.root / "source.tar.gz"
