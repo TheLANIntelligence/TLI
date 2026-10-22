@@ -1,0 +1,93 @@
+name: Intel macOS cryptography dependency
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      TLI_OPEN_BROWSER: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          architecture: x64
+      - uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9
+        with:
+          toolchain: '1.99.1'
+          targets: x86_64-apple-darwin
+      - name: Test dependency build policy
+        run: python -m unittest scripts.tests.test_macos_intel_dependency
+      - name: Build pinned static OpenSSL and cryptography abi3 wheel
+        run: python scripts/build_macos_intel_dependency.py build --output build_work/intel-dependency
+      - name: Install exact built wheel and binary application dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find build_work/intel-dependency/artifact -maxdepth 1 -name '*.whl')"
+          python -m pip install --only-binary=:all: "$wheel" -r backend/requirements.txt -r backend/requirements-test.txt
+          python -m pip check
+          python -m pip freeze > build_work/intel-dependency/artifact/native-requirements.txt
+      - name: Native crypto known answers and TLI Vault regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/build_macos_intel_dependency.py smoke --output build_work/intel-dependency/artifact/native-3.13.json
+          python -m pytest backend/tests/test_vault_routes.py backend/tests/test_vault_preservation.py backend/tests/test_vault_backups.py backend/tests/test_vault_backup_routes.py -q --junitxml=build_work/intel-dependency/artifact/vault-tests.xml
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-intel-cryptography
+          path: build_work/intel-dependency/artifact/
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: macos-intel-build-log
+          path: build_work/intel-dependency/build.log
+          if-no-files-found: warn
+
+  abi-compatibility:
+    needs: build
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11', '3.12', '3.14']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          architecture: x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-intel-cryptography
+          path: build_work/dependency
+      - name: Verify checksum, install binary wheel and exercise native crypto
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build_work/dependency
+          shasum -a 256 -c SHA256SUMS
+          python -m pip install --only-binary=:all: ./*.whl
+          python -m pip check
+          cd ../..
+          python scripts/build_macos_intel_dependency.py smoke --output build_work/dependency/native-${{ matrix.python }}.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-intel-python-${{ matrix.python }}
+          path: build_work/dependency/native-${{ matrix.python }}.json
+          if-no-files-found: error
