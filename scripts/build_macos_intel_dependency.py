@@ -165,9 +165,15 @@ def command(args: list[str], *, cwd: Path, env: dict, log: Path) -> str:
 def inspect_macho(load_commands: str, dependencies: str, architecture: str) -> dict:
     if architecture.strip() != "x86_64":
         raise ValueError("Wheel must contain only x86_64 native code")
-    versions = re.findall(r"^\s*(?:minos|version)\s+(\d+\.\d+(?:\.\d+)?)\s*$",
-                          load_commands, re.MULTILINE)
-    # 'version' occurs in LC_VERSION_MIN_MACOSX, 'minos' in LC_BUILD_VERSION.
+    versions = []
+    for block in re.split(r"(?m)^Load command \d+\s*$", load_commands):
+        if re.search(r"(?m)^\s*cmd LC_BUILD_VERSION\s*$", block):
+            if not re.search(r"(?m)^\s*platform (?:1|MACOS)\s*$", block):
+                raise ValueError("Native module does not target macOS")
+            versions.extend(re.findall(r"(?m)^\s*minos (\d+\.\d+(?:\.\d+)?)\s*$", block))
+        elif re.search(r"(?m)^\s*cmd LC_VERSION_MIN_MACOSX\s*$", block):
+            versions.extend(re.findall(r"(?m)^\s*version (\d+\.\d+(?:\.\d+)?)\s*$", block))
+    # LC_BUILD_VERSION also contains the linker's 'version', which is not minOS.
     if not versions or any(tuple(map(int, value.split("."))) > (13, 3, 0)
                            for value in versions):
         raise ValueError("Missing or too-new Mach-O deployment target")

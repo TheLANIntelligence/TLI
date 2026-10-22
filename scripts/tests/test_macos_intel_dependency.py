@@ -75,11 +75,14 @@ class IntelDependencyTests(unittest.TestCase):
             B.patch_version(source, self.root)
 
     def test_macho_requires_intel_ventura_and_only_system_dependencies(self):
-        load = " cmd LC_BUILD_VERSION\n platform 1\n minos 13.3\n sdk 15.0\n"
+        load = "Load command 9\n cmd LC_BUILD_VERSION\n platform 1\n minos 13.3\n sdk 15.0\n ntools 1\n tool 3\n version 1115.7.3\n"
         deps = "module.so:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n"
         report = B.inspect_macho(load, deps, "x86_64\n")
         self.assertEqual(report["minimum_macos"], ["13.3"])
+        old = "Load command 9\n cmd LC_VERSION_MIN_MACOSX\n version 13.0\n sdk 15.0\n"
+        self.assertEqual(B.inspect_macho(old, deps, "x86_64")["minimum_macos"], ["13.0"])
         for wrong_load, wrong_deps, arch in [(load.replace("13.3", "14.0"), deps, "x86_64"),
+                                             (load.replace("platform 1", "platform 2"), deps, "x86_64"),
                                              ("", deps, "x86_64"), (load, deps, "arm64"),
                                              (load, deps, "x86_64 arm64"),
                                              (load, deps.replace("/usr/lib/", "/opt/homebrew/lib/"), "x86_64"),
