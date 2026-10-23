@@ -39,6 +39,8 @@ jobs:
           python-version: '3.14'
       - name: Install verification dependencies
         run: python -m pip install -r backend/requirements.txt -r backend/requirements-test.txt
+      - name: Test first-start port conflict and launcher ownership
+        run: python -m pytest backend/tests/test_first_launch_port.py backend/tests/test_host_launcher.py backend/tests/test_launch_checks.py backend/tests/test_startup_config.py backend/tests/test_desktop_launcher.py backend/tests/test_launcher_stop_confirmation.py backend/tests/test_launcher_process_identity.py backend/tests/test_mesh_startup_port.py -q
       - name: Test update discovery, installation, authority and recovery
         run: python -m pytest backend/tests/test_update_tls.py backend/tests/test_update_preparation.py backend/tests/test_automatic_update_checks.py backend/tests/test_update_settings.py backend/tests/test_update_install.py backend/tests/test_update_handoff.py backend/tests/test_host_lifecycle.py backend/tests/test_host_lifecycle_routes.py backend/tests/test_dependency_readiness.py -q
       - name: Test direct host addresses and Node isolation
@@ -54,9 +56,9 @@ jobs:
       - name: Review platform package file list
         run: python build_dist.py --platform ${{ matrix.platform }} --dry-run > build_work/package-dry-run.txt
       - name: Build platform ZIP
-        run: python build_dist.py --platform ${{ matrix.platform }} --out build_work/packages/TLI_1.4.8-beta_${{ matrix.label }}.zip
+        run: python build_dist.py --platform ${{ matrix.platform }} --out build_work/packages/TLI_1.4.9-beta_${{ matrix.label }}.zip
       - name: Verify extracted installation and native runtime
-        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.8-beta_${{ matrix.label }}.zip --platform ${{ matrix.platform }} --expected-version 1.4.8-beta --output-dir build_work/package-verification --check-setup
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.9-beta_${{ matrix.label }}.zip --platform ${{ matrix.platform }} --expected-version 1.4.9-beta --output-dir build_work/package-verification --check-setup
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: desktop-${{ matrix.platform }}
@@ -99,7 +101,7 @@ jobs:
           name: desktop-macos
           path: build_work/packages
       - name: Verify extracted installation and Intel runtime
-        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.8-beta_macOS.zip --platform macos --expected-version 1.4.8-beta --output-dir build_work/package-verification --check-setup
+        run: python scripts/verify_desktop_package.py --archive build_work/packages/TLI_1.4.9-beta_macOS.zip --platform macos --expected-version 1.4.9-beta --output-dir build_work/package-verification --check-setup
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

@@ -126,6 +126,29 @@ def write(value, root=None):
                 os.unlink(temporary)
 
 
+def create_if_absent(value, root=None):
+    """Publish a first-launch choice without replacing concurrent saved settings.
+
+    A failed write retains its file for review; a later read must not substitute
+    defaults for partially written settings. No existing file is removed.
+    """
+    value = validate(value, saved=True)
+    path = config_path(root)
+    with LOCK:
+        if read(root)[1]:
+            return False
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            stream = path.open("x", encoding="utf-8")
+        except FileExistsError:
+            return False
+        with stream:
+            json.dump({"version": 1, **value}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return True
+
+
 def browser_url(settings):
     host = settings["host"]
     host = "localhost" if host in {"0.0.0.0", "::"} else host

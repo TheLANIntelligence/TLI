@@ -1,4 +1,4 @@
-# Welcome to TLI 1.4.8-beta
+# Welcome to TLI 1.4.9-beta
 
 This is the new TLI desktop experience: Ask TLI, the refreshed workspace,
 appearance themes, Files, Vault, reviewed LAN connections and small-app Builder.
@@ -12,7 +12,7 @@ checks its signature before running it. Windows may ask you to approve that
 Microsoft installer. Setup never restarts your computer automatically.
 
 1. Extract the **entire** Windows ZIP into a new, writable folder, such as
-   `Documents\TLI-1.4.8-beta`. Do not run it inside the ZIP or copy it over an old TLI.
+   `Documents\TLI-1.4.9-beta`. Do not run it inside the ZIP or copy it over an old TLI.
 2. Open **TLI.exe** and choose **Set up TLI** when prompted. Progress stays in
    the TLI window. Internet is only needed to download missing Python or TLI
    components; a prepared installation can start offline. Your browser opens
@@ -37,12 +37,37 @@ The Windows download targets 64-bit Windows 10/11. The launcher is not code-sign
 Only use the release linked from the TLI website and compare the published checksum.
 Closing the browser leaves the Windows host running; use Local Setup to stop it.
 
+### If startup reports that a port is in use
+
+This is a startup conflict; it does not mean the TLI files failed to install.
+On a fresh installation, the current launcher checks the default local port
+8000 and, if needed, saves an available alternative. It opens the verified TLI
+address automatically. It leaves the other application running. Existing saved
+ports, explicit overrides and previously started installations keep their address.
+
+If an older TLI is still running, use its own **Stop TLI** or **Quit TLI** control
+before opening this installation. Closing its browser alone does not stop it.
+
+For an older package, or a deliberately different port, open PowerShell in the
+extracted TLI folder and run:
+
+```powershell
+$env:TLI_PORT = '8765'
+.\TLI_Start.bat
+```
+
+This example works if port 8765 is available. The override applies to starts
+from that PowerShell window; it does not change saved settings. Use
+`TLI_Start.bat` for this override: `TLI.exe` uses this installation's saved
+settings and clears inherited port overrides. On macOS or Linux, the equivalent
+one-launch override is `TLI_PORT=8765 bash TLI_Start.sh`.
+
 ## macOS
 
 Requires **macOS 14 or newer on Apple Silicon**, or **macOS 13.3 or newer on
 Intel**, for the bundled inference runtime.
 
-1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.8-beta`.
+1. Extract the Mac ZIP into a new folder, such as `Applications/TLI-1.4.9-beta`.
 2. Install the standard **Python 3.13** macOS installer from
    [python.org](https://www.python.org/downloads/macos/) if a supported interpreter
    is not already present. TLI accepts standard CPython 3.10 through 3.14;
@@ -154,4 +179,4 @@ externally stored models, browser data and the separate phone Companion are
 not removed with the desktop folder.
 
 Release notes, checksums and support:
-[TLI 1.4.8-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.8-beta).
+[TLI 1.4.9-beta](https://github.com/TheLANIntelligence/TLI/releases/tag/v1.4.9-beta).

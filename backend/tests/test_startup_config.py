@@ -78,6 +78,42 @@ def test_failed_replace_preserves_previous_saved_file(tmp_path, monkeypatch):
     assert list(config.config_path(tmp_path).parent.glob(".startup-*")) == []
 
 
+def test_first_launch_publication_cannot_overwrite_a_concurrent_file(tmp_path, monkeypatch):
+    path = config.config_path(tmp_path)
+    real_open = Path.open
+    saved = b'{"version":1,"host":"127.0.0.1","port":9137,"https":false}'
+
+    def racing_open(self, mode="r", *args, **kwargs):
+        if self == path and mode == "x":
+            with real_open(path, "wb") as stream:
+                stream.write(saved)
+        return real_open(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", racing_open)
+    assert config.create_if_absent({**config.DEFAULTS, "port": 8002}, tmp_path) is False
+    assert path.read_bytes() == saved
+    assert config.resolve(tmp_path)["effective_next"]["port"] == 9137
+
+
+def test_failed_first_launch_publication_retains_incomplete_file(tmp_path, monkeypatch):
+    def interrupted_dump(value, stream):
+        stream.write('{"version":1,')
+        raise OSError("Interrupted first publication")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(config.json, "dump", interrupted_dump)
+        with pytest.raises(OSError, match="Interrupted"):
+            config.create_if_absent({**config.DEFAULTS, "port": 8002}, tmp_path)
+    path = config.config_path(tmp_path)
+    before = path.read_bytes()
+    assert before == b'{"version":1,'
+    for operation in (lambda: config.resolve(tmp_path),
+                      lambda: config.create_if_absent(config.DEFAULTS, tmp_path)):
+        with pytest.raises(config.StartupConfigurationError):
+            operation()
+        assert path.read_bytes() == before
+
+
 def test_concurrent_saves_always_leave_a_complete_configuration(tmp_path):
     choices = [{"host": "127.0.0.1", "port": port, "https": False} for port in range(8001, 8009)]
     with ThreadPoolExecutor(max_workers=4) as pool:

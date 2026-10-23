@@ -36,7 +36,7 @@ an update, and reconnecting or unlocking never repeats an installation.
 An installed 1.4.5-beta first receives the **1.4.6-beta updater migration** from
 the same Settings page. Its old interface can download and verify this package,
 but requires the manual completion below once. Reopen the original installation,
-check again, and install **1.4.8-beta** using **Install and restart**. The migration
+check again, and install **1.4.9-beta** using **Install and restart**. The migration
 keeps the previous product features until the full update is installed.
 
 Versions older than 1.4.5-beta can instead download the matching current ZIP

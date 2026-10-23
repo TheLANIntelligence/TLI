@@ -132,7 +132,12 @@ def inspect_backend(root, settings):
             raise ValueError("Identity mismatch")
         return "running", "The running backend proved this installation's identity. Refresh the TLI connection for current readiness."
     except Exception:
-        return "unavailable", "The saved port is occupied, but this TLI installation could not be verified. No process was stopped or replaced."
+        return "unavailable", (
+            f"TLI could not use port {port}: the address is occupied or unavailable, "
+            "and this installation could not be verified there. "
+            "If an older TLI is running, close it using its own Stop or Quit control. "
+            "To use a different port, follow the port-conflict steps in START_HERE.md. "
+            "No process was stopped or replaced.")
     finally:
         if connection:
             connection.close()
@@ -323,6 +328,64 @@ def check_packaged_runtime(root):
         raise PackagedRuntimeUnavailable(503, str(error)) from error
 
 
+def prepare_first_launch(root, *, progress=None):
+    """Select a local port only for an unused default installation.
+
+    The caller holds this installation's launch lease. Status, remote start and
+    reviewed lifecycle actions never select another address.
+    """
+    resolved = startup_config.resolve(root)
+    settings = resolved["effective_next"]
+    if (resolved.get("configured") is not False
+            or resolved.get("environment_overrides") != []
+            or settings != startup_config.DEFAULTS):
+        return resolved
+    # A missing startup.json alone does not prove a fresh installation. Keep
+    # previous launches (even stopped ones) and diagnostic hosts at their address.
+    if recorded_backend_generations(root):
+        return resolved
+    for relative in ("data/host_control/desktop-child.json", "data/host_control/requests.json",
+                     "data/node_identity.json", "data/mesh/node_config.json"):
+        try:
+            (Path(root) / relative).lstat()
+        except FileNotFoundError:
+            continue
+        # Even malformed or linked retained evidence rules out a first launch.
+        # Other read failures propagate; they cannot establish absence.
+        return resolved
+    if pending_backend(root):
+        return resolved
+    from launch_checks import check_port
+    try:
+        check_port(settings["host"], settings["port"])
+        return resolved
+    except RuntimeError:
+        pass
+    report = progress or (lambda message: None)
+    report(f"Port {settings['port']} is unavailable. Choosing an available local port for this new installation...")
+    candidate = dict(settings)
+    # Leave 8001 for the optional phone host-start helper.
+    for port in range(8002, 8021):
+        try:
+            check_port(settings["host"], port)
+        except RuntimeError:
+            continue
+        candidate["port"] = port
+        break
+    else:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            if os.name == "nt":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            probe.bind((settings["host"], 0))
+            candidate["port"] = probe.getsockname()[1]
+    # Exclusive creation cannot overwrite a choice published during the probes.
+    # Re-read after publication, and leave the usual ownership/bind checks in
+    # charge of startup. A later bind race never triggers another automatic retry.
+    if startup_config.create_if_absent(candidate, root):
+        report(f"TLI will use port {candidate['port']} and remember it for future starts.")
+    return startup_config.resolve(root)
+
+
 def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings=None):
     root = H.root_path(root)
     report = progress or (lambda message: None)
@@ -331,7 +394,7 @@ def launch(root, *, open_browser=True, wait_seconds=300, progress=None, settings
     runtime_warning = None
     with H.FileLock(H.path_for(root, "launch.lock")):
         H.installation(root, create=True)
-        settings = startup_config.resolve(root)["effective_next"] if settings is None else startup_config.validate(settings)
+        settings = prepare_first_launch(root, progress=report)["effective_next"] if settings is None else startup_config.validate(settings)
         state, reason = inspect_backend(root, settings)
         if state == "unavailable":
             H._fail(reason)
