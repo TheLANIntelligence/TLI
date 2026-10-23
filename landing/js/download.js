@@ -1,4 +1,4 @@
-import { PUBLIC_RELEASE } from './release.js?v=release-1.4.8-20261022';
+import { PUBLIC_RELEASE } from './release.js?v=release-1.4.9-20261022';
 import { COMPANION_RELEASE } from './companion-release.js?v=android-beta14-20261016';
 
 // Desktop fresh installs use email verification. Android is always public.
